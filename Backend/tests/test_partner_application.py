@@ -79,6 +79,26 @@ class PartnerApplicationTests(unittest.TestCase):
         self.assertEqual(self.client.post('/auth/owner-application/submit', headers=customer, json=self.payload()).status_code, 409)
         self.assertEqual(self.client.get('/auth/me', headers=customer).json()['role'], 'CUSTOMER')
 
+    def test_short_address_is_rejected_without_changing_draft_status(self):
+        customer = self.headers('customer.a@partner.local', 'Customer@123')
+        draft_payload = self.payload()
+        draft_payload['venue']['address'] = ' 123 '
+        draft = self.client.put('/auth/owner-application', headers=customer, json=draft_payload)
+        self.assertEqual(draft.status_code, 200, draft.text)
+        self.upload_document(customer)
+
+        invalid = self.client.post('/auth/owner-application/submit', headers=customer, json=draft_payload)
+        self.assertEqual(invalid.status_code, 422, invalid.text)
+        issue = next(item for item in invalid.json()['detail'] if item['loc'][-2:] == ['venue', 'address'])
+        self.assertIn('ít nhất 5 ký tự', issue['msg'])
+        with self.Session() as db:
+            application = db.scalar(select(OwnerApplication).where(OwnerApplication.customer_id == 2))
+            self.assertEqual(application.status, 'DRAFT')
+
+        submitted = self.client.post('/auth/owner-application/submit', headers=customer, json=self.payload())
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        self.assertEqual(submitted.json()['status'], 'PENDING_REVIEW')
+
     def test_required_data_and_admin_authorization(self):
         customer = self.headers('customer.a@partner.local', 'Customer@123')
         owner = self.headers('owner@partner.local', 'Owner@123456')

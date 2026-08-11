@@ -7,7 +7,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { Link } from 'react-router-dom';
 import { Badge, Button, Input, LoadingSkeleton, Modal, useToast } from '@/components/common';
 import { useAuth } from '@/contexts/AuthContext';
-import { apiBlob, apiRequest } from '@/services/apiClient';
+import { ApiError, apiBlob, apiRequest } from '@/services/apiClient';
 
 type Status = 'DRAFT' | 'PENDING_REVIEW' | 'NEED_MORE_INFO' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
 interface Application { id: number; status: Status; representative: Record<string, unknown>; venue: Record<string, unknown>; legal_confirmed: boolean; admin_note: string | null; rejection_reason: string | null; submitted_at: string | null; withdrawn_at: string | null; withdraw_reason: string | null; has_document: boolean; document_file_name: string | null; document_mime: string | null; document_size: number | null; document_uploaded_at: string | null; }
@@ -16,6 +16,79 @@ type Errors = Record<string, string>;
 const sports = ['Bóng đá', 'Cầu lông', 'Tennis', 'Pickleball', 'Bóng rổ', 'Bóng chuyền'];
 const labels: Record<Status, string> = { DRAFT: 'Bản nháp', PENDING_REVIEW: 'Đang chờ xét duyệt', NEED_MORE_INFO: 'Cần bổ sung thông tin', APPROVED: 'Đã trở thành đối tác', REJECTED: 'Chưa được chấp thuận', WITHDRAWN: 'Đã rút' };
 const blank = { representative: { name: '', phone: '', email: '', identity_number: '' }, venue: { name: '', address: '', city: '', district: '', phone: '', sports: [] as string[], description: '' }, legal_confirmed: false };
+const phonePattern = /^\+?[0-9 ]+$/;
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const identityPattern = /^[A-Za-z0-9-]+$/;
+
+function sanitizeForm(value: typeof blank): typeof blank {
+  return {
+    representative: {
+      name: value.representative.name.trim(), phone: value.representative.phone.trim(),
+      email: value.representative.email.trim(), identity_number: value.representative.identity_number.trim(),
+    },
+    venue: {
+      name: value.venue.name.trim(), address: value.venue.address.trim(), city: value.venue.city.trim(),
+      district: value.venue.district.trim(), phone: value.venue.phone.trim(),
+      sports: value.venue.sports.map((item) => item.trim()).filter(Boolean), description: value.venue.description.trim(),
+    },
+    legal_confirmed: value.legal_confirmed,
+  };
+}
+
+function validateSteps(value: typeof blank, hasDocument: boolean, steps: number[]): Errors {
+  const errors: Errors = {};
+  if (steps.includes(1)) {
+    if (value.representative.name.length < 2) errors.name = 'Vui lòng nhập ít nhất 2 ký tự.';
+    if (value.representative.phone.length < 8) errors.phone = 'Vui lòng nhập ít nhất 8 ký tự.';
+    else if (!phonePattern.test(value.representative.phone)) errors.phone = 'Chỉ nhập chữ số, khoảng trắng và dấu + ở đầu.';
+    if (value.representative.email.length < 5) errors.email = 'Vui lòng nhập ít nhất 5 ký tự.';
+    else if (!emailPattern.test(value.representative.email)) errors.email = 'Email không hợp lệ.';
+  }
+  if (steps.includes(2)) {
+    if (value.venue.name.length < 2) errors.venueName = 'Vui lòng nhập ít nhất 2 ký tự.';
+    if (value.venue.address.length < 5) errors.address = 'Vui lòng nhập ít nhất 5 ký tự.';
+    if (!value.venue.sports.length) errors.sports = 'Chọn ít nhất một môn thể thao.';
+    if (value.venue.phone && !phonePattern.test(value.venue.phone)) errors.venuePhone = 'Chỉ nhập chữ số, khoảng trắng và dấu + ở đầu.';
+  }
+  if (steps.includes(3)) {
+    if (value.representative.identity_number.length < 6) errors.identity = 'Vui lòng nhập ít nhất 6 ký tự.';
+    else if (!identityPattern.test(value.representative.identity_number)) errors.identity = 'Chỉ nhập chữ cái, chữ số và dấu gạch ngang.';
+    if (!hasDocument) errors.document = 'Vui lòng tải ảnh giấy tờ xác minh.';
+  }
+  if (steps.includes(4) && !value.legal_confirmed) errors.legal = 'Vui lòng xác nhận tính chính xác của hồ sơ.';
+  return errors;
+}
+
+function firstErrorStep(errors: Errors): number {
+  if (['name', 'phone', 'email'].some((key) => errors[key])) return 1;
+  if (['venueName', 'address', 'sports', 'venuePhone'].some((key) => errors[key])) return 2;
+  if (['identity', 'document'].some((key) => errors[key])) return 3;
+  return 4;
+}
+
+function errorsFromApi(error: unknown): Errors {
+  if (!(error instanceof ApiError)) return {};
+  const fieldByPath: Record<string, string> = {
+    'representative.name': 'name', 'representative.phone': 'phone', 'representative.email': 'email',
+    'representative.identity_number': 'identity', 'venue.name': 'venueName', 'venue.address': 'address',
+    'venue.phone': 'venuePhone', 'venue.sports': 'sports', legal_confirmed: 'legal',
+  };
+  const result: Errors = {};
+  error.validationIssues.forEach((issue) => {
+    const path = issue.loc.filter((item) => item !== 'body').join('.');
+    const field = fieldByPath[path];
+    if (!field) return;
+    const minimum = Number(issue.ctx?.min_length);
+    if (field === 'address') result[field] = 'Vui lòng nhập ít nhất 5 ký tự.';
+    else if (issue.type === 'string_too_short' && minimum) result[field] = `Vui lòng nhập ít nhất ${minimum} ký tự.`;
+    else if (field === 'email') result[field] = 'Email không hợp lệ.';
+    else if (field === 'sports') result[field] = 'Chọn ít nhất một môn thể thao.';
+    else if (field === 'phone' || field === 'venuePhone') result[field] = 'Số điện thoại không hợp lệ.';
+    else if (field === 'identity') result[field] = 'Số giấy tờ không hợp lệ.';
+    else result[field] = 'Thông tin này chưa hợp lệ.';
+  });
+  return result;
+}
 const stepItems = [
   { title: 'Đại diện', description: 'Thông tin liên hệ', icon: UserRound },
   { title: 'Cơ sở', description: 'Địa điểm & môn chơi', icon: Building2 },
@@ -66,32 +139,20 @@ export function PartnerApplicationPage() {
 
   const rep = (values: Partial<typeof form.representative>) => { setForm((current) => ({ ...current, representative: { ...current.representative, ...values } })); setErrors({}); };
   const venue = (values: Partial<typeof form.venue>) => { setForm((current) => ({ ...current, venue: { ...current.venue, ...values } })); setErrors({}); };
-  const saveDraft = async () => { setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application', { method: 'PUT', body: JSON.stringify(form) }); setApplication(nextApplication); toast('Đã lưu bản nháp hồ sơ.', 'success'); return true; } catch (error) { toast(error instanceof Error ? error.message : 'Không lưu được bản nháp.', 'error'); return false; } finally { setBusy(false); } };
+  const saveDraft = async () => { const sanitized = sanitizeForm(form); setForm(sanitized); setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application', { method: 'PUT', body: JSON.stringify(sanitized) }); setApplication(nextApplication); toast('Đã lưu bản nháp hồ sơ.', 'success'); return true; } catch (error) { toast(error instanceof Error ? error.message : 'Không lưu được bản nháp.', 'error'); return false; } finally { setBusy(false); } };
   const upload = async (file?: File) => { if (!file) return; if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('Chỉ hỗ trợ ảnh JPG, PNG hoặc WEBP.', 'error'); if (file.size > 5 * 1024 * 1024) return toast('Ảnh giấy tờ không được vượt quá 5 MB.', 'error'); const body = new FormData(); body.append('document', file); setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application/document', { method: 'POST', body }); setApplication(nextApplication); replacePreview(URL.createObjectURL(file)); setErrors({}); toast('Đã tải ảnh giấy tờ lên an toàn.', 'success'); } catch (error) { toast(error instanceof Error ? error.message : 'Không tải được ảnh giấy tờ.', 'error'); } finally { setBusy(false); if (fileInput.current) fileInput.current.value = ''; } };
   const removeDocument = async () => { setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application/document', { method: 'DELETE' }); setApplication(nextApplication); replacePreview(); toast('Đã xóa ảnh giấy tờ.', 'success'); } catch (error) { toast(error instanceof Error ? error.message : 'Không xóa được ảnh.', 'error'); } finally { setBusy(false); } };
 
   const validateCurrentStep = () => {
-    const nextErrors: Errors = {};
-    if (step === 1) {
-      if (!form.representative.name.trim()) nextErrors.name = 'Vui lòng nhập họ và tên.';
-      if (!form.representative.phone.trim()) nextErrors.phone = 'Vui lòng nhập số điện thoại.';
-      if (!form.representative.email.trim()) nextErrors.email = 'Vui lòng nhập email.';
-    }
-    if (step === 2) {
-      if (!form.venue.name.trim()) nextErrors.venueName = 'Vui lòng nhập tên cơ sở.';
-      if (!form.venue.address.trim()) nextErrors.address = 'Vui lòng nhập địa chỉ.';
-      if (!form.venue.sports.length) nextErrors.sports = 'Chọn ít nhất một môn thể thao.';
-    }
-    if (step === 3) {
-      if (!form.representative.identity_number.trim()) nextErrors.identity = 'Vui lòng nhập số giấy tờ.';
-      if (!application.has_document) nextErrors.document = 'Vui lòng tải ảnh giấy tờ xác minh.';
-    }
+    const sanitized = sanitizeForm(form);
+    const nextErrors = validateSteps(sanitized, application.has_document, [step]);
+    setForm(sanitized);
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
   const next = async () => { if (!validateCurrentStep()) return toast('Vui lòng kiểm tra các thông tin được đánh dấu.', 'error'); if (await saveDraft()) { const target = Math.min(4, step + 1); setFurthestStep((value) => Math.max(value, target)); setStep(target); window.scrollTo({ top: 0, behavior: 'smooth' }); } };
   const goToStep = (target: number) => { if (target <= furthestStep) { setErrors({}); setStep(target); window.scrollTo({ top: 0, behavior: 'smooth' }); } };
-  const submit = async (event: FormEvent) => { event.preventDefault(); if (busy) return; if (!form.legal_confirmed) return toast('Bạn cần xác nhận tính chính xác của hồ sơ.', 'error'); if (!application.has_document) return toast('Bạn cần tải ảnh giấy tờ trước khi gửi.', 'error'); setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application/submit', { method: 'POST', body: JSON.stringify(form) }); setApplication(nextApplication); toast('Yêu cầu trở thành đối tác đã được gửi và đang chờ xét duyệt.', 'success'); } catch (error) { toast(error instanceof Error ? error.message : 'Không gửi được hồ sơ.', 'error'); } finally { setBusy(false); } };
+  const submit = async (event: FormEvent) => { event.preventDefault(); if (busy) return; const sanitized = sanitizeForm(form); const nextErrors = validateSteps(sanitized, application.has_document, [1, 2, 3, 4]); setForm(sanitized); setErrors(nextErrors); if (Object.keys(nextErrors).length) { setStep(firstErrorStep(nextErrors)); return toast('Vui lòng kiểm tra các thông tin được đánh dấu.', 'error'); } setBusy(true); try { const nextApplication = await apiRequest<Application>('/auth/owner-application/submit', { method: 'POST', body: JSON.stringify(sanitized) }); setApplication(nextApplication); toast('Yêu cầu trở thành đối tác đã được gửi và đang chờ xét duyệt.', 'success'); } catch (error) { const backendErrors = errorsFromApi(error); if (Object.keys(backendErrors).length) { setErrors(backendErrors); setStep(firstErrorStep(backendErrors)); toast('Vui lòng kiểm tra các thông tin được đánh dấu.', 'error'); } else toast(error instanceof Error ? error.message : 'Không gửi được hồ sơ.', 'error'); } finally { setBusy(false); } };
 
   const withdraw = async () => {
     setBusy(true);
@@ -129,7 +190,7 @@ export function PartnerApplicationPage() {
   return <><PageShell subtitle="Hoàn thiện từng bước, kiểm tra thông tin và gửi hồ sơ để bắt đầu kinh doanh cùng SportHub AI." progress={`Bước ${step} / 4`}>
     {notice && <div className={`mx-4 mt-5 rounded-2xl border p-4 sm:mx-8 lg:mx-10 ${application.status === 'REJECTED' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><b>{labels[application.status]}</b><p className="mt-1 text-sm">Phản hồi từ quản trị viên: {notice}</p></div>{application.status === 'NEED_MORE_INFO' && <Button type="button" variant="outline" className="w-full shrink-0 sm:w-auto" onClick={() => setWithdrawOpen(true)}>Rút hồ sơ</Button>}</div></div>}
     <Steps current={step} furthest={furthestStep} onSelect={goToStep} />
-    <form onSubmit={submit}>
+    <form noValidate onSubmit={submit}>
       <div className="mx-auto max-w-4xl px-4 py-6 sm:px-8 sm:py-8 lg:px-10">
         {step === 1 && <StepSection icon={<UserRound />} title="Thông tin người đại diện" description="Thông tin được dùng để SportHub liên hệ và xác minh hồ sơ của bạn.">
           <div className="grid gap-5 sm:grid-cols-2">

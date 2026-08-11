@@ -11,6 +11,13 @@ class RepresentativeDetails(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     identity_number: str = Field(min_length=6, max_length=30, pattern=r'^[A-Za-z0-9-]+$')
 
+    @field_validator('email', mode='before')
+    @classmethod
+    def validate_email_minimum_length(cls, value: Any):
+        if isinstance(value, str) and len(value.strip()) < 5:
+            raise ValueError('Vui lòng nhập email ít nhất 5 ký tự')
+        return value
+
     @field_validator('email')
     @classmethod
     def validate_email(cls, value: str):
@@ -28,6 +35,13 @@ class VenueDetails(BaseModel):
     phone: str = Field(default='', max_length=20, pattern=r'^(|\+?[0-9 ]+)$')
     sports: list[str] = Field(min_length=1, max_length=20)
     description: str = Field(default='', max_length=2000)
+
+    @field_validator('address', mode='before')
+    @classmethod
+    def validate_address_minimum_length(cls, value: Any):
+        if isinstance(value, str) and len(value.strip()) < 5:
+            raise ValueError('Vui lòng nhập địa chỉ ít nhất 5 ký tự')
+        return value
 
     @field_validator('sports')
     @classmethod

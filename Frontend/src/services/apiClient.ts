@@ -35,8 +35,15 @@ window.addEventListener('sporthub-session-expired', () => {
   setTimeout(() => { sessionExpiredDispatched = false; }, 0);
 });
 
+export interface ApiValidationIssue {
+  loc: Array<string | number>;
+  msg: string;
+  type?: string;
+  ctx?: Record<string, unknown>;
+}
+
 export class ApiError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly validationIssues: ApiValidationIssue[] = []) {
     super(message);
     this.name = 'ApiError';
   }
@@ -78,16 +85,15 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
         window.dispatchEvent(new Event('sporthub-session-expired'));
       }
     }
-    const payload = await response.json().catch(() => null) as { detail?: string | Array<{ msg?: string }> } | null;
-    const detail = Array.isArray(payload?.detail)
-      ? payload.detail.map((item) => item.msg).filter(Boolean).join('. ')
-      : payload?.detail;
+    const payload = await response.json().catch(() => null) as { detail?: string | ApiValidationIssue[] } | null;
+    const validationIssues = Array.isArray(payload?.detail) ? payload.detail : [];
+    const detail = typeof payload?.detail === 'string' ? payload.detail : undefined;
     const fallback: Record<number, string> = {
       401: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.', 403: 'Bạn không có quyền thực hiện thao tác này.',
       404: 'Không tìm thấy dữ liệu yêu cầu.', 409: 'Dữ liệu đã thay đổi hoặc bị trùng. Vui lòng tải lại.',
       422: 'Dữ liệu gửi lên chưa hợp lệ.', 500: 'Máy chủ gặp lỗi. Vui lòng thử lại sau.',
     };
-    throw new ApiError(detail || fallback[response.status] || `Yêu cầu thất bại (${response.status}).`, response.status);
+    throw new ApiError(detail || fallback[response.status] || `Yêu cầu thất bại (${response.status}).`, response.status, validationIssues);
   }
 
   return response.status === 204 ? undefined as T : (response.json() as Promise<T>);
