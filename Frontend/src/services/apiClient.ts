@@ -1,5 +1,12 @@
 const TOKEN_KEY = 'sporthub_access_token';
 const REFRESH_TOKEN_KEY = 'sporthub_refresh_token';
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+
+export function buildApiUrl(path: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : `/api${normalizedPath}`;
+}
+
 export const readToken = () => localStorage.getItem(TOKEN_KEY);
 export const saveToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 export const readRefreshToken = () => localStorage.getItem(REFRESH_TOKEN_KEY);
@@ -9,7 +16,7 @@ let refreshPromise: Promise<boolean> | null = null;
 
 async function tryRefresh(): Promise<boolean> {
   const refreshToken = readRefreshToken(); if (!refreshToken) return false;
-  if (!refreshPromise) refreshPromise = fetch('/api/auth/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) }).then(async (response) => {
+  if (!refreshPromise) refreshPromise = fetch(buildApiUrl('/auth/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) }).then(async (response) => {
     if (!response.ok) return false;
     const result = await response.json() as { access_token: string; refresh_token: string };
     saveToken(result.access_token); saveRefreshToken(result.refresh_token); return true;
@@ -43,7 +50,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
   init.signal?.addEventListener('abort', abort, { once: true });
   let response: Response;
   try {
-    response = await fetch(`/api${path}`, {
+    response = await fetch(buildApiUrl(path), {
       ...init, signal: controller.signal,
       headers: {
         ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
@@ -88,7 +95,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
 
 export async function apiBlob(path: string): Promise<Blob> {
   const token = readToken();
-  const response = await fetch(`/api${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const response = await fetch(buildApiUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { detail?: string } | null;
     throw new ApiError(payload?.detail || 'Không tải được tệp riêng tư.', response.status);

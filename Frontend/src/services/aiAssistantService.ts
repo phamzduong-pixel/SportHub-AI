@@ -1,3 +1,5 @@
+import { buildApiUrl, readToken } from '@/services/apiClient';
+
 export interface AssistantSuggestion {
   field_id: number; facility_name: string; court_name: string; field_name: string; sport_type: string; location: string; image_url: string | null;
   time_slot_id: number; slot_name: string; start_time: string; end_time: string; price: number;
@@ -36,7 +38,7 @@ export async function askSportHubAssistant(message: string, contextFieldId?: num
   const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 12_000);
   try {
     const token = readToken();
-    const response = await fetch('/api/ai/assistant', {
+    const response = await fetch(buildApiUrl('/ai/assistant'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(payload),
@@ -56,4 +58,3 @@ export async function askSportHubAssistant(message: string, contextFieldId?: num
     signal?.removeEventListener('abort', abortFromCaller);
   }
 }
-import { readToken } from '@/services/apiClient';
