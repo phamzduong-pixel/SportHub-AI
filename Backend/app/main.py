@@ -60,3 +60,8 @@ app.include_router(reviews.router)
 @app.get('/')
 def read_root():
     return {'message': 'Welcome to SportHub AI API'}
+
+
+@app.get('/health', tags=['health'])
+def health_check():
+    return {'status': 'ok'}
