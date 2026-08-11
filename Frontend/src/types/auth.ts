@@ -1,0 +1,5 @@
+export type AccountRole = 'CUSTOMER' | 'OWNER' | 'MANAGER' | 'SYSTEM_ADMIN';
+export interface AuthUser { id: number; full_name: string; name?: string; email: string; phone: string | null; avatar_url: string | null; role: AccountRole; roles?: AccountRole[]; owner_id: number | null; management_permissions: string[]; is_active: boolean; created_at: string; updated_at: string; }
+export interface AuthSession { accessToken: string; user: AuthUser; }
+export type OwnerApplicationStatus = 'DRAFT' | 'PENDING_REVIEW' | 'NEED_MORE_INFO' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+export interface OwnerApplication { accountId: string | number; status: OwnerApplicationStatus; representative: { name: string; phone: string; email: string; identityNumber: string; identityFileName: string }; venue: { name: string; city: string; district: string; ward: string; address: string; phone: string; sports: string[]; openTime: string; closeTime: string; description: string; imageFileNames: string[] }; legalConfirmed: boolean; submittedAt?: string; rejectionReason?: string; updatedAt: string; }

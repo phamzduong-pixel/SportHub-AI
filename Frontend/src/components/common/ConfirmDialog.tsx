@@ -1,0 +1,4 @@
+import { TriangleAlert } from 'lucide-react';
+import { Button } from './Button'; import { Modal } from './Modal';
+interface Props { open: boolean; title: string; description: string; confirmLabel?: string; onConfirm: () => void; onClose: () => void; danger?: boolean; }
+export function ConfirmDialog({ open, title, description, confirmLabel = 'Xác nhận', onConfirm, onClose, danger }: Props) { return <Modal open={open} onClose={onClose} title={title}><div className="flex gap-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800"><TriangleAlert className="shrink-0" size={19} />{description}</div><div className="mt-6 flex justify-end gap-2"><Button variant="ghost" onClick={onClose}>Hủy</Button><Button variant={danger ? 'danger' : 'primary'} onClick={() => { onConfirm(); onClose(); }}>{confirmLabel}</Button></div></Modal>; }

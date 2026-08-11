@@ -1,0 +1,2 @@
+import { Construction } from 'lucide-react'; import { EmptyState, PageHeader } from '@/components/common';
+export function PlaceholderPage({ title }: { title: string }) { return <><PageHeader title={title} description="Nền tảng routing và layout đã sẵn sàng để phát triển màn hình này." /><EmptyState icon={<Construction size={21} />} title="Tính năng đang được hoàn thiện" description="Dữ liệu hiện tại là dữ liệu mô phỏng, chưa kết nối backend." /></>; }

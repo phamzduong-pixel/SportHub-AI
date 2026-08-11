@@ -1,0 +1,6 @@
+import { Eye, EyeOff, LockKeyhole } from 'lucide-react';
+
+interface PasswordFieldProps { label: string; value: string; show: boolean; onShow: (value: boolean) => void; onChange: (value: string) => void; error?: string; autoComplete?: string }
+export function PasswordField({ label, value, show, onShow, onChange, error, autoComplete = 'new-password' }: PasswordFieldProps) {
+  return <label className="text-sm font-semibold text-slate-700"><span className="mb-2 block">{label}</span><span className="relative block"><LockKeyhole size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" /><input className={`field h-12 rounded-xl pl-11 pr-11 text-sm ${error ? 'border-red-400' : ''}`} type={show ? 'text' : 'password'} autoComplete={autoComplete} value={value} onChange={(event) => onChange(event.target.value)} aria-invalid={Boolean(error)} /><button type="button" onClick={() => onShow(!show)} aria-label={show ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-400">{show ? <EyeOff size={17} /> : <Eye size={17} />}</button></span>{error && <span className="mt-1.5 block text-xs text-red-600">{error}</span>}</label>;
+}

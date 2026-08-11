@@ -1,0 +1,46 @@
+# Environment
+.env
+.env.*
+!.env.example
+Backend/.env
+Frontend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+Backend/venv/
+Backend/.venv/
+venv/
+.venv/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Node
+node_modules/
+Frontend/node_modules/
+Frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Cache
+.pytest_cache/
+.mypy_cache/
+
+# Private uploaded documents
+Backend/data/private/
+
+# User avatars/uploads
+Backend/data/public/avatars/

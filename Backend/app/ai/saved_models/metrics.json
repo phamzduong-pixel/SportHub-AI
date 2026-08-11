@@ -1,0 +1,136 @@
+{
+  "selected_model": "Random Forest",
+  "selected_metrics": {
+    "model_name": "Random Forest",
+    "accuracy": 0.825,
+    "precision": 0.826,
+    "recall": 0.825,
+    "f1_score": 0.8252,
+    "confusion_matrix": [
+      [
+        136,
+        21,
+        0
+      ],
+      [
+        23,
+        162,
+        16
+      ],
+      [
+        0,
+        24,
+        98
+      ]
+    ],
+    "labels": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ]
+  },
+  "models": [
+    {
+      "model_name": "Random Forest",
+      "accuracy": 0.825,
+      "precision": 0.826,
+      "recall": 0.825,
+      "f1_score": 0.8252,
+      "confusion_matrix": [
+        [
+          136,
+          21,
+          0
+        ],
+        [
+          23,
+          162,
+          16
+        ],
+        [
+          0,
+          24,
+          98
+        ]
+      ]
+    },
+    {
+      "model_name": "Logistic Regression",
+      "accuracy": 0.8167,
+      "precision": 0.8167,
+      "recall": 0.8167,
+      "f1_score": 0.8167,
+      "confusion_matrix": [
+        [
+          133,
+          24,
+          0
+        ],
+        [
+          26,
+          157,
+          18
+        ],
+        [
+          0,
+          20,
+          102
+        ]
+      ]
+    },
+    {
+      "model_name": "Decision Tree",
+      "accuracy": 0.7958,
+      "precision": 0.7989,
+      "recall": 0.7958,
+      "f1_score": 0.7956,
+      "confusion_matrix": [
+        [
+          135,
+          22,
+          0
+        ],
+        [
+          18,
+          144,
+          39
+        ],
+        [
+          0,
+          19,
+          103
+        ]
+      ]
+    }
+  ],
+  "metadata": {
+    "model_name": "Random Forest",
+    "trained_at": "2026-08-05T17:21:51.553609+00:00",
+    "dataset_path": "C:\\Users\\MY PC\\Documents\\AI\\SportHub AI\\Backend\\database\\datasets\\booking_demand.csv",
+    "dataset_type": "synthetic",
+    "dataset_note": "Dữ liệu mô phỏng có seed cố định cho mục đích học tập, không phải dữ liệu thị trường thực tế.",
+    "dataset_rows": 2399,
+    "train_size": 1919,
+    "test_size": 480,
+    "features": [
+      "sport_type",
+      "day_of_week",
+      "start_hour",
+      "price",
+      "month",
+      "is_weekend",
+      "previous_booking_count",
+      "field_capacity"
+    ],
+    "classes": [
+      "LOW",
+      "MEDIUM",
+      "HIGH"
+    ],
+    "target_distribution": {
+      "HIGH": 611,
+      "LOW": 785,
+      "MEDIUM": 1003
+    }
+  }
+}

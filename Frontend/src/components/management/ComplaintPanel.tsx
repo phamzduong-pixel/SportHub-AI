@@ -1,0 +1,9 @@
+import { useState } from 'react';
+import { Button, Input, useToast } from '@/components/common';
+import { updateComplaint, type BookingComplaint } from '@/services/customerApi';
+
+export function ComplaintPanel({ initial }: { initial: BookingComplaint }) {
+  const { toast } = useToast(); const [item, setItem] = useState(initial); const [resolution, setResolution] = useState(item.resolution || ''); const [busy, setBusy] = useState(false);
+  const update = async (status: 'in_review' | 'resolved' | 'rejected') => { if (resolution.trim().length < 3) return toast('Vui lòng nhập nội dung phản hồi.', 'error'); setBusy(true); try { setItem(await updateComplaint(item.id, status, resolution.trim())); toast('Đã cập nhật khiếu nại.', 'success'); } catch (error) { toast(error instanceof Error ? error.message : 'Không thể xử lý khiếu nại.', 'error'); } finally { setBusy(false); } };
+  return <section className="mt-5 rounded-card border border-orange-200 bg-orange-50 p-5"><h2 className="font-bold">Khiếu nại booking · {item.status.toUpperCase()}</h2><p className="mt-2 text-sm"><b>Khách hàng:</b> {item.customer_name}</p><p className="text-sm"><b>Nội dung:</b> {item.description}</p>{item.evidence_url && <a className="text-sm font-semibold text-brand-700" href={item.evidence_url} target="_blank" rel="noreferrer">Xem bằng chứng</a>}<Input className="mt-4" label="Phản hồi / phương án xử lý" value={resolution} onChange={(event) => setResolution(event.target.value)} /><div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" loading={busy} onClick={() => void update('in_review')}>Đang xem xét</Button><Button loading={busy} onClick={() => void update('resolved')}>Đã giải quyết</Button><Button variant="danger" loading={busy} onClick={() => void update('rejected')}>Từ chối khiếu nại</Button></div></section>;
+}
