@@ -80,7 +80,7 @@ def migrate_system_roles(engine):
                 created_value = ',CURRENT_TIMESTAMP' if 'created_at' in application_columns else ''
                 connection.execute(text(
                     f"INSERT INTO owner_applications (customer_id,status,representative,venue,legal_confirmed,submitted_at,updated_at{created_column}) "
-                    f"SELECT id,'PENDING','{{}}','{{}}',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP{created_value} FROM users "
+                    f"SELECT id,'PENDING','{{}}','{{}}',TRUE,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP{created_value} FROM users "
                     "WHERE role='OWNER_PENDING' AND NOT EXISTS (SELECT 1 FROM owner_applications a WHERE a.customer_id=users.id)"
                 ))
                 connection.execute(text("UPDATE users SET role='CUSTOMER' WHERE role='OWNER_PENDING'"))
@@ -89,7 +89,7 @@ def migrate_system_roles(engine):
         if 'facilities' in tables:
             columns = {column['name'] for column in inspector.get_columns('facilities')}
             if 'is_active' not in columns:
-                connection.execute(text('ALTER TABLE facilities ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1'))
+                connection.execute(text('ALTER TABLE facilities ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT TRUE'))
             connection.execute(text('CREATE INDEX IF NOT EXISTS ix_facilities_is_active ON facilities (is_active)'))
 
 
@@ -113,6 +113,7 @@ def migrate_deposit_payment_schema(engine):
     """Add deposit snapshots without rewriting existing booking/payment history."""
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
+    timestamp = 'TIMESTAMP WITH TIME ZONE' if engine.dialect.name == 'postgresql' else 'DATETIME'
     definitions = {
         'fields': {
             'deposit_type': "VARCHAR(20) NOT NULL DEFAULT 'percentage'",
@@ -144,7 +145,7 @@ def migrate_deposit_payment_schema(engine):
             'bank_account_name': 'VARCHAR(150) NULL',
             'transfer_content': 'VARCHAR(80) NULL',
             'qr_url': 'VARCHAR(1000) NULL',
-            'expires_at': 'DATETIME NULL',
+            'expires_at': f'{timestamp} NULL',
             'provider_reference': 'VARCHAR(120) NULL',
             'verification_source': 'VARCHAR(30) NULL',
             'refund_status': "VARCHAR(20) NOT NULL DEFAULT 'not_requested'",
