@@ -26,6 +26,7 @@ class Settings:
     SYSTEM_ADMIN_PASSWORD = os.getenv('SYSTEM_ADMIN_PASSWORD')
     SYSTEM_ADMIN_FULL_NAME = os.getenv('SYSTEM_ADMIN_FULL_NAME', 'SportHub System Admin')
     SEED_DEMO_DATA = os.getenv('SEED_DEMO_DATA', 'false').lower() in ('1', 'true', 'yes')
+    SYNC_DEMO_PASSWORDS = os.getenv('SYNC_DEMO_PASSWORDS', 'false').lower() in ('1', 'true', 'yes')
     TIMEZONE = os.getenv('TIMEZONE', 'Asia/Ho_Chi_Minh')
     PAYMENT_MODE = os.getenv('PAYMENT_MODE', 'demo').lower()
     PAYMENT_WEBHOOK_SECRET = os.getenv('PAYMENT_WEBHOOK_SECRET')

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api.routes import admin, ai, auth, bookings, dashboard, facilities, favorites, fields, maintenance, management_customers, managers, operations, payments, public_courts, refunds, reviews, time_slots
 from .core.config import settings
 from .database.base import Base
-from .database.seed import seed_db
+from .database.demo_seed import seed_demo_db
 from .database.migrations import migrate_deposit_payment_schema, migrate_empty_legacy_booking_schema, migrate_field_recommendation_columns, migrate_ownership_columns, migrate_partner_application_schema, migrate_professional_booking_schema, migrate_refund_workflow_schema, migrate_system_roles, migrate_user_profile_columns
 from .database.session import SessionLocal, engine
 from .models import AuditLog, Booking, BookingActivity, BookingComplaint, Facility, Field, FieldBlock, FieldMaintenance, Invoice, OwnerApplication, Payment, RefundRequest, Review, TimeSlot, User, UserFavoriteField  # noqa: F401 - registers metadata
@@ -26,7 +26,7 @@ async def lifespan(_: FastAPI):
     migrate_professional_booking_schema(engine)
     migrate_refund_workflow_schema(engine)
     with SessionLocal() as session:
-        seed_db(session)
+        seed_demo_db(session)
     # A newly seeded OWNER may not have existed during the schema migration above.
     migrate_ownership_columns(engine)
     yield
