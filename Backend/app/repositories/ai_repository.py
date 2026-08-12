@@ -68,7 +68,7 @@ class AIRepository:
     def platform_account_summary(self):
         return {
             role: int(self.db.scalar(select(func.count(User.id)).where(User.role == role, User.is_active.is_(True))) or 0)
-            for role in ('CUSTOMER', 'OWNER', 'MANAGER', 'SYSTEM_ADMIN')
+            for role in ('CUSTOMER', 'OWNER', 'SYSTEM_ADMIN')
         }
 
     def booking_count(self, user: User, booking_date: date | None = None) -> int:
@@ -123,7 +123,7 @@ class AIRepository:
     def inventory(self, sport_type: str | None = None):
         query = select(Field, TimeSlot).join(TimeSlot, TimeSlot.field_id == Field.id).where(
             Field.status == 'available', TimeSlot.is_active.is_(True),
-            or_(Field.facility_id.is_(None), Field.facility.has(Facility.is_active.is_(True))),
+            or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
             *self._field_scope(),
         )
         if sport_type:

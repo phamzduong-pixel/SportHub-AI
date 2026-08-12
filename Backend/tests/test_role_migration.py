@@ -12,7 +12,9 @@ class RoleMigrationTests(unittest.TestCase):
         engine = create_engine('sqlite://')
         Base.metadata.create_all(engine)
         with engine.begin() as connection:
-            for index, role in enumerate(('MANAGER', 'OWNER_PENDING', 'ADMIN'), start=1):
+            connection.execute(text('ALTER TABLE users ADD COLUMN owner_id INTEGER NULL REFERENCES users(id)'))
+            connection.execute(text("ALTER TABLE users ADD COLUMN management_permissions JSON NOT NULL DEFAULT '[]'"))
+            for index, role in enumerate(('LEGACY_OPERATOR', 'OWNER_PENDING', 'ADMIN'), start=1):
                 connection.execute(text(
                     'INSERT INTO users (full_name,email,hashed_password,role,is_active,created_at,updated_at,owner_id,management_permissions) '
                     "VALUES (:name,:email,:password,:role,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,99,'[]')"
@@ -22,9 +24,9 @@ class RoleMigrationTests(unittest.TestCase):
             roles = connection.execute(text('SELECT role FROM users ORDER BY id')).scalars().all()
             applications = connection.execute(text("SELECT COUNT(*) FROM owner_applications WHERE status='PENDING'")).scalar_one()
             owner_ids = connection.execute(text('SELECT owner_id FROM users ORDER BY id')).scalars().all()
-        self.assertEqual(roles, ['MANAGER', 'CUSTOMER', 'SYSTEM_ADMIN'])
+        self.assertEqual(roles, ['CUSTOMER', 'CUSTOMER', 'SYSTEM_ADMIN'])
         self.assertEqual(applications, 1)
-        self.assertEqual(owner_ids, [99, None, None])
+        self.assertEqual(owner_ids, [None, None, None])
 
 
 if __name__ == '__main__':

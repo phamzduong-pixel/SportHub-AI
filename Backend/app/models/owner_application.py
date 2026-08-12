@@ -10,8 +10,7 @@ from ..database.base import Base
 
 class OwnerApplicationStatus(str, Enum):
     DRAFT = 'DRAFT'
-    PENDING_REVIEW = 'PENDING_REVIEW'
-    NEED_MORE_INFO = 'NEED_MORE_INFO'
+    PENDING = 'PENDING'
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
     WITHDRAWN = 'WITHDRAWN'
@@ -27,11 +26,6 @@ class OwnerApplication(Base):
     legal_confirmed = Column(Boolean, nullable=False, default=False)
     rejection_reason = Column(Text, nullable=True)
     admin_note = Column(Text, nullable=True)
-    document_path = Column(String(500), nullable=True)
-    document_mime = Column(String(50), nullable=True)
-    document_original_name = Column(String(255), nullable=True)
-    document_size = Column(Integer, nullable=True)
-    document_uploaded_at = Column(DateTime(timezone=True), nullable=True)
     reviewed_by = Column(Integer, ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)

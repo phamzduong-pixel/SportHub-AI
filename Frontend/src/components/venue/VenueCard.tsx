@@ -36,7 +36,7 @@ export function VenueCard({ venue, horizontal = false }: { venue: Venue; horizon
   };
   const book = (event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
-    if (venue.available) navigate(`/booking/${venue.id}`);
+    if (venue.available) navigate(`/courts/${venue.id}`);
   };
 
   const statusVariant = venue.status === 'Còn sân' ? 'success' : venue.status === 'Sắp hết chỗ' ? 'warning' : 'neutral';

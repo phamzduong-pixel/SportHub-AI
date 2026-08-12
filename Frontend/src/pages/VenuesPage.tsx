@@ -44,7 +44,7 @@ export function VenuesPage() {
       const matchesPrice = !filters.maxPrice || venue.price <= Number(filters.maxPrice);
       const matchesRating = !filters.rating || venue.rating >= Number(filters.rating);
       const matchesAmenities = filters.amenities.every((item) => venue.amenities.includes(item));
-      const allSlots = venue.courts.flatMap((court) => court.availableSlots);
+      const allSlots = venue.courts.flatMap((court) => court.operatingSlots);
       const matchesTime = !filters.time || allSlots.some((slot) => { const hour = slotHour(slot); return filters.time === 'morning' ? hour < 12 : filters.time === 'afternoon' ? hour >= 12 && hour < 18 : hour >= 18; });
       const matchesDate = !selectedDate || venue.available;
       return matchesQuery && matchesCity && matchesSport && matchesPrice && matchesRating && matchesAmenities && matchesTime && matchesDate && venue.available;

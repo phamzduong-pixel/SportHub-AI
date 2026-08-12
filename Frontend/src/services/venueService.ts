@@ -31,15 +31,15 @@ function toVenue(field: ApiField, slots: ApiSlot[], facility?: PublicCourtDetail
   const active = slots.filter((slot) => slot.is_active);
   const prices = active.map((slot) => slot.price);
   const court: VenueCourt = {
-    id: String(field.id), name: field.name, type: field.sport_type, surface: 'Theo thông tin cơ sở', indoor: false,
+    id: String(field.id), name: field.name, type: `Sân ${field.capacity}`, surface: 'Theo thông tin cơ sở', indoor: false,
     price: prices.length ? Math.min(...prices) : field.base_price,
-    availableSlots: active.map((slot) => slot.start_time.slice(0, 5)),
+    operatingSlots: active.map((slot) => slot.start_time.slice(0, 5)),
   };
   const parts = field.location.split(',').map((part) => part.trim()).filter(Boolean);
   const hours = active.length ? `${active[0].start_time.slice(0, 5)} – ${active[active.length - 1].end_time.slice(0, 5)}` : 'Chưa có lịch hoạt động';
   return {
     id: field.id, facilityId: facility?.id ?? null, facilityName: facility?.name ?? field.name,
-    hotline: facility?.contact_phone ?? null,
+    hotline: facility?.contact_phone ?? null, capacity: field.capacity,
     name: field.name, sport: field.sport_type, sports: [field.sport_type],
     address: field.location, district: parts[0] || field.location, city: parts.at(-1) || field.location,
     distance: field.distance_km ?? 0, price: prices.length ? Math.min(...prices) : field.base_price,

@@ -72,6 +72,13 @@ table tbody tr:hover { background: #f4faf8; }
 header.sticky.bg-white\/95 { background: rgba(255, 255, 255, .92); border-color: var(--border-soft); box-shadow: 0 4px 20px rgba(6, 95, 70, .04); }
 [role='dialog'].bg-white { border: 1px solid var(--border-soft); }
 .management-scrollbar { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+.modal-scrollbar { scrollbar-width: thin; scrollbar-color: transparent transparent; scrollbar-gutter: stable; }
+.modal-scrollbar:hover { scrollbar-color: #cbd5e1 transparent; }
+.modal-scrollbar::-webkit-scrollbar { width: 6px; }
+.modal-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.modal-scrollbar::-webkit-scrollbar-thumb { border: 1px solid transparent; border-radius: 999px; background: transparent; background-clip: padding-box; }
+.modal-scrollbar:hover::-webkit-scrollbar-thumb { background-color: #cbd5e1; }
+.modal-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
 .overflow-x-auto { max-width: 100%; overscroll-behavior-inline: contain; -webkit-overflow-scrolling: touch; }
 .auth-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .auth-scrollbar::-webkit-scrollbar { display: none; }

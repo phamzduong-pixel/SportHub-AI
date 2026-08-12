@@ -17,6 +17,7 @@ from ..models.time_slot import TimeSlot
 from ..models.user import User
 from ..repositories.booking_repository import BookingRepository
 from ..schemas.booking import BookingQuote, BookingResponse
+from ..schemas.time_slot import TimeSlotResponse
 from .audit_service import record_audit
 
 class BookingService:
@@ -64,7 +65,9 @@ class BookingService:
                     for maintenance in maintenances
                 )
                 if not occupied and not blocked and not maintained:
-                    available.append(slot)
+                    available.append(TimeSlotResponse.model_validate(slot).model_copy(
+                        update={'price': float(effective_price)},
+                    ))
             if available:
                 response.append({'field': field, 'available_slots': available})
         if sort_by == 'price':
@@ -92,7 +95,10 @@ class BookingService:
                     raise HTTPException(status_code=422, detail='Cần cung cấp CUSTOMER đang hoạt động bằng customer_id hoặc customer_email')
         else:
             raise HTTPException(status_code=403, detail='Bạn không có quyền tạo lịch đặt')
-        values = self._schedule_values(payload.field_id, payload.time_slot_id, payload.booking_date, owner_user=current_user if owner_operator and not acting_as_customer else None)
+        values = self._schedule_values(
+            payload.field_id, payload.time_slot_id, payload.booking_date,
+            owner_user=current_user if owner_operator and not acting_as_customer else None,
+        )
         booking = Booking(
             booking_code=self._booking_code(), customer_id=customer.id,
             note=payload.note, status=BookingStatus.PENDING_PAYMENT.value,
@@ -111,10 +117,21 @@ class BookingService:
 
     def quote(self, *, field_id: int, time_slot_id: int, booking_date: date) -> BookingQuote:
         values = self._schedule_values(field_id, time_slot_id, booking_date)
+        field = self.repository.lock_field(field_id)
+        slot = self.repository.db.get(TimeSlot, time_slot_id)
+        total_amount = Decimal(values['total_amount'])
+        deposit_amount = Decimal(values['deposit_amount'])
+        remaining_after_deposit = max(total_amount - deposit_amount, Decimal('0')).quantize(Decimal('0.01'))
         return BookingQuote(
+            venue_id=field.facility_id,
+            venue_name=field.facility.name if field.facility else field.name,
             field_id=field_id, time_slot_id=time_slot_id, booking_date=booking_date,
-            total_amount=float(values['total_amount']), deposit_amount=float(values['deposit_amount']),
-            remaining_amount=float(values['remaining_amount']), deposit_type=values['deposit_type'],
+            field_name=field.name, sport_type=field.sport_type,
+            field_type=f'Sân {field.capacity}', location=field.location,
+            time_slot_name=slot.name, start_time=values['start_time_snapshot'],
+            end_time=values['end_time_snapshot'], price=float(values['price_snapshot']),
+            total_amount=float(total_amount), deposit_amount=float(deposit_amount),
+            remaining_amount=float(remaining_after_deposit), deposit_type=values['deposit_type'],
             deposit_value=float(values['deposit_value']), hold_minutes=int(self.HOLD_DURATION.total_seconds() / 60),
             free_cancellation_minutes=values['free_cancellation_minutes'],
             cancellation_policy_summary=self._policy_summary(values['free_cancellation_minutes']),
@@ -158,7 +175,10 @@ class BookingService:
             raise HTTPException(status_code=409, detail='Chỉ có thể đổi lịch đang chờ hoặc đã xác nhận')
         if self.repository.committed_payment_amount(booking.id) > 0:
             raise HTTPException(status_code=409, detail='Không thể đổi lịch sau khi đã phát sinh giao dịch thanh toán')
-        values = self._schedule_values(payload.field_id, payload.time_slot_id, payload.booking_date, exclude_id=booking.id, owner_user=user)
+        values = self._schedule_values(
+            payload.field_id, payload.time_slot_id, payload.booking_date,
+            exclude_id=booking.id, owner_user=user,
+        )
         if self.repository.committed_payment_amount(booking.id) > values['total_amount']:
             raise HTTPException(status_code=409, detail='Không thể đổi sang khung giờ có giá thấp hơn tổng giao dịch đã thanh toán hoặc đang chờ')
         values['note'] = payload.note
@@ -492,7 +512,7 @@ class BookingService:
         self.repository.release_expired_holds()
         self.repository.begin_booking_write_lock()
         field = self.repository.lock_field(field_id)
-        if field is None or field.status != 'available' or (field.facility is not None and not field.facility.is_active):
+        if field is None or field.status != 'available' or (field.facility is not None and (not field.facility.is_active or field.facility.status != 'APPROVED')):
             raise HTTPException(status_code=409, detail='Sân không tồn tại hoặc đang ngừng hoạt động')
         if owner_user is not None and not owns_field(owner_user, field, self.repository.db):
             raise HTTPException(status_code=404, detail='Không tìm thấy sân')
@@ -646,6 +666,7 @@ class BookingService:
             'facility_hotline': (booking.facility.contact_phone or '0901 234 567') if booking.facility else '0901 234 567',
             'field_id': booking.field_id,
             'field_name': booking.field.name, 'sport_type': booking.field.sport_type,
+            'field_capacity': booking.field.capacity,
             'location': booking.field.location, 'time_slot_id': booking.time_slot_id,
             'time_slot_name': booking.time_slot.name, 'booking_date': booking.booking_date,
             'start_time_snapshot': booking.start_time_snapshot,

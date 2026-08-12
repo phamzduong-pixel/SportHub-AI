@@ -115,6 +115,7 @@ class BookingResponse(BaseModel):
     field_id: int
     field_name: str
     sport_type: str
+    field_capacity: int
     location: str
     time_slot_id: int
     time_slot_name: str
@@ -152,9 +153,19 @@ class BookingResponse(BaseModel):
     timeline: list[dict] = []
 
 class BookingQuote(BaseModel):
+    venue_id: int | None
+    venue_name: str
     field_id: int
+    field_name: str
+    sport_type: str
+    field_type: str
+    location: str
     time_slot_id: int
+    time_slot_name: str
     booking_date: date
+    start_time: time
+    end_time: time
+    price: float
     total_amount: float
     deposit_amount: float
     remaining_amount: float

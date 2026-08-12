@@ -37,10 +37,12 @@ class Settings:
     CORS_ORIGINS = [item.strip() for item in os.getenv(
         'CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173',
     ).split(',') if item.strip()]
-    PARTNER_DOCUMENT_DIR = Path(os.getenv('PARTNER_DOCUMENT_DIR', str(DATA_DIR / 'private' / 'partner_documents'))).resolve()
-    PARTNER_DOCUMENT_MAX_BYTES = int(os.getenv('PARTNER_DOCUMENT_MAX_BYTES', str(5 * 1024 * 1024)))
     AVATAR_DIR = Path(os.getenv('AVATAR_DIR', str(DATA_DIR / 'public' / 'avatars'))).resolve()
     AVATAR_MAX_BYTES = int(os.getenv('AVATAR_MAX_BYTES', str(5 * 1024 * 1024)))
+    FACILITY_IMAGE_DIR = Path(os.getenv('FACILITY_IMAGE_DIR', str(DATA_DIR / 'public' / 'facility_images'))).resolve()
+    FACILITY_PRIVATE_DIR = Path(os.getenv('FACILITY_PRIVATE_DIR', str(DATA_DIR / 'private' / 'facility_documents'))).resolve()
+    FACILITY_IMAGE_MAX_BYTES = int(os.getenv('FACILITY_IMAGE_MAX_BYTES', str(5 * 1024 * 1024)))
+    FACILITY_DOCUMENT_MAX_BYTES = int(os.getenv('FACILITY_DOCUMENT_MAX_BYTES', str(10 * 1024 * 1024)))
 
     def __init__(self):
         if not os.getenv('SECRET_KEY'):

@@ -34,8 +34,7 @@ class RescheduleAndCustomerManagementTests(unittest.TestCase):
             owner_b = User(full_name='Owner B', email='owner-b@test.local', hashed_password=get_password_hash('Owner@123'), role='OWNER')
             customer_a = User(full_name='Customer A', email='customer-a@test.local', phone='0901000001', hashed_password=get_password_hash('Customer@123'), role='CUSTOMER')
             customer_b = User(full_name='Customer B', email='customer-b@test.local', phone='0901000002', hashed_password=get_password_hash('Customer@123'), role='CUSTOMER')
-            manager = User(full_name='Legacy Manager', email='manager@test.local', hashed_password=get_password_hash('Manager@123'), role='MANAGER')
-            db.add_all([owner_a, owner_b, customer_a, customer_b, manager]); db.flush()
+            db.add_all([owner_a, owner_b, customer_a, customer_b]); db.flush()
             facility_a = Facility(owner_id=owner_a.id, name='Cơ sở A', location='A', is_active=True)
             facility_b = Facility(owner_id=owner_b.id, name='Cơ sở B', location='B', is_active=True)
             db.add_all([facility_a, facility_b]); db.flush()
@@ -175,12 +174,6 @@ class RescheduleAndCustomerManagementTests(unittest.TestCase):
         self.assertEqual([item['booking_code'] for item in detail.json()['bookings']], ['RS-A'])
         owner_b_detail = self.client.get(f'/management/customers/{self.booking_customer_id(self.booking_b_id)}', headers=self.owner_b)
         self.assertEqual(owner_b_detail.status_code, 404)
-
-    def test_legacy_manager_without_permission_is_blocked(self):
-        response = self.client.post('/auth/login', json={'email': 'manager@test.local', 'password': 'Manager@123'})
-        self.assertEqual(response.status_code, 200)
-        headers = {'Authorization': f"Bearer {response.json()['access_token']}"}
-        self.assertEqual(self.client.get('/management/customers', headers=headers).status_code, 403)
 
     def booking_customer_id(self, booking_id):
         with self.Session() as db:

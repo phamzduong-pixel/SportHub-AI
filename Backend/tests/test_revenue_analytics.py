@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.core.security import create_access_token, get_password_hash
+from app.core.security import get_password_hash
 from app.database.base import Base
 from app.database.session import get_db
 from app.main import app
@@ -26,8 +26,7 @@ class RevenueAnalyticsTests(unittest.TestCase):
             owner_a = User(full_name='Owner A', email='revenue.a@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value)
             owner_b = User(full_name='Owner B', email='revenue.b@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value)
             customer = User(full_name='Customer', email='revenue.customer@test.local', hashed_password=get_password_hash('Customer@123'), role=UserRole.CUSTOMER.value)
-            manager = User(full_name='Legacy Manager', email='revenue.manager@test.local', hashed_password=get_password_hash('Manager@123'), role='MANAGER')
-            db.add_all([owner_a, owner_b, customer, manager]); db.flush()
+            db.add_all([owner_a, owner_b, customer]); db.flush()
             facility_a = Facility(owner_id=owner_a.id, name='Cơ sở A', location='Hà Nội', amenities=[], image_urls=[])
             facility_b = Facility(owner_id=owner_b.id, name='Cơ sở B', location='Đà Nẵng', amenities=[], image_urls=[])
             db.add_all([facility_a, facility_b]); db.flush()
@@ -65,7 +64,7 @@ class RevenueAnalyticsTests(unittest.TestCase):
             payment(other_owner, 'PAY-OTHER', 999000, 'full', escrow='released')
             payment(old, 'PAY-OLD', 40000, 'full', escrow='released')
             db.commit()
-            self.ids = {'owner_a': owner_a.id, 'manager': manager.id, 'field_a': field_a.id, 'field_b': field_b.id, 'unpaid': unpaid.id}
+            self.ids = {'owner_a': owner_a.id, 'field_a': field_a.id, 'field_b': field_b.id, 'unpaid': unpaid.id}
 
         def override_db():
             with self.Session() as db:
@@ -127,9 +126,7 @@ class RevenueAnalyticsTests(unittest.TestCase):
         foreign_field = self.client.get(f"/dashboard/revenue-analytics?date_from={date.today()}&date_to={date.today()}&field_id={self.ids['field_b']}", headers=self.owner_a)
         self.assertEqual(foreign_field.status_code, 200)
         self.assertEqual(foreign_field.json()['transactions'], [])
-        forged = {'Authorization': f"Bearer {create_access_token({'sub': str(self.ids['manager']), 'role': 'MANAGER'})}"}
         self.assertEqual(self.client.get('/dashboard/revenue-analytics', headers=self.customer).status_code, 403)
-        self.assertEqual(self.client.get('/dashboard/revenue-analytics', headers=forged).status_code, 403)
 
 
 if __name__ == '__main__':

@@ -8,7 +8,7 @@ export interface VenueCourt {
   surface: string;
   indoor: boolean;
   price: number;
-  availableSlots: string[];
+  operatingSlots: string[];
 }
 
 export interface Venue {
@@ -16,6 +16,7 @@ export interface Venue {
   facilityId?: number | null;
   facilityName?: string;
   hotline?: string | null;
+  capacity: number;
   name: string;
   sport: SportType;
   sports: SportType[];

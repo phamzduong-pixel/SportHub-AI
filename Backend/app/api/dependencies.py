@@ -28,7 +28,7 @@ def _resolve_user(token: str | None, db: Session) -> User:
         raise credentials_error
     if not user.is_active:
         raise HTTPException(status_code=403, detail='Tài khoản đã bị khóa')
-    if user.role not in {'CUSTOMER', 'OWNER', 'MANAGER', 'SYSTEM_ADMIN'}:
+    if user.role not in {'CUSTOMER', 'OWNER', 'SYSTEM_ADMIN'}:
         raise HTTPException(status_code=403, detail='Vai trò tài khoản không còn được hỗ trợ')
     return user
 
@@ -51,19 +51,6 @@ def require_system_admin(current_user: User = Depends(get_current_user)) -> User
     if current_user.role != 'SYSTEM_ADMIN':
         raise HTTPException(status_code=403, detail='Chỉ SYSTEM_ADMIN được thực hiện thao tác này')
     return current_user
-
-
-def require_permission(permission: str):
-    def dependency(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
-        if current_user.role == 'OWNER':
-            return current_user
-        if current_user.role == 'MANAGER':
-            owner = db.get(User, current_user.owner_id) if current_user.owner_id else None
-            permissions = set(current_user.management_permissions or [])
-            if owner and owner.role == 'OWNER' and owner.is_active and permission in permissions:
-                return current_user
-        raise HTTPException(status_code=403, detail=f'Bạn chưa được OWNER cấp quyền {permission}')
-    return dependency
 
 
 def get_field_viewer(current_user: User | None = Depends(get_optional_current_user)) -> User | None:

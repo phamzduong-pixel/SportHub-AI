@@ -38,6 +38,8 @@ class TimeSlotService:
         time_slot = self._slot_or_404(time_slot_id)
         self._owned_field_or_404(time_slot.field_id, user)
         self._owned_field_or_404(data['field_id'], user)
+        if data['field_id'] != time_slot.field_id and self.repository.has_booking_usage(time_slot_id):
+            raise HTTPException(status_code=409, detail='Khung giờ đã có booking nên không thể chuyển sang sân khác')
         self._validate_overlap(data, exclude_id=time_slot_id)
         old_price = float(time_slot.price)
         item = self.repository.update(time_slot, data)
@@ -65,8 +67,13 @@ class TimeSlotService:
         self._owned_field_or_404(time_slot.field_id, user)
         if self.repository.has_booking_usage(time_slot_id):
             time_slot = self.repository.update(time_slot, {'is_active': False})
+            record_audit(self.repository.db, user, 'time_slot', time_slot.id, 'time_slot_delete_deactivated', {'field_id': time_slot.field_id})
+            self.repository.db.commit()
             return 'deactivated', time_slot
+        slot_id, field_id = time_slot.id, time_slot.field_id
         self.repository.delete(time_slot)
+        record_audit(self.repository.db, user, 'time_slot', slot_id, 'time_slot_deleted', {'field_id': field_id})
+        self.repository.db.commit()
         return 'deleted', None
 
     def _validate_overlap(self, data: dict, exclude_id: int | None = None):

@@ -6,7 +6,7 @@ from ...models.refund import RefundStatus
 from ...models.user import User
 from ...schemas.refund import RefundDisputeRequest, RefundListResponse, RefundMarkPaidRequest, RefundReputationResponse, RefundResponse
 from ...services.refund_service import RefundService
-from ..dependencies import get_current_user, require_permission
+from ..dependencies import get_current_user, require_owner
 
 router = APIRouter(tags=['refunds'])
 
@@ -22,12 +22,12 @@ def my_refunds(status: RefundStatus | None = None, page: int = Query(1, ge=1), p
 
 
 @router.get('/refunds/reputation', response_model=RefundReputationResponse)
-def refund_reputation(current_user: User = Depends(require_permission('payments.manage')), service: RefundService = Depends(get_service)):
+def refund_reputation(current_user: User = Depends(require_owner), service: RefundService = Depends(get_service)):
     return service.reputation(current_user)
 
 
 @router.get('/refunds', response_model=RefundListResponse)
-def manage_refunds(status: RefundStatus | None = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), current_user: User = Depends(require_permission('payments.manage')), service: RefundService = Depends(get_service)):
+def manage_refunds(status: RefundStatus | None = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), current_user: User = Depends(require_owner), service: RefundService = Depends(get_service)):
     items, total = service.list_manage(current_user, status=status.value if status else None, page=page, page_size=page_size)
     return RefundListResponse.from_result(items, total, page, page_size)
 
@@ -38,7 +38,7 @@ def get_refund(refund_id: int, current_user: User = Depends(get_current_user), s
 
 
 @router.patch('/refunds/{refund_id}/mark-refunded', response_model=RefundResponse)
-def mark_refunded(refund_id: int, payload: RefundMarkPaidRequest, current_user: User = Depends(require_permission('payments.manage')), service: RefundService = Depends(get_service)):
+def mark_refunded(refund_id: int, payload: RefundMarkPaidRequest, current_user: User = Depends(require_owner), service: RefundService = Depends(get_service)):
     return service.mark_refunded(refund_id, payload, current_user)
 
 

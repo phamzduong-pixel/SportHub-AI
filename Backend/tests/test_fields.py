@@ -12,6 +12,7 @@ from app.database.base import Base
 from app.database.session import get_db
 from app.main import app
 from app.models.field import Booking
+from app.models.facility import Facility
 from app.models.time_slot import TimeSlot
 from app.models.user import User, UserRole
 
@@ -40,7 +41,11 @@ class FieldCrudTests(unittest.TestCase):
                 User(full_name='No View Operator', email='noview@fields.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value),
             ]
             db.add_all(users)
+            db.flush()
+            facility = Facility(owner_id=users[0].id, name='Cơ sở đã duyệt', location='Quận 1, TP.HCM', status='APPROVED', is_active=True)
+            db.add(facility)
             db.commit()
+            self.facility_id = facility.id
 
         def override_db():
             with self.TestingSession() as db:
@@ -64,7 +69,8 @@ class FieldCrudTests(unittest.TestCase):
         return {'Authorization': f"Bearer {response.json()['access_token']}"}
 
     def create_field(self, payload=None):
-        response = self.client.post('/fields', headers=self.owner, json=payload or FIELD_PAYLOAD)
+        data = {**(payload or FIELD_PAYLOAD), 'facility_id': self.facility_id}
+        response = self.client.post('/fields', headers=self.owner, json=data)
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()
 
@@ -103,7 +109,7 @@ class FieldCrudTests(unittest.TestCase):
         self.assertEqual(self.client.get('/fields', headers=self.operator).status_code, 200)
         self.assertEqual(self.client.get('/fields', headers=self.no_view_operator).status_code, 200)
         self.assertEqual(self.client.get(f"/fields/{viewed['id']}", headers=self.no_view_operator).status_code, 200)
-        created = self.client.post('/fields', headers=self.operator, json={**FIELD_PAYLOAD, 'name': 'Sân do Operator tạo'})
+        created = self.client.post('/fields', headers=self.operator, json={**FIELD_PAYLOAD, 'facility_id': self.facility_id, 'name': 'Sân do Operator tạo'})
         self.assertEqual(created.status_code, 201)
         field_id = viewed['id']
         self.assertEqual(self.client.put(f'/fields/{field_id}', headers=self.operator, json=FIELD_PAYLOAD).status_code, 200)

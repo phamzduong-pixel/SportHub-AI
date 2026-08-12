@@ -9,7 +9,7 @@ from ...schemas.time_slot import (
     TimeSlotStatusUpdate, TimeSlotUpdate,
 )
 from ...services.time_slot_service import TimeSlotService
-from ..dependencies import get_optional_current_user, require_permission
+from ..dependencies import get_optional_current_user, require_owner
 
 router = APIRouter(tags=['time-slots'])
 
@@ -20,7 +20,7 @@ def get_service(db: Session = Depends(get_db)) -> TimeSlotService:
 def list_time_slots(
     field_id: int | None = Query(default=None, gt=0),
     is_active: bool | None = None,
-    current_user: User = Depends(require_permission('time_slots.manage')),
+    current_user: User = Depends(require_owner),
     service: TimeSlotService = Depends(get_service),
 ):
     return service.list_manage(field_id, is_active, current_user)
@@ -36,7 +36,7 @@ def list_field_time_slots(
 @router.post('/time-slots', response_model=TimeSlotResponse, status_code=201)
 def create_time_slot(
     payload: TimeSlotCreate,
-    current_user: User = Depends(require_permission('time_slots.manage')),
+    current_user: User = Depends(require_owner),
     service: TimeSlotService = Depends(get_service),
 ):
     return service.create(payload.model_dump(mode='python'), current_user)
@@ -45,7 +45,7 @@ def create_time_slot(
 def update_time_slot(
     time_slot_id: int,
     payload: TimeSlotUpdate,
-    current_user: User = Depends(require_permission('time_slots.manage')),
+    current_user: User = Depends(require_owner),
     service: TimeSlotService = Depends(get_service),
 ):
     return service.update(time_slot_id, payload.model_dump(mode='python'), current_user)
@@ -54,7 +54,7 @@ def update_time_slot(
 def update_time_slot_status(
     time_slot_id: int,
     payload: TimeSlotStatusUpdate,
-    current_user: User = Depends(require_permission('time_slots.manage')),
+    current_user: User = Depends(require_owner),
     service: TimeSlotService = Depends(get_service),
 ):
     return service.update_status(time_slot_id, payload.is_active, current_user)
@@ -62,7 +62,7 @@ def update_time_slot_status(
 @router.delete('/time-slots/{time_slot_id}', response_model=TimeSlotDeleteResponse)
 def delete_time_slot(
     time_slot_id: int,
-    current_user: User = Depends(require_permission('time_slots.manage')),
+    current_user: User = Depends(require_owner),
     service: TimeSlotService = Depends(get_service),
 ):
     action, time_slot = service.delete(time_slot_id, current_user)

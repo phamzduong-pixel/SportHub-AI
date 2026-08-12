@@ -30,8 +30,7 @@ class MaintenanceWorkflowTests(unittest.TestCase):
             owner_a = User(full_name='Owner A', email='maint-owner-a@test.local', hashed_password=get_password_hash('Owner@123'), role='OWNER')
             owner_b = User(full_name='Owner B', email='maint-owner-b@test.local', hashed_password=get_password_hash('Owner@123'), role='OWNER')
             customer = User(full_name='Customer', email='maint-customer@test.local', hashed_password=get_password_hash('Customer@123'), role='CUSTOMER')
-            manager = User(full_name='Manager legacy', email='maint-manager@test.local', hashed_password=get_password_hash('Manager@123'), role='MANAGER')
-            db.add_all([owner_a, owner_b, customer, manager]); db.flush()
+            db.add_all([owner_a, owner_b, customer]); db.flush()
             facility_a = Facility(owner_id=owner_a.id, name='Cơ sở bảo trì A', location='A')
             facility_b = Facility(owner_id=owner_b.id, name='Cơ sở bảo trì B', location='B')
             db.add_all([facility_a, facility_b]); db.flush()
@@ -93,14 +92,10 @@ class MaintenanceWorkflowTests(unittest.TestCase):
         history = self.client.get('/maintenance?status=COMPLETED', headers=self.owner_a).json()
         self.assertEqual([entry['id'] for entry in history], [item['id']])
 
-    def test_owner_isolation_customer_and_legacy_manager_are_blocked(self):
+    def test_owner_isolation_and_customer_is_blocked(self):
         response = self.client.post('/maintenance', headers=self.owner_a, json=self.payload(field_id=self.field_b_id))
         self.assertEqual(response.status_code, 404)
         self.assertEqual(self.client.get('/maintenance', headers=self.customer).status_code, 403)
-        manager = self.client.post('/auth/login', json={'email': 'maint-manager@test.local', 'password': 'Manager@123'})
-        self.assertEqual(manager.status_code, 200)
-        manager_headers = {'Authorization': f"Bearer {manager.json()['access_token']}"}
-        self.assertEqual(self.client.get('/maintenance', headers=manager_headers).status_code, 403)
 
     def test_invalid_range_is_rejected(self):
         response = self.client.post('/maintenance', headers=self.owner_a, json=self.payload(ends_at=self.at(8)))

@@ -9,7 +9,6 @@ class RepresentativeDetails(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     phone: str = Field(min_length=8, max_length=20, pattern=r'^\+?[0-9 ]+$')
     email: str = Field(min_length=5, max_length=255)
-    identity_number: str = Field(min_length=6, max_length=30, pattern=r'^[A-Za-z0-9-]+$')
 
     @field_validator('email', mode='before')
     @classmethod
@@ -32,8 +31,6 @@ class VenueDetails(BaseModel):
     address: str = Field(min_length=5, max_length=500)
     city: str = Field(default='', max_length=120)
     district: str = Field(default='', max_length=120)
-    phone: str = Field(default='', max_length=20, pattern=r'^(|\+?[0-9 ]+)$')
-    sports: list[str] = Field(min_length=1, max_length=20)
     description: str = Field(default='', max_length=2000)
 
     @field_validator('address', mode='before')
@@ -42,14 +39,6 @@ class VenueDetails(BaseModel):
         if isinstance(value, str) and len(value.strip()) < 5:
             raise ValueError('Vui lòng nhập địa chỉ ít nhất 5 ký tự')
         return value
-
-    @field_validator('sports')
-    @classmethod
-    def validate_sports(cls, values: list[str]):
-        normalized = list(dict.fromkeys(value.strip() for value in values if value.strip()))
-        if not normalized:
-            raise ValueError('Phải chọn ít nhất một môn thể thao')
-        return normalized
 
 
 class OwnerApplicationRequest(BaseModel):
@@ -65,7 +54,7 @@ class OwnerApplicationDecision(BaseModel):
 
 
 class OwnerApplicationReview(BaseModel):
-    action: Literal['APPROVE', 'REQUEST_MORE_INFO', 'REJECT']
+    action: Literal['APPROVE', 'REJECT']
     admin_note: str | None = Field(default=None, max_length=1000)
 
 
@@ -92,11 +81,6 @@ class OwnerApplicationResponse(BaseModel):
     legal_confirmed: bool
     rejection_reason: str | None
     admin_note: str | None
-    has_document: bool
-    document_file_name: str | None
-    document_mime: str | None
-    document_size: int | None
-    document_uploaded_at: datetime | None
     submitted_at: datetime | None
     reviewed_at: datetime | None
     withdrawn_at: datetime | None

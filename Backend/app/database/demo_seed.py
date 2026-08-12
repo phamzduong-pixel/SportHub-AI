@@ -149,7 +149,7 @@ def _seed_venues(session, owner):
         if facility is None:
             facility = Facility(
                 owner_id=owner.id, cancellation_rules=default_cancellation_rules(),
-                free_cancellation_minutes=360, is_active=True, **definition['facility'],
+                free_cancellation_minutes=360, status='APPROVED', is_active=True, approved_at=datetime.now(timezone.utc), sports=[definition['field']['sport_type']], **definition['facility'],
             )
             session.add(facility)
             session.flush()

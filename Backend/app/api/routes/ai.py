@@ -15,7 +15,7 @@ from ...schemas.ai import (
 )
 from ...services.ai_assistant_service import AIAssistantService
 from ...services.customer_recommendation_service import CustomerRecommendationService
-from ..dependencies import get_optional_current_user, require_permission
+from ..dependencies import get_optional_current_user, require_owner
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 logger = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ def get_service(db: Session = Depends(get_db)) -> DemandPredictionService:
 @router.post('/predict-demand', response_model=DemandPredictionResponse)
 def predict_demand(
     payload: DemandPredictionRequest,
-    current_user: User = Depends(require_permission('ai.view')),
+    current_user: User = Depends(require_owner),
     service: DemandPredictionService = Depends(get_service),
 ):
     return service.for_user(current_user).predict(payload)
@@ -67,7 +67,7 @@ def predict_demand(
 
 @router.get('/model-metrics', response_model=ModelMetricsResponse)
 def model_metrics(
-    current_user: User = Depends(require_permission('ai.view')),
+    current_user: User = Depends(require_owner),
     service: DemandPredictionService = Depends(get_service),
 ):
     return service.for_user(current_user).model_metrics()
@@ -77,7 +77,7 @@ def model_metrics(
 def demand_overview(
     days: int = Query(default=7, ge=1, le=30),
     sport_type: str | None = Query(default=None, min_length=2, max_length=80),
-    current_user: User = Depends(require_permission('ai.view')),
+    current_user: User = Depends(require_owner),
     service: DemandPredictionService = Depends(get_service),
 ):
     normalized = ' '.join(sport_type.strip().lower().split()) if sport_type else None
@@ -90,7 +90,7 @@ def recommendations(
     booking_date: date = Query(),
     max_price: float | None = Query(default=None, ge=0, le=1_000_000_000),
     limit: int = Query(default=6, ge=1, le=20),
-    current_user: User = Depends(require_permission('ai.view')),
+    current_user: User = Depends(require_owner),
     service: DemandPredictionService = Depends(get_service),
 ):
     normalized = ' '.join(sport_type.strip().lower().split())

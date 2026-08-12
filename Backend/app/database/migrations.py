@@ -63,16 +63,12 @@ def migrate_user_profile_columns(engine):
 
 
 def migrate_system_roles(engine):
-    """Normalize platform roles while preserving MANAGER ownership and pending requests."""
+    """Normalize legacy platform roles without deleting user accounts or history."""
     with engine.begin() as connection:
         inspector = inspect(connection)
         tables = set(inspector.get_table_names())
         if 'users' in tables:
             user_columns = {column['name'] for column in inspector.get_columns('users')}
-            if 'owner_id' not in user_columns:
-                connection.execute(text('ALTER TABLE users ADD COLUMN owner_id INTEGER NULL REFERENCES users(id)'))
-            if 'management_permissions' not in user_columns:
-                connection.execute(text("ALTER TABLE users ADD COLUMN management_permissions JSON NOT NULL DEFAULT '[]'"))
             connection.execute(text("UPDATE users SET role='SYSTEM_ADMIN' WHERE role='ADMIN'"))
             if 'owner_applications' in tables:
                 application_columns = {column['name'] for column in inspector.get_columns('owner_applications')}
@@ -84,8 +80,17 @@ def migrate_system_roles(engine):
                     "WHERE role='OWNER_PENDING' AND NOT EXISTS (SELECT 1 FROM owner_applications a WHERE a.customer_id=users.id)"
                 ))
                 connection.execute(text("UPDATE users SET role='CUSTOMER' WHERE role='OWNER_PENDING'"))
-            connection.execute(text("UPDATE users SET owner_id=NULL WHERE role!='MANAGER' AND owner_id IS NOT NULL"))
-            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_users_owner_id ON users (owner_id)'))
+            if 'owner_id' in user_columns:
+                connection.execute(text(
+                    "UPDATE users SET role='CUSTOMER', owner_id=NULL "
+                    "WHERE role NOT IN ('CUSTOMER', 'OWNER', 'SYSTEM_ADMIN')"
+                ))
+                connection.execute(text("UPDATE users SET owner_id=NULL WHERE owner_id IS NOT NULL"))
+            else:
+                connection.execute(text(
+                    "UPDATE users SET role='CUSTOMER' "
+                    "WHERE role NOT IN ('CUSTOMER', 'OWNER', 'SYSTEM_ADMIN')"
+                ))
         if 'facilities' in tables:
             columns = {column['name'] for column in inspector.get_columns('facilities')}
             if 'is_active' not in columns:
@@ -223,6 +228,11 @@ def migrate_professional_booking_schema(engine):
             for name, ddl in columns.items():
                 if name not in existing:
                     connection.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}'))
+        # Participant count is not booking data; court capacity/configuration
+        # belongs to fields. Remove the short-lived development column safely.
+        booking_columns = {column['name'] for column in inspect(engine).get_columns('bookings')} if 'bookings' in tables else set()
+        if 'participant_count' in booking_columns:
+            connection.execute(text('ALTER TABLE bookings DROP COLUMN participant_count'))
         if 'bookings' in tables:
             connection.execute(text('DROP INDEX IF EXISTS uq_open_booking_slot_date'))
             condition = "status IN ('pending_payment', 'pending_confirmation', 'confirmed', 'in_progress')"
@@ -297,26 +307,75 @@ def migrate_refund_workflow_schema(engine):
 
 
 def migrate_partner_application_schema(engine):
-    """Upgrade the existing OwnerApplication table without creating a parallel partner flow."""
+    """Simplify OWNER requests while archiving legacy document metadata."""
     inspector = inspect(engine)
     if 'owner_applications' not in inspector.get_table_names():
         return
-    columns = {column['name'] for column in inspector.get_columns('owner_applications')}
-    timestamp = 'TIMESTAMP WITH TIME ZONE' if engine.dialect.name == 'postgresql' else 'DATETIME'
 
-    # Applications used to be one-row-per-customer. Reapplication after a withdrawal
-    # requires immutable historical rows, so remove only that legacy uniqueness rule.
+    columns = {column['name'] for column in inspector.get_columns('owner_applications')}
+    document_columns = [
+        'document_path', 'document_mime', 'document_original_name',
+        'document_size', 'document_uploaded_at',
+    ]
+    has_documents = any(name in columns for name in document_columns)
     unique_customer = any(
         set(constraint.get('column_names') or []) == {'customer_id'}
         for constraint in inspector.get_unique_constraints('owner_applications')
     )
-    if unique_customer and engine.dialect.name == 'sqlite':
-        ordered_columns = [column['name'] for column in inspector.get_columns('owner_applications')]
+    timestamp = 'TIMESTAMP WITH TIME ZONE' if engine.dialect.name == 'postgresql' else 'DATETIME'
+
+    if engine.dialect.name == 'sqlite' and (unique_customer or has_documents):
+        target_columns = [
+            'id', 'customer_id', 'status', 'representative', 'venue', 'legal_confirmed',
+            'rejection_reason', 'admin_note', 'reviewed_by', 'submitted_at', 'reviewed_at',
+            'created_at', 'updated_at', 'withdrawn_at', 'withdraw_reason',
+        ]
+        expressions = {
+            'id': 'id', 'customer_id': 'customer_id',
+            'status': (
+                "CASE WHEN status IN ('PENDING_REVIEW', 'PENDING') THEN 'PENDING' "
+                "WHEN status='NEED_MORE_INFO' THEN 'REJECTED' ELSE status END"
+            ),
+            'representative': 'representative', 'venue': 'venue',
+            'legal_confirmed': 'legal_confirmed',
+            'rejection_reason': 'rejection_reason' if 'rejection_reason' in columns else 'NULL',
+            'admin_note': 'admin_note' if 'admin_note' in columns else 'NULL',
+            'reviewed_by': 'reviewed_by' if 'reviewed_by' in columns else 'NULL',
+            'submitted_at': 'submitted_at' if 'submitted_at' in columns else 'NULL',
+            'reviewed_at': 'reviewed_at' if 'reviewed_at' in columns else 'NULL',
+            'created_at': (
+                'COALESCE(created_at, submitted_at, updated_at, CURRENT_TIMESTAMP)'
+                if 'created_at' in columns else
+                'COALESCE(submitted_at, updated_at, CURRENT_TIMESTAMP)'
+            ),
+            'updated_at': 'COALESCE(updated_at, CURRENT_TIMESTAMP)' if 'updated_at' in columns else 'CURRENT_TIMESTAMP',
+            'withdrawn_at': 'withdrawn_at' if 'withdrawn_at' in columns else 'NULL',
+            'withdraw_reason': 'withdraw_reason' if 'withdraw_reason' in columns else 'NULL',
+        }
         connection = engine.connect()
         try:
             connection.exec_driver_sql('PRAGMA foreign_keys=OFF')
             connection.commit()
             with connection.begin():
+                if has_documents:
+                    connection.execute(text(f'''CREATE TABLE IF NOT EXISTS owner_application_document_archive (
+                        application_id INTEGER NOT NULL PRIMARY KEY,
+                        document_path VARCHAR(500) NULL,
+                        document_mime VARCHAR(50) NULL,
+                        document_original_name VARCHAR(255) NULL,
+                        document_size INTEGER NULL,
+                        document_uploaded_at {timestamp} NULL,
+                        archived_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )'''))
+                    archive_values = [
+                        name if name in columns else 'NULL' for name in document_columns
+                    ]
+                    connection.execute(text(
+                        'INSERT OR IGNORE INTO owner_application_document_archive '
+                        f"(application_id,{','.join(document_columns)}) "
+                        f"SELECT id,{','.join(archive_values)} FROM owner_applications "
+                        f"WHERE {' OR '.join(f'{name} IS NOT NULL' for name in document_columns if name in columns)}"
+                    ))
                 connection.execute(text(f'''CREATE TABLE owner_applications_new (
                     id INTEGER NOT NULL PRIMARY KEY,
                     customer_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -326,29 +385,20 @@ def migrate_partner_application_schema(engine):
                     legal_confirmed BOOLEAN NOT NULL,
                     rejection_reason TEXT NULL,
                     admin_note TEXT NULL,
-                    document_path VARCHAR(500) NULL,
-                    document_mime VARCHAR(50) NULL,
-                    document_original_name VARCHAR(255) NULL,
-                    document_size INTEGER NULL,
-                    document_uploaded_at {timestamp} NULL,
                     reviewed_by INTEGER NULL REFERENCES users(id) ON DELETE SET NULL,
                     submitted_at {timestamp} NULL,
                     reviewed_at {timestamp} NULL,
-                    created_at {timestamp} NULL,
-                    updated_at {timestamp} NULL,
+                    created_at {timestamp} NOT NULL,
+                    updated_at {timestamp} NOT NULL,
                     withdrawn_at {timestamp} NULL,
                     withdraw_reason TEXT NULL
                 )'''))
-                target_columns = ordered_columns + [name for name in ('withdrawn_at', 'withdraw_reason') if name not in columns]
-                select_values = ordered_columns + ['NULL' for name in ('withdrawn_at', 'withdraw_reason') if name not in columns]
                 connection.execute(text(
                     f"INSERT INTO owner_applications_new ({','.join(target_columns)}) "
-                    f"SELECT {','.join(select_values)} FROM owner_applications"
+                    f"SELECT {','.join(expressions[name] for name in target_columns)} FROM owner_applications"
                 ))
                 connection.execute(text('DROP TABLE owner_applications'))
                 connection.execute(text('ALTER TABLE owner_applications_new RENAME TO owner_applications'))
-                connection.execute(text("UPDATE owner_applications SET status='PENDING_REVIEW' WHERE status='PENDING'"))
-                connection.execute(text('UPDATE owner_applications SET created_at=COALESCE(created_at, submitted_at, updated_at, CURRENT_TIMESTAMP) WHERE created_at IS NULL'))
                 connection.execute(text('CREATE INDEX IF NOT EXISTS ix_owner_applications_customer_id ON owner_applications (customer_id)'))
                 connection.execute(text('CREATE INDEX IF NOT EXISTS ix_owner_applications_status ON owner_applications (status)'))
             connection.exec_driver_sql('PRAGMA foreign_keys=ON')
@@ -366,17 +416,62 @@ def migrate_partner_application_schema(engine):
             connection.execute(text('ALTER TABLE owner_applications ADD COLUMN admin_note TEXT NULL'))
         if 'created_at' not in columns:
             connection.execute(text(f'ALTER TABLE owner_applications ADD COLUMN created_at {timestamp} NULL'))
-            connection.execute(text('UPDATE owner_applications SET created_at=COALESCE(submitted_at, updated_at, CURRENT_TIMESTAMP) WHERE created_at IS NULL'))
-        document_columns = {
-            'document_path': 'VARCHAR(500) NULL', 'document_mime': 'VARCHAR(50) NULL',
-            'document_original_name': 'VARCHAR(255) NULL', 'document_size': 'INTEGER NULL',
-            'document_uploaded_at': f'{timestamp} NULL',
-        }
-        for name, ddl in document_columns.items():
-            if name not in columns:
-                connection.execute(text(f'ALTER TABLE owner_applications ADD COLUMN {name} {ddl}'))
+            connection.execute(text('UPDATE owner_applications SET created_at=COALESCE(submitted_at, updated_at, CURRENT_TIMESTAMP)'))
         if 'withdrawn_at' not in columns:
             connection.execute(text(f'ALTER TABLE owner_applications ADD COLUMN withdrawn_at {timestamp} NULL'))
         if 'withdraw_reason' not in columns:
             connection.execute(text('ALTER TABLE owner_applications ADD COLUMN withdraw_reason TEXT NULL'))
-        connection.execute(text("UPDATE owner_applications SET status='PENDING_REVIEW' WHERE status='PENDING'"))
+        connection.execute(text(
+            "UPDATE owner_applications SET status='PENDING' WHERE status IN ('PENDING_REVIEW', 'PENDING')"
+        ))
+        connection.execute(text("UPDATE owner_applications SET status='REJECTED' WHERE status='NEED_MORE_INFO'"))
+        if engine.dialect.name == 'postgresql' and has_documents:
+            connection.execute(text(f'''CREATE TABLE IF NOT EXISTS owner_application_document_archive (
+                application_id INTEGER PRIMARY KEY,
+                document_path VARCHAR(500) NULL,
+                document_mime VARCHAR(50) NULL,
+                document_original_name VARCHAR(255) NULL,
+                document_size INTEGER NULL,
+                document_uploaded_at {timestamp} NULL,
+                archived_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )'''))
+            connection.execute(text(
+                'INSERT INTO owner_application_document_archive '
+                f"(application_id,{','.join(document_columns)}) "
+                f"SELECT id,{','.join(document_columns)} FROM owner_applications "
+                'ON CONFLICT (application_id) DO NOTHING'
+            ))
+            for name in document_columns:
+                connection.execute(text(f'ALTER TABLE owner_applications DROP COLUMN IF EXISTS {name}'))
+
+def migrate_facility_approval_schema(engine):
+    """Add facility lifecycle without hiding or breaking existing booking inventory."""
+    inspector = inspect(engine)
+    if 'facilities' not in inspector.get_table_names():
+        return
+    columns = {column['name'] for column in inspector.get_columns('facilities')}
+    timestamp = 'TIMESTAMP WITH TIME ZONE' if engine.dialect.name == 'postgresql' else 'DATETIME'
+    definitions = {
+        'contact_email': 'VARCHAR(255) NULL',
+        'city': 'VARCHAR(120) NULL',
+        'district': 'VARCHAR(120) NULL',
+        'latitude': 'FLOAT NULL',
+        'longitude': 'FLOAT NULL',
+        'sports': "JSON NOT NULL DEFAULT '[]'",
+        'status': "VARCHAR(24) NOT NULL DEFAULT 'APPROVED'",
+        'submitted_at': f'{timestamp} NULL',
+        'approved_at': f'{timestamp} NULL',
+        'approved_by': 'INTEGER NULL REFERENCES users(id)',
+        'reviewed_at': f'{timestamp} NULL',
+        'rejection_reason': 'TEXT NULL',
+    }
+    with engine.begin() as connection:
+        for name, ddl in definitions.items():
+            if name not in columns:
+                connection.execute(text(f'ALTER TABLE facilities ADD COLUMN {name} {ddl}'))
+        connection.execute(text(
+            "UPDATE facilities SET status='APPROVED', is_active=TRUE, "
+            "approved_at=COALESCE(approved_at, created_at, CURRENT_TIMESTAMP) "
+            "WHERE status IS NULL OR status='' OR legacy_field_id IS NOT NULL"
+        ))
+        connection.execute(text('CREATE INDEX IF NOT EXISTS ix_facilities_status ON facilities (status)'))

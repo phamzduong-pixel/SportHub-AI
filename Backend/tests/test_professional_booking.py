@@ -219,6 +219,9 @@ class ProfessionalBookingWorkflowTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201, created.text)
         facility_id = created.json()['id']
         with self.case.Session() as db:
+            from app.models.facility import Facility
+            facility = db.get(Facility, facility_id)
+            facility.status = 'APPROVED'; facility.is_active = True
             field = db.get(Field, self.case.field_id)
             field.facility_id = facility_id
             db.commit()

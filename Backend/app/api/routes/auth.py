@@ -16,7 +16,6 @@ from ...schemas.user import ChangePasswordRequest, LoginRequest, MessageResponse
 from ..dependencies import get_current_user
 from ...services.audit_service import record_audit
 from ...services.avatar_service import avatar_response, delete_local_avatar, store_avatar
-from ...services.partner_document_service import delete_document, document_response, store_document
 
 router = APIRouter(prefix='/auth', tags=['auth'])
 logger = logging.getLogger(__name__)
@@ -26,8 +25,7 @@ def user_response(user: User) -> UserResponse:
     roles = ['CUSTOMER', 'OWNER'] if user.role == UserRole.OWNER.value else [user.role]
     return UserResponse(
         id=user.id, full_name=user.full_name, email=user.email, phone=user.phone,
-        avatar_url=user.avatar_url, role=user.role, roles=roles, owner_id=user.owner_id,
-        management_permissions=user.management_permissions or [], is_active=user.is_active,
+        avatar_url=user.avatar_url, role=user.role, roles=roles, is_active=user.is_active,
         created_at=user.created_at, updated_at=user.updated_at,
     )
 
@@ -39,9 +37,6 @@ def application_response(item: OwnerApplication) -> OwnerApplicationResponse:
         status=item.status, representative=item.representative,
         venue=item.venue, legal_confirmed=item.legal_confirmed,
         rejection_reason=item.rejection_reason, admin_note=item.admin_note,
-        has_document=bool(item.document_path), document_file_name=item.document_original_name,
-        document_mime=item.document_mime, document_size=item.document_size,
-        document_uploaded_at=item.document_uploaded_at,
         submitted_at=item.submitted_at, reviewed_at=item.reviewed_at,
         withdrawn_at=item.withdrawn_at, withdraw_reason=item.withdraw_reason,
         reviewed_by=item.reviewed_by, reviewer_name=item.reviewer.full_name if item.reviewer else None,
@@ -59,12 +54,10 @@ def _latest_application(db: Session, customer_id: int) -> OwnerApplication | Non
 def _validate_application_data(payload: OwnerApplicationRequest):
     representative, venue = payload.representative.model_dump(), payload.venue.model_dump()
     required_rep = ('name', 'phone', 'email')
-    required_venue = ('name', 'address', 'sports')
+    required_venue = ('name', 'address')
     missing = [key for key in required_rep if not representative.get(key)] + [key for key in required_venue if not venue.get(key)]
     if missing:
         raise HTTPException(status_code=422, detail=f'Hồ sơ còn thiếu thông tin bắt buộc: {", ".join(missing)}')
-    if not isinstance(venue.get('sports'), list) or not venue['sports']:
-        raise HTTPException(status_code=422, detail='Phải chọn ít nhất một môn thể thao dự kiến kinh doanh')
 
 
 def ensure_unique(db: Session, email: str, phone: str | None, exclude_id: int | None = None):
@@ -139,13 +132,14 @@ def request_owner(payload: OwnerApplicationRequest, current_user: User = Depends
     if not payload.legal_confirmed:
         raise HTTPException(status_code=422, detail='Bạn phải xác nhận thông tin hồ sơ')
     item = _latest_application(db, current_user.id)
-    if item is None or not item.document_path:
-        raise HTTPException(status_code=422, detail='Bạn phải tải ảnh giấy tờ/CCCD trước khi gửi hồ sơ')
-    if item.status in (OwnerApplicationStatus.PENDING_REVIEW.value, OwnerApplicationStatus.APPROVED.value):
+    if item is None:
+        item = OwnerApplication(customer_id=current_user.id, status=OwnerApplicationStatus.DRAFT.value)
+        db.add(item)
+    if item.status in (OwnerApplicationStatus.PENDING.value, OwnerApplicationStatus.APPROVED.value):
         raise HTTPException(status_code=409, detail='Hồ sơ đang chờ xét duyệt hoặc đã được phê duyệt; không thể gửi trùng')
     if item.status == OwnerApplicationStatus.WITHDRAWN.value:
         raise HTTPException(status_code=409, detail='Hồ sơ đã rút không thể gửi lại; hãy tạo hồ sơ đăng ký mới')
-    item.status = OwnerApplicationStatus.PENDING_REVIEW.value
+    item.status = OwnerApplicationStatus.PENDING.value
     item.representative = payload.representative.model_dump(); item.venue = payload.venue.model_dump()
     item.legal_confirmed = True; item.rejection_reason = None; item.admin_note = None
     item.reviewed_by = None; item.reviewed_at = None; item.withdrawn_at = None; item.withdraw_reason = None
@@ -169,7 +163,7 @@ def save_owner_application(payload: OwnerApplicationDraft, current_user: User = 
     if item is None:
         item = OwnerApplication(customer_id=current_user.id, status=OwnerApplicationStatus.DRAFT.value, submitted_at=datetime.now(timezone.utc))
         db.add(item)
-    elif item.status not in (OwnerApplicationStatus.DRAFT.value, OwnerApplicationStatus.NEED_MORE_INFO.value, OwnerApplicationStatus.REJECTED.value):
+    elif item.status not in (OwnerApplicationStatus.DRAFT.value, OwnerApplicationStatus.REJECTED.value):
         raise HTTPException(status_code=409, detail='Trạng thái hồ sơ hiện tại không cho phép chỉnh sửa')
     item.representative = payload.representative; item.venue = payload.venue; item.legal_confirmed = payload.legal_confirmed
     db.commit(); db.refresh(item); return application_response(item)
@@ -203,8 +197,7 @@ def withdraw_owner_application(
             OwnerApplication.id == application_id,
             OwnerApplication.customer_id == current_user.id,
             OwnerApplication.status.in_([
-                OwnerApplicationStatus.PENDING_REVIEW.value,
-                OwnerApplicationStatus.NEED_MORE_INFO.value,
+                OwnerApplicationStatus.PENDING.value,
             ]),
         ).values(
             status=OwnerApplicationStatus.WITHDRAWN.value,
@@ -245,57 +238,6 @@ def reapply_owner_application(current_user: User = Depends(get_current_user), db
         'previous_application_id': previous.id,
     })
     db.commit(); db.refresh(item)
-    return application_response(item)
-
-
-@router.post('/owner-application/document', response_model=OwnerApplicationResponse)
-async def upload_owner_application_document(
-    document: UploadFile = File(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
-):
-    if current_user.role != UserRole.CUSTOMER.value:
-        raise HTTPException(status_code=403, detail='Chỉ CUSTOMER được cập nhật ảnh giấy tờ của hồ sơ')
-    item = _latest_application(db, current_user.id)
-    if item is None:
-        item = OwnerApplication(customer_id=current_user.id, status=OwnerApplicationStatus.DRAFT.value, submitted_at=datetime.now(timezone.utc))
-        db.add(item); db.flush()
-    elif item.status not in (OwnerApplicationStatus.DRAFT.value, OwnerApplicationStatus.NEED_MORE_INFO.value, OwnerApplicationStatus.REJECTED.value):
-        raise HTTPException(status_code=409, detail='Trạng thái hồ sơ hiện tại không cho phép thay ảnh giấy tờ')
-    stored = await store_document(document)
-    old_path = item.document_path
-    for key, value in stored.items():
-        setattr(item, key, value)
-    item.document_uploaded_at = datetime.now(timezone.utc)
-    db.flush(); record_audit(db, current_user, 'owner_application', item.id, 'partner_document_uploaded', {
-        'mime': item.document_mime, 'size': item.document_size, 'replaced': bool(old_path),
-    })
-    db.commit(); db.refresh(item)
-    if old_path and old_path != item.document_path:
-        delete_document(old_path)
-    return application_response(item)
-
-
-@router.get('/owner-application/document')
-def get_owner_application_document(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = _latest_application(db, current_user.id)
-    if item is None:
-        raise HTTPException(status_code=404, detail='Chưa có hồ sơ đăng ký đối tác')
-    return document_response(item.document_path, item.document_mime)
-
-
-@router.delete('/owner-application/document', response_model=OwnerApplicationResponse)
-def remove_owner_application_document(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if current_user.role != UserRole.CUSTOMER.value:
-        raise HTTPException(status_code=403, detail='Chỉ CUSTOMER được xóa ảnh giấy tờ của hồ sơ')
-    item = _latest_application(db, current_user.id)
-    if item is None:
-        raise HTTPException(status_code=404, detail='Chưa có hồ sơ đăng ký đối tác')
-    if item.status not in (OwnerApplicationStatus.DRAFT.value, OwnerApplicationStatus.NEED_MORE_INFO.value, OwnerApplicationStatus.REJECTED.value):
-        raise HTTPException(status_code=409, detail='Trạng thái hồ sơ hiện tại không cho phép xóa ảnh giấy tờ')
-    old_path = item.document_path
-    item.document_path = None; item.document_mime = None; item.document_original_name = None
-    item.document_size = None; item.document_uploaded_at = None
-    record_audit(db, current_user, 'owner_application', item.id, 'partner_document_deleted', {})
-    db.commit(); db.refresh(item); delete_document(old_path)
     return application_response(item)
 
 

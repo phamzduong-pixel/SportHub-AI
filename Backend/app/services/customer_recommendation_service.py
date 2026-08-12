@@ -30,7 +30,7 @@ class CustomerRecommendationService:
         )).all())
         fields = list(self.db.scalars(select(Field).where(
             Field.status == 'available',
-            or_(Field.facility_id.is_(None), Field.facility.has(Facility.is_active.is_(True))),
+            or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
         )).all())
         booking_counts = dict(self.db.execute(select(Booking.field_id, func.count(Booking.id)).where(
             Booking.status.in_(VALID_HISTORY),

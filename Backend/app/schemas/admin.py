@@ -36,7 +36,6 @@ class AdminSummary(BaseModel):
     total_users: int
     customers: int
     owners: int
-    managers: int
     system_admins: int
     active_users: int
     facilities: int
@@ -44,6 +43,7 @@ class AdminSummary(BaseModel):
     fields: int
     bookings: int
     pending_applications: int
+    pending_facilities: int
 
 
 class AdminOwnerItem(BaseModel):

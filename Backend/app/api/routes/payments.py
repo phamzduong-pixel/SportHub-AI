@@ -8,7 +8,7 @@ from ...models.user import User
 from ...repositories.payment_repository import PaymentRepository
 from ...schemas.payment import BankPaymentIntentCreate, BankWebhookPayload, DepositReceiptResponse, PaymentActionNote, PaymentCreate, PaymentListResponse, PaymentResponse, PaymentSummary
 from ...services.payment_service import PaymentService
-from ..dependencies import get_current_user, require_permission
+from ..dependencies import get_current_user, require_owner
 
 router = APIRouter(tags=['payments'])
 
@@ -59,7 +59,7 @@ def list_payments(
     payment_method: PaymentMethod | None = None,
     search: str | None = Query(default=None, max_length=120),
     page: int = Query(default=1, ge=1), page_size: int = Query(default=20, ge=1, le=100),
-    current_user: User = Depends(require_permission('payments.manage')), service: PaymentService = Depends(get_service),
+    current_user: User = Depends(require_owner), service: PaymentService = Depends(get_service),
 ):
     items, total = service.list_manage(
         current_user,

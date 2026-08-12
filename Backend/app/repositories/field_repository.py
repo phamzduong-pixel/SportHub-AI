@@ -1,4 +1,4 @@
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models.field import Booking, Field
@@ -19,7 +19,7 @@ class FieldRepository:
         if status:
             filters.append(Field.status == status)
         if facility_active is not None:
-            filters.append(or_(Field.facility_id.is_(None), Field.facility.has(Facility.is_active.is_(facility_active))))
+            filters.append(or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(facility_active), Facility.status == 'APPROVED'))))
         total = self.db.scalar(select(func.count(Field.id)).where(*filters)) or 0
         items = self.db.scalars(
             select(Field).where(*filters).order_by(Field.created_at.desc(), Field.id.desc()).offset((page - 1) * page_size).limit(page_size)

@@ -4,12 +4,7 @@ from ..models.user import User
 
 
 def management_owner_id(user: User, db) -> int | None:
-    if user.role == 'OWNER':
-        return user.id
-    if user.role == 'MANAGER' and user.owner_id:
-        owner = db.get(User, user.owner_id)
-        return owner.id if owner and owner.role == 'OWNER' and owner.is_active else None
-    return None
+    return user.id if user.role == 'OWNER' else None
 
 
 def owns_field(user: User, field, db) -> bool:

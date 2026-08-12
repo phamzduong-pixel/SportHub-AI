@@ -12,7 +12,7 @@ from ...models.operations import AuditLog, BookingComplaint, FieldBlock
 from ...models.user import User
 from ...schemas.operations import AuditLogResponse, ComplaintCreate, ComplaintResponse, ComplaintUpdate, FieldBlockCreate, FieldBlockResponse
 from ...services.audit_service import record_audit
-from ..dependencies import get_current_user, require_permission
+from ..dependencies import get_current_user, require_owner
 
 router = APIRouter(tags=['operations'])
 
@@ -30,7 +30,7 @@ def complaint_query():
 
 
 @router.get('/field-blocks', response_model=list[FieldBlockResponse])
-def list_blocks(field_id: int | None = Query(None, gt=0), block_date: date | None = None, user: User = Depends(require_permission('time_slots.manage')), db: Session = Depends(get_db)):
+def list_blocks(field_id: int | None = Query(None, gt=0), block_date: date | None = None, user: User = Depends(require_owner), db: Session = Depends(get_db)):
     owner_id = management_owner_id(user, db)
     filters = [or_(Field.owner_id == owner_id, Field.owner_id.is_(None))]
     if field_id: filters.append(FieldBlock.field_id == field_id)
@@ -40,7 +40,7 @@ def list_blocks(field_id: int | None = Query(None, gt=0), block_date: date | Non
 
 
 @router.post('/field-blocks', response_model=FieldBlockResponse, status_code=201)
-def create_block(payload: FieldBlockCreate, user: User = Depends(require_permission('time_slots.manage')), db: Session = Depends(get_db)):
+def create_block(payload: FieldBlockCreate, user: User = Depends(require_owner), db: Session = Depends(get_db)):
     field = db.scalar(select(Field).where(Field.id == payload.field_id).with_for_update())
     if field is None or not owns_field(user, field, db):
         raise HTTPException(status_code=404, detail='Không tìm thấy sân')
@@ -57,7 +57,7 @@ def create_block(payload: FieldBlockCreate, user: User = Depends(require_permiss
 
 
 @router.delete('/field-blocks/{block_id}', status_code=204)
-def delete_block(block_id: int, user: User = Depends(require_permission('time_slots.manage')), db: Session = Depends(get_db)):
+def delete_block(block_id: int, user: User = Depends(require_owner), db: Session = Depends(get_db)):
     item = db.scalar(select(FieldBlock).options(joinedload(FieldBlock.field)).where(FieldBlock.id == block_id))
     if item is None or not owns_field(user, item.field, db):
         raise HTTPException(status_code=404, detail='Không tìm thấy lịch khóa sân')
@@ -89,14 +89,14 @@ def my_complaints(user: User = Depends(get_current_user), db: Session = Depends(
 
 
 @router.get('/complaints', response_model=list[ComplaintResponse])
-def manage_complaints(status: str | None = Query(None, pattern='^(open|in_review|resolved|rejected)$'), user: User = Depends(require_permission('bookings.manage')), db: Session = Depends(get_db)):
+def manage_complaints(status: str | None = Query(None, pattern='^(open|in_review|resolved|rejected)$'), user: User = Depends(require_owner), db: Session = Depends(get_db)):
     owner_id = management_owner_id(user, db); filters = [Booking.field.has(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)))]
     if status: filters.append(BookingComplaint.status == status)
     return [complaint_response(item) for item in db.scalars(complaint_query().join(Booking).where(*filters).order_by(BookingComplaint.created_at.desc())).unique().all()]
 
 
 @router.patch('/complaints/{complaint_id}', response_model=ComplaintResponse)
-def update_complaint(complaint_id: int, payload: ComplaintUpdate, user: User = Depends(require_permission('bookings.manage')), db: Session = Depends(get_db)):
+def update_complaint(complaint_id: int, payload: ComplaintUpdate, user: User = Depends(require_owner), db: Session = Depends(get_db)):
     item = db.scalar(complaint_query().where(BookingComplaint.id == complaint_id))
     if item is None or not owns_field(user, item.booking.field, db):
         raise HTTPException(status_code=404, detail='Không tìm thấy khiếu nại')
@@ -107,7 +107,7 @@ def update_complaint(complaint_id: int, payload: ComplaintUpdate, user: User = D
 
 
 @router.get('/audit-logs', response_model=list[AuditLogResponse])
-def audit_logs(limit: int = Query(100, ge=1, le=500), user: User = Depends(require_permission('reports.view')), db: Session = Depends(get_db)):
+def audit_logs(limit: int = Query(100, ge=1, le=500), user: User = Depends(require_owner), db: Session = Depends(get_db)):
     owner_id = management_owner_id(user, db)
     items = db.scalars(select(AuditLog).options(joinedload(AuditLog.actor)).where(AuditLog.owner_id == owner_id).order_by(AuditLog.created_at.desc()).limit(limit)).all()
     return [{'id': item.id, 'actor_id': item.actor_id, 'actor_name': item.actor.full_name if item.actor else None, 'actor_role': item.actor_role, 'entity_type': item.entity_type, 'entity_id': item.entity_id, 'action': item.action, 'changes': item.changes or {}, 'created_at': item.created_at} for item in items]

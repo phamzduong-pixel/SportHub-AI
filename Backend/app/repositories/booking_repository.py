@@ -25,7 +25,7 @@ class BookingRepository:
     def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None):
         field_filters = [
             Field.status == 'available',
-            or_(Field.facility_id.is_(None), Field.facility.has(Facility.is_active.is_(True))),
+            or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
         ]
         if field_id:
             field_filters.append(Field.id == field_id)

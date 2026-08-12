@@ -1,7 +1,7 @@
 from fastapi import HTTPException
 
 from ..core.ownership import management_owner_id, owns_field
-from ..models.facility import Facility, default_cancellation_rules
+from ..models.facility import Facility
 from ..models.field import Field, FieldStatus
 from ..models.user import User
 from ..repositories.field_repository import FieldRepository
@@ -36,18 +36,14 @@ class FieldService:
         if data['owner_id'] is None:
             raise HTTPException(status_code=403, detail='Tài khoản quản lý chưa được gán cho OWNER')
         facility_id = data.get('facility_id')
-        if facility_id:
-            facility = self.repository.db.get(Facility, facility_id)
-            if facility is None or facility.owner_id != data['owner_id']:
-                raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
-            data['location'] = facility.location
-        else:
-            facility = Facility(
-                owner_id=data['owner_id'], name=data['name'], location=data['location'],
-                description=data.get('description'), cancellation_rules=default_cancellation_rules(),
-            )
-            self.repository.db.add(facility); self.repository.db.flush()
-            data['facility_id'] = facility.id
+        if not facility_id:
+            raise HTTPException(status_code=422, detail='Phải chọn cơ sở đã được duyệt trước khi tạo sân')
+        facility = self.repository.db.get(Facility, facility_id)
+        if facility is None or facility.owner_id != data['owner_id']:
+            raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+        if facility.status != 'APPROVED' or not facility.is_active:
+            raise HTTPException(status_code=409, detail='Chỉ có thể tạo sân trong cơ sở đã được duyệt và đang hoạt động')
+        data['location'] = facility.location
         item = self.repository.create(data)
         record_audit(self.repository.db, user, 'field', item.id, 'field_created', {'name': item.name, 'base_price': float(item.base_price), 'status': item.status})
         self.repository.db.commit(); return item
@@ -59,6 +55,8 @@ class FieldService:
             facility = self.repository.db.get(Facility, facility_id)
             if facility is None or facility.owner_id != management_owner_id(user, self.repository.db):
                 raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+            if facility.status != 'APPROVED' or not facility.is_active:
+                raise HTTPException(status_code=409, detail='Chỉ có thể gán sân vào cơ sở đã được duyệt và đang hoạt động')
             data['facility_id'] = facility.id
             data['location'] = facility.location
         old_price = float(field.base_price); old_status = field.status

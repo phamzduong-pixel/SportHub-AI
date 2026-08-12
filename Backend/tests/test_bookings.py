@@ -88,6 +88,59 @@ class BookingWorkflowTests(unittest.TestCase):
         self.assertEqual(detail['end_time_snapshot'], '10:00:00')
         self.assertEqual(detail['price_snapshot'], 450000)
 
+    def test_availability_and_quote_keep_exact_date_slot_and_server_price(self):
+        with self.Session() as db:
+            slot = db.get(TimeSlot, self.slot_id)
+            slot.weekday_price = Decimal('470000')
+            slot.weekend_price = Decimal('520000')
+            db.commit()
+        expected_price = 520000 if self.future_date.weekday() >= 5 else 470000
+        availability = self.client.get(f'/availability?date={self.future_date}&field_id={self.field_id}')
+        self.assertEqual(availability.status_code, 200, availability.text)
+        selected = next(item for item in availability.json()[0]['available_slots'] if item['id'] == self.slot_id)
+        self.assertEqual(selected['start_time'], '08:00:00')
+        self.assertEqual(selected['end_time'], '10:00:00')
+        self.assertEqual(selected['price'], expected_price)
+        quote = self.client.get(f'/bookings/quote?field_id={self.field_id}&time_slot_id={self.slot_id}&date={self.future_date}')
+        self.assertEqual(quote.status_code, 200, quote.text)
+        self.assertEqual(quote.json()['booking_date'], self.future_date.isoformat())
+        self.assertEqual(quote.json()['start_time'], '08:00:00')
+        self.assertEqual(quote.json()['end_time'], '10:00:00')
+        self.assertEqual(quote.json()['price'], expected_price)
+        self.assertEqual(quote.json()['deposit_amount'], expected_price * 0.30)
+        self.assertEqual(quote.json()['remaining_amount'], expected_price * 0.70)
+        booking = self.create()
+        self.assertEqual(booking['price_snapshot'], expected_price)
+
+    def test_quote_remaining_amount_tracks_deposit_percentage_and_never_goes_negative(self):
+        for percent, expected_deposit, expected_remaining in (
+            (0, 0, 450000),
+            (20, 90000, 360000),
+            (50, 225000, 225000),
+            (100, 450000, 0),
+            (150, 450000, 0),
+        ):
+            with self.Session() as db:
+                field = db.get(Field, self.field_id)
+                field.deposit_type = 'percentage'
+                field.deposit_value = Decimal(percent)
+                db.commit()
+            quote = self.client.get(
+                f'/bookings/quote?field_id={self.field_id}&time_slot_id={self.slot_id}&date={self.future_date}'
+            )
+            self.assertEqual(quote.status_code, 200, quote.text)
+            self.assertEqual(quote.json()['deposit_amount'], expected_deposit)
+            self.assertEqual(quote.json()['remaining_amount'], expected_remaining)
+
+    def test_slot_taken_after_quote_is_rejected_without_switching_slot(self):
+        quote = self.client.get(f'/bookings/quote?field_id={self.field_id}&time_slot_id={self.slot_id}&date={self.future_date}')
+        self.assertEqual(quote.status_code, 200, quote.text)
+        first = self.create()
+        response = self.client.post('/bookings', headers=self.customer2, json=self.payload())
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()['detail'], 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.')
+        self.assertEqual(first['time_slot_id'], self.slot_id)
+
     def test_overlap_is_checked_by_snapshot_not_only_slot_id(self):
         self.create()
         with self.Session() as db:

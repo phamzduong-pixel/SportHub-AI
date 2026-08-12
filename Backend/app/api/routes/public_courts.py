@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from ...database.session import get_db
@@ -18,7 +18,7 @@ def get_public_court(court_id: int, db: Session = Depends(get_db)):
         select(Field).options(joinedload(Field.facility)).where(
             Field.id == court_id,
             Field.status == FieldStatus.AVAILABLE.value,
-            or_(Field.facility_id.is_(None), Field.facility.has(Facility.is_active.is_(True))),
+            or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
         )
     )
     if court is None:
@@ -38,13 +38,13 @@ def get_public_court(court_id: int, db: Session = Depends(get_db)):
         'contact_phone': court.facility.contact_phone or '0901 234 567',
         'opening_time': court.facility.opening_time.strftime('%H:%M') if court.facility.opening_time else None,
         'closing_time': court.facility.closing_time.strftime('%H:%M') if court.facility.closing_time else None,
-        'amenities': court.facility.amenities or [], 'image_urls': court.facility.image_urls or [],
+        'amenities': court.facility.amenities or [], 'image_urls': (court.facility.image_urls or []) + [f'/api/facilities/images/{image.id}/content' for image in court.facility.images],
     }
     return {
         'court': court,
         'facility': facility,
         'time_slots': slots,
-        'images': ([court.image_url] if court.image_url else []) + (court.facility.image_urls if court.facility and court.facility.image_urls else []),
+        'images': ([court.image_url] if court.image_url else []) + ((court.facility.image_urls or []) + [f'/api/facilities/images/{image.id}/content' for image in court.facility.images] if court.facility else []),
         'min_price': min(prices),
         'max_price': max(prices),
     }

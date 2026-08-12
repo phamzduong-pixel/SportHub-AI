@@ -5,7 +5,17 @@ from fastapi import HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..core.config import settings
-from .partner_document_service import ALLOWED_MIME, _detected_mime
+ALLOWED_MIME = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
+
+
+def _detected_mime(content: bytes) -> str | None:
+    if content.startswith(b'\x89PNG\r\n\x1a\n') and b'IEND' in content[-64:]:
+        return 'image/png'
+    if content.startswith(b'\xff\xd8\xff') and content.endswith(b'\xff\xd9'):
+        return 'image/jpeg'
+    if len(content) >= 16 and content[:4] == b'RIFF' and content[8:12] == b'WEBP' and content[12:16] in (b'VP8 ', b'VP8L', b'VP8X'):
+        return 'image/webp'
+    return None
 
 AVATAR_URL_PREFIX = '/api/auth/avatars/'
 

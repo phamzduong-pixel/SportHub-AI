@@ -11,7 +11,7 @@ from ...schemas.dashboard import (
     RevenueAnalyticsReport, RevenueReport, TimeSlotPerformanceReport,
 )
 from ...services.dashboard_service import DashboardService
-from ..dependencies import require_permission
+from ..dependencies import require_owner
 
 router = APIRouter(prefix='/dashboard', tags=['dashboard'])
 
@@ -24,7 +24,7 @@ def get_service(db: Session = Depends(get_db)) -> DashboardService:
 def dashboard_summary(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).summary(date_from, date_to, field_id)
@@ -34,7 +34,7 @@ def dashboard_summary(
 def dashboard_revenue(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).revenue(date_from, date_to, field_id)
@@ -44,7 +44,7 @@ def dashboard_revenue(
 def dashboard_revenue_analytics(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).revenue_analytics(date_from, date_to, field_id)
@@ -54,7 +54,7 @@ def dashboard_revenue_analytics(
 def dashboard_bookings(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).bookings(date_from, date_to, field_id)
@@ -64,7 +64,7 @@ def dashboard_bookings(
 def field_performance(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).field_performance(date_from, date_to, field_id)
@@ -74,7 +74,7 @@ def field_performance(
 def time_slot_performance(
     date_from: date | None = None, date_to: date | None = None,
     field_id: int | None = Query(default=None, gt=0),
-    current_user: User = Depends(require_permission('reports.view')),
+    current_user: User = Depends(require_owner),
     service: DashboardService = Depends(get_service),
 ):
     return service.for_user(current_user).time_slot_performance(date_from, date_to, field_id)

@@ -3,13 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import admin, ai, auth, bookings, dashboard, facilities, favorites, fields, maintenance, management_customers, managers, operations, payments, public_courts, refunds, reviews, time_slots
+from .api.routes import admin, ai, auth, bookings, dashboard, facilities, favorites, fields, maintenance, management_customers, operations, payments, public_courts, refunds, reviews, time_slots
 from .core.config import settings
 from .database.base import Base
 from .database.demo_seed import seed_demo_db
-from .database.migrations import migrate_deposit_payment_schema, migrate_empty_legacy_booking_schema, migrate_field_recommendation_columns, migrate_ownership_columns, migrate_partner_application_schema, migrate_professional_booking_schema, migrate_refund_workflow_schema, migrate_system_roles, migrate_user_profile_columns
+from .database.migrations import migrate_deposit_payment_schema, migrate_empty_legacy_booking_schema, migrate_field_recommendation_columns, migrate_facility_approval_schema, migrate_ownership_columns, migrate_partner_application_schema, migrate_professional_booking_schema, migrate_refund_workflow_schema, migrate_system_roles, migrate_user_profile_columns
 from .database.session import SessionLocal, engine
-from .models import AuditLog, Booking, BookingActivity, BookingComplaint, Facility, Field, FieldBlock, FieldMaintenance, Invoice, OwnerApplication, Payment, RefundRequest, Review, TimeSlot, User, UserFavoriteField  # noqa: F401 - registers metadata
+from .models import AuditLog, Booking, BookingActivity, BookingComplaint, Facility, FacilityDocument, FacilityImage, FacilityReviewEvent, Field, FieldBlock, FieldMaintenance, Invoice, OwnerApplication, Payment, RefundRequest, Review, TimeSlot, User, UserFavoriteField  # noqa: F401 - registers metadata
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -21,6 +21,7 @@ async def lifespan(_: FastAPI):
     migrate_deposit_payment_schema(engine)
     migrate_professional_booking_schema(engine)
     migrate_partner_application_schema(engine)
+    migrate_facility_approval_schema(engine)
     Base.metadata.create_all(bind=engine)
     migrate_system_roles(engine)
     migrate_professional_booking_schema(engine)
@@ -47,7 +48,6 @@ app.include_router(public_courts.router)
 app.include_router(time_slots.router)
 app.include_router(bookings.router)
 app.include_router(management_customers.router)
-app.include_router(managers.router)
 app.include_router(maintenance.router)
 app.include_router(payments.router)
 app.include_router(refunds.router)

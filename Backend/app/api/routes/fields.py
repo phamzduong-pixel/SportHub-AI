@@ -10,7 +10,7 @@ from ...schemas.field import (
     FieldStatusUpdate, FieldUpdate,
 )
 from ...services.field_service import FieldService
-from ..dependencies import get_field_viewer, require_permission
+from ..dependencies import get_field_viewer, require_owner
 
 router = APIRouter(prefix='/fields', tags=['fields'])
 
@@ -44,7 +44,7 @@ def get_field(
 @router.post('', response_model=FieldResponse, status_code=201)
 def create_field(
     payload: FieldCreate,
-    current_user: User = Depends(require_permission('fields.create')),
+    current_user: User = Depends(require_owner),
     service: FieldService = Depends(get_service),
 ):
     return service.create(payload.model_dump(mode='json'), current_user)
@@ -53,7 +53,7 @@ def create_field(
 def update_field(
     field_id: int,
     payload: FieldUpdate,
-    current_user: User = Depends(require_permission('fields.update')),
+    current_user: User = Depends(require_owner),
     service: FieldService = Depends(get_service),
 ):
     return service.update(field_id, payload.model_dump(mode='json'), current_user)
@@ -62,7 +62,7 @@ def update_field(
 def update_field_status(
     field_id: int,
     payload: FieldStatusUpdate,
-    current_user: User = Depends(require_permission('fields.update')),
+    current_user: User = Depends(require_owner),
     service: FieldService = Depends(get_service),
 ):
     return service.update_status(field_id, payload.status.value, current_user)
@@ -70,7 +70,7 @@ def update_field_status(
 @router.delete('/{field_id}', response_model=FieldDeleteResponse)
 def delete_field(
     field_id: int,
-    current_user: User = Depends(require_permission('fields.delete')),
+    current_user: User = Depends(require_owner),
     service: FieldService = Depends(get_service),
 ):
     action, field = service.delete(field_id, current_user)

@@ -13,7 +13,7 @@ from ...schemas.booking import (
     BookingRescheduleQuote, BookingRescheduleRequest, BookingResponse, BookingUpdate,
 )
 from ...services.booking_service import BookingService
-from ..dependencies import get_current_user, require_permission
+from ..dependencies import get_current_user, require_owner
 
 router = APIRouter(tags=['bookings'])
 
@@ -73,7 +73,7 @@ def list_bookings(
     search: str | None = Query(default=None, max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     items, total = service.list_manage(
@@ -95,7 +95,7 @@ def get_booking(
 def update_booking(
     booking_id: int,
     payload: BookingUpdate,
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.update(booking_id, payload, current_user)
@@ -104,7 +104,7 @@ def update_booking(
 def confirm_booking(
     booking_id: int,
     payload: BookingActionNote = BookingActionNote(),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.confirm(booking_id, payload.note, current_user)
@@ -113,7 +113,7 @@ def confirm_booking(
 def reject_booking(
     booking_id: int,
     payload: BookingActionNote = BookingActionNote(),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.reject(booking_id, payload.note, current_user)
@@ -152,7 +152,7 @@ def reschedule_booking(
 @router.patch('/bookings/{booking_id}/start', response_model=BookingResponse)
 def start_booking(
     booking_id: int, payload: BookingActionNote = BookingActionNote(),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.start(booking_id, payload.note, current_user)
@@ -160,7 +160,7 @@ def start_booking(
 @router.patch('/bookings/{booking_id}/no-show', response_model=BookingResponse)
 def mark_no_show(
     booking_id: int, payload: BookingActionNote = BookingActionNote(),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.no_show(booking_id, payload.note, current_user)
@@ -176,7 +176,7 @@ def booking_invoice(
 def complete_booking(
     booking_id: int,
     payload: BookingActionNote = BookingActionNote(),
-    current_user: User = Depends(require_permission('bookings.manage')),
+    current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
     return service.complete(booking_id, payload.note, current_user)

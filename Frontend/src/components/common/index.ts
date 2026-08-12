@@ -12,3 +12,4 @@ export * from "./PageHeader";
 export * from "./Pagination";
 export * from "./Select";
 export * from "./Toast";
+export * from "./SecureApiImage";

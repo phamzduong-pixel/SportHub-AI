@@ -29,9 +29,9 @@ const ManagementBookingsPage = lazy(() => import('@/pages/ManagementBookingsPage
 const ManagementBookingDetailPage = lazy(() => import('@/pages/ManagementBookingsPage').then((m) => ({ default: m.ManagementBookingDetailPage })));
 const ManagementComplaintsPage = lazy(() => import('@/pages/ManagementComplaintsPage').then((m) => ({ default: m.ManagementComplaintsPage })));
 const ManagementMaintenancePage = lazy(() => import('@/pages/ManagementMaintenancePage').then((m) => ({ default: m.ManagementMaintenancePage })));
-const ManagementVenuesPage = lazy(() => import('@/pages/LiveManagementDataPages').then((m) => ({ default: m.ManagementVenuesPage })));
+const ManagementVenuesPage = lazy(() => import('@/pages/ManagementVenuesPage').then((m) => ({ default: m.ManagementVenuesPage })));
 const ManagementCourtsPage = lazy(() => import('@/pages/LiveManagementDataPages').then((m) => ({ default: m.ManagementCourtsPage })));
-const ManagementSchedulesPage = lazy(() => import('@/pages/LiveManagementDataPages').then((m) => ({ default: m.ManagementSchedulesPage })));
+const ManagementSchedulesPage = lazy(() => import('@/pages/ManagementSchedulesPage').then((m) => ({ default: m.ManagementSchedulesPage })));
 const ManagementPricingPage = lazy(() => import('@/pages/ManagementDepositSettingsPage').then((m) => ({ default: m.ManagementDepositSettingsPage })));
 const ManagementCustomersPage = lazy(() => import('@/pages/ManagementCustomersPage').then((m) => ({ default: m.ManagementCustomersPage })));
 const ManagementPaymentsPage = lazy(() => import('@/pages/ManagementPaymentsPage').then((m) => ({ default: m.ManagementPaymentsPage })));
@@ -47,6 +47,7 @@ const ManagementReportsPage = lazy(() => import('@/pages/ManagementRevenuePage')
 const ManagementReviewsPage = lazy(() => import('@/pages/ManagementReviewsPage').then((m) => ({ default: m.ManagementReviewsPage })));
 const SystemAdminPage = lazy(() => import('@/pages/SystemAdminPage').then((m) => ({ default: m.SystemAdminPage })));
 const SystemAdminPartnerApplicationsPage = lazy(() => import('@/pages/SystemAdminPartnerApplicationsPage').then((m) => ({ default: m.SystemAdminPartnerApplicationsPage })));
+const SystemAdminFacilityApplicationsPage = lazy(() => import('@/pages/SystemAdminFacilityApplicationsPage').then((m) => ({ default: m.SystemAdminFacilityApplicationsPage })));
 const pending = <div className="mx-auto max-w-7xl p-8"><LoadingSkeleton lines={5} /></div>;
 const load = (page: ReactNode) => <Suspense fallback={pending}>{page}</Suspense>;
 const placeholder = (title: string) => <div className="mx-auto max-w-7xl px-4 py-10"><PlaceholderPage title={title} /></div>;
@@ -78,11 +79,12 @@ const router = createBrowserRouter([
   ]},
   { path: '/system-admin', element: <AuthGuard><RoleGuard roles={['SYSTEM_ADMIN']}>{load(<SystemAdminPage />)}</RoleGuard></AuthGuard> },
   { path: '/system-admin/partner-applications', element: <AuthGuard><RoleGuard roles={['SYSTEM_ADMIN']}>{load(<SystemAdminPartnerApplicationsPage />)}</RoleGuard></AuthGuard> },
+  { path: '/system-admin/facility-applications', element: <AuthGuard><RoleGuard roles={['SYSTEM_ADMIN']}>{load(<SystemAdminFacilityApplicationsPage />)}</RoleGuard></AuthGuard> },
   { path: '/tai-khoan', element: <Navigate to="/customer/dashboard" replace /> },
   { path: '/tai-khoan/lich-dat', element: <Navigate to="/customer/bookings" replace /> },
   { path: '/tai-khoan/yeu-thich', element: <Navigate to="/customer/favorites" replace /> },
   { path: '/tai-khoan/ho-so', element: <Navigate to="/customer/profile" replace /> },
-  { path: '/management', element: <AuthGuard><RoleGuard roles={['OWNER', 'MANAGER']}><OwnerVerificationGuard><ManagementLayout /></OwnerVerificationGuard></RoleGuard></AuthGuard>, children: [
+  { path: '/management', element: <AuthGuard><RoleGuard roles={['OWNER']}><OwnerVerificationGuard><ManagementLayout /></OwnerVerificationGuard></RoleGuard></AuthGuard>, children: [
     { index: true, element: <Navigate to="dashboard" replace /> }, { path: 'dashboard', element: load(<ManagementDashboardPage />) },
     { path: 'calendar', element: load(<ManagementCalendarPage />) }, { path: 'bookings', element: load(<ManagementBookingsPage />) },
     { path: 'bookings/:bookingId', element: load(<ManagementBookingDetailPage />) },

@@ -16,8 +16,6 @@ class UserResponse(BaseModel):
     phone: str | None
     avatar_url: str | None
     role: str
-    owner_id: int | None
-    management_permissions: list[str] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     is_active: bool
     created_at: datetime

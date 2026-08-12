@@ -134,6 +134,9 @@ class TimeSlotTests(unittest.TestCase):
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(deleted.json()['action'], 'deactivated')
         self.assertFalse(deleted.json()['time_slot']['is_active'])
+        availability = self.client.get(f'/availability?date={datetime.now(timezone.utc).date()}&field_id={self.field_id}')
+        self.assertEqual(availability.status_code, 200)
+        self.assertEqual(availability.json(), [])
 
 if __name__ == '__main__':
     unittest.main()

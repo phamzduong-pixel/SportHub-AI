@@ -1,6 +1,6 @@
 import { ArrowRight, Mail } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Input, useToast } from '@/components/common';
 import { AuthShell as AuthFrame } from '@/components/auth/AuthShell';
 import { PasswordField } from '@/components/auth/PasswordField';
@@ -10,11 +10,11 @@ import { homeForRole } from '@/components/auth/Guards';
 const empty = { name: '', phone: '', email: '', password: '', confirm: '', accepted: false };
 
 export function LoginPage() {
-  const navigate = useNavigate(); const { toast } = useToast();
+  const navigate = useNavigate(); const location = useLocation(); const { toast } = useToast();
   const { login } = useAuth();
   const rememberedEmail = localStorage.getItem('sporthub_remembered_email') || '';
   const [email, setEmail] = useState(rememberedEmail); const [password, setPassword] = useState(''); const [remember, setRemember] = useState(Boolean(rememberedEmail)); const [show, setShow] = useState(false); const [errors, setErrors] = useState<Record<string, string>>({}); const [loading, setLoading] = useState(false);
-  const submit = async (event: FormEvent) => { event.preventDefault(); const next: Record<string, string> = {}; if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Vui lòng nhập email hợp lệ.'; if (!password) next.password = 'Vui lòng nhập mật khẩu.'; setErrors(next); if (Object.keys(next).length) return; setLoading(true); try { const user = await login(email, password); if (remember) localStorage.setItem('sporthub_remembered_email', email); else localStorage.removeItem('sporthub_remembered_email'); toast(`Chào mừng ${user.full_name}!`, 'success'); navigate(homeForRole(user.role), { replace: true }); } catch (error) { setErrors({ password: error instanceof Error ? error.message : 'Đăng nhập thất bại.' }); toast('Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.', 'error'); } finally { setLoading(false); } };
+  const submit = async (event: FormEvent) => { event.preventDefault(); const next: Record<string, string> = {}; if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Vui lòng nhập email hợp lệ.'; if (!password) next.password = 'Vui lòng nhập mật khẩu.'; setErrors(next); if (Object.keys(next).length) return; setLoading(true); try { const user = await login(email, password); if (remember) localStorage.setItem('sporthub_remembered_email', email); else localStorage.removeItem('sporthub_remembered_email'); toast(`Chào mừng ${user.full_name}!`, 'success'); const requested = (location.state as { from?: string } | null)?.from; const target = user.role === 'CUSTOMER' && requested?.startsWith('/booking/') ? requested : homeForRole(user.role); navigate(target, { replace: true }); } catch (error) { setErrors({ password: error instanceof Error ? error.message : 'Đăng nhập thất bại.' }); toast('Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.', 'error'); } finally { setLoading(false); } };
   return (
     <AuthFrame title="Chào mừng trở lại" description="Đăng nhập để tiếp tục hành trình thể thao cùng SportHub AI.">
       <form onSubmit={submit} noValidate className="space-y-5">
