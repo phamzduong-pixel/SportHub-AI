@@ -131,6 +131,46 @@ class FacilityApprovalTests(unittest.TestCase):
         missing_number = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'OTHER', 'document_name': 'Bo sung'}, files={'document': ('other.pdf', PDF, 'application/pdf')})
         self.assertEqual(missing_number.status_code, 422, missing_number.text)
 
+        blank_name = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'OTHER', 'document_name': '   ', 'document_number': 'OTHER-001'}, files={'document': ('blank-name.pdf', PDF + b'blank', 'application/pdf')})
+        self.assertEqual(blank_name.status_code, 422, blank_name.text)
+        self.assertIn('Tên giấy tờ không được để trống', blank_name.json()['detail'])
+
+        trimmed = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'OTHER', 'document_name': '  Giay phep bo sung  ', 'document_number': 'OTHER-002'}, files={'document': ('supplement.pdf', PDF + b'supplement', 'application/pdf')})
+        self.assertEqual(trimmed.status_code, 200, trimmed.text)
+        self.assertEqual(trimmed.json()['documents'][-1]['document_name'], 'Giay phep bo sung')
+
+    def test_submit_reports_only_the_actual_missing_fields(self):
+        created = self.client.post('/facilities', headers=self.owner, json=self.payload())
+        self.assertEqual(created.status_code, 201, created.text)
+        facility_id = created.json()['id']
+
+        missing_media = self.client.post(f'/facilities/{facility_id}/submit', headers=self.owner)
+        self.assertEqual(missing_media.status_code, 422, missing_media.text)
+        detail = missing_media.json()['detail']
+        self.assertIn('Hồ sơ chưa hoàn tất: thiếu', detail)
+        self.assertIn('Ảnh đại diện cơ sở', detail)
+        self.assertIn('Giấy phép/Đăng ký kinh doanh', detail)
+        self.assertNotIn('Tên cơ sở', detail)
+        self.assertNotIn('Số điện thoại', detail)
+
+        image = self.client.post(f'/facilities/{facility_id}/images', headers=self.owner, data={'category': 'COVER'}, files={'image': ('cover.jpg', JPEG, 'image/jpeg')})
+        self.assertEqual(image.status_code, 200, image.text)
+        missing_document = self.client.post(f'/facilities/{facility_id}/submit', headers=self.owner)
+        self.assertEqual(missing_document.status_code, 422, missing_document.text)
+        self.assertIn('Giấy phép/Đăng ký kinh doanh', missing_document.json()['detail'])
+        self.assertNotIn('Ảnh đại diện cơ sở', missing_document.json()['detail'])
+
+    def test_facility_phone_requires_ten_digits_starting_with_zero(self):
+        for phone in ('901234567', '1901234567', '090123456', '09012345678', '0901 234 567', '0901-234-567', '+84901234567', '09012abc67'):
+            with self.subTest(phone=phone):
+                invalid = self.client.post('/facilities', headers=self.owner, json={**self.payload(), 'contact_phone': phone})
+                self.assertEqual(invalid.status_code, 422, invalid.text)
+                self.assertIn('10 chữ số', invalid.text)
+
+        valid = self.client.post('/facilities', headers=self.owner, json={**self.payload(), 'contact_phone': '0987654321'})
+        self.assertEqual(valid.status_code, 201, valid.text)
+        self.assertEqual(valid.json()['contact_phone'], '0987654321')
+
     def test_owner_can_delete_only_own_draft_and_files_are_cleaned(self):
         facility_id = self.create_complete()
         with self.Session() as db:

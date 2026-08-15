@@ -29,7 +29,7 @@ export function CustomerLayout() {
       </aside>
       <main className="min-w-0 max-w-full"><Outlet /></main>
     </div>
-    <nav aria-label="Điều hướng tài khoản" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-8 border-t border-slate-200 bg-white/95 px-0.5 pt-1 shadow-lg backdrop-blur lg:hidden" style={{ paddingBottom: 'max(0.25rem, env(safe-area-inset-bottom))' }}>
+    <nav aria-label="Điều hướng tài khoản" className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 grid grid-cols-8 border-t border-slate-200 bg-white/95 px-0.5 pt-1 shadow-lg backdrop-blur lg:hidden" style={{ paddingBottom: 'max(0.25rem, env(safe-area-inset-bottom))' }}>
       {items.map(({ to, short, icon: Icon }) => <NavLink key={to} to={to} title={short} className={({ isActive }) => `flex min-w-0 flex-col items-center gap-0.5 rounded-lg px-0.5 py-1.5 text-[9px] font-semibold ${isActive ? 'bg-brand-50 text-brand-700' : 'text-slate-500'}`}><Icon size={18} className="shrink-0" /><span className="block w-full truncate text-center">{short}</span></NavLink>)}
     </nav>
   </div>;

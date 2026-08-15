@@ -18,6 +18,14 @@ router = APIRouter(prefix='/facilities', tags=['facilities'])
 EDITABLE = {FacilityStatus.DRAFT.value, FacilityStatus.REJECTED.value}
 DOCUMENT_TYPES = {'BUSINESS_REGISTRATION', 'HOUSEHOLD_BUSINESS_LICENSE', 'OTHER', 'BUSINESS_LICENSE'}
 SPORTS = {'Bóng đá', 'Cầu lông', 'Pickleball', 'Tennis', 'Bóng rổ', 'Bóng chuyền'}
+REQUIRED_FIELD_LABELS = {
+    'name': 'Tên cơ sở',
+    'location': 'Địa chỉ đầy đủ',
+    'description': 'Mô tả cơ sở',
+    'contact_phone': 'Số điện thoại',
+    'opening_time': 'Giờ mở cửa',
+    'closing_time': 'Giờ đóng cửa',
+}
 
 
 def binary_cancellation_rules(minutes: int):
@@ -134,20 +142,23 @@ def submit_facility(facility_id: int, owner: User = Depends(require_owner), db: 
     if facility.status not in EDITABLE:
         raise HTTPException(status_code=409, detail='Trạng thái hiện tại không cho phép gửi xét duyệt')
     missing = []
-    for key in ('name', 'location', 'description', 'contact_phone', 'opening_time', 'closing_time'):
-        if not getattr(facility, key):
-            missing.append(key)
+    for key, label in REQUIRED_FIELD_LABELS.items():
+        value = getattr(facility, key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(label)
     if not facility.sports:
-        missing.append('sports')
+        missing.append('Môn thể thao hỗ trợ')
     if not any(image.category == 'COVER' for image in facility.images):
-        missing.append('cover_image')
+        missing.append('Ảnh đại diện cơ sở')
     if not facility.documents or any(
-        not document.document_number or document.document_type not in DOCUMENT_TYPES
+        not (document.document_name or '').strip()
+        or not (document.document_number or '').strip()
+        or document.document_type not in DOCUMENT_TYPES
         for document in facility.documents
     ):
-        missing.append('verification_documents')
+        missing.append('Giấy phép/Đăng ký kinh doanh hoặc giấy tờ xác minh hợp lệ')
     if missing:
-        raise HTTPException(status_code=422, detail='Hồ sơ chưa đầy đủ: ' + ', '.join(missing))
+        raise HTTPException(status_code=422, detail='Hồ sơ chưa hoàn tất: thiếu ' + '; '.join(missing))
     old = facility.status
     facility.status = FacilityStatus.PENDING_APPROVAL.value; facility.is_active = False
     facility.submitted_at = datetime.now(timezone.utc); facility.reviewed_at = None; facility.rejection_reason = None
@@ -221,8 +232,11 @@ async def upload_document(facility_id: int, document_type: str = Form(...), docu
     document_number = document_number.strip()
     if document_type not in DOCUMENT_TYPES:
         raise HTTPException(status_code=422, detail='Loại giấy tờ xác minh không hợp lệ')
-    if len(document_name.strip()) < 2 or len(document_number) < 2:
-        raise HTTPException(status_code=422, detail='Tên và số giấy tờ là bắt buộc')
+    document_name = document_name.strip()
+    if len(document_name) < 2:
+        raise HTTPException(status_code=422, detail='Tên giấy tờ không được để trống và phải có ít nhất 2 ký tự')
+    if len(document_number) < 2:
+        raise HTTPException(status_code=422, detail='Số giấy tờ không được để trống và phải có ít nhất 2 ký tự')
     if len(facility.documents) >= 10:
         raise HTTPException(status_code=422, detail='Mỗi hồ sơ tối đa 10 tệp giấy tờ')
     if facility.status == FacilityStatus.APPROVED.value:
@@ -237,7 +251,7 @@ async def upload_document(facility_id: int, document_type: str = Form(...), docu
     if duplicate is not None:
         remove_facility_file(stored['file_path'], True)
         raise HTTPException(status_code=409, detail='Tệp này đã có trong hồ sơ')
-    item = FacilityDocument(facility_id=facility.id, document_type=document_type, document_name=document_name.strip(), document_number=document_number, issued_date=parsed_date, issued_by=(issued_by or '').strip() or None, **stored)
+    item = FacilityDocument(facility_id=facility.id, document_type=document_type, document_name=document_name, document_number=document_number, issued_date=parsed_date, issued_by=(issued_by or '').strip() or None, **stored)
     db.add(item); db.commit()
     return response(db, owned_facility(db, facility.id, owner.id, True))
 

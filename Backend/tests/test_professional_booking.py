@@ -214,7 +214,7 @@ class ProfessionalBookingWorkflowTests(unittest.TestCase):
     def test_facility_hotline_is_validated_and_visible_to_customer(self):
         created = self.case.client.post('/facilities', headers=self.case.owner, json={
             'name': 'Cơ sở hotline', 'location': 'Quận 3',
-            'contact_phone': '0901 234 567',
+            'contact_phone': '0901234567',
         })
         self.assertEqual(created.status_code, 201, created.text)
         facility_id = created.json()['id']
@@ -228,20 +228,20 @@ class ProfessionalBookingWorkflowTests(unittest.TestCase):
 
         public_detail = self.case.client.get(f'/public/courts/{self.case.field_id}')
         self.assertEqual(public_detail.status_code, 200, public_detail.text)
-        self.assertEqual(public_detail.json()['facility']['contact_phone'], '0901 234 567')
+        self.assertEqual(public_detail.json()['facility']['contact_phone'], '0901234567')
         booking = self.case.create()
-        self.assertEqual(booking['facility_hotline'], '0901 234 567')
+        self.assertEqual(booking['facility_hotline'], '0901234567')
 
         updated = self.case.client.patch(
             f'/facilities/{facility_id}/hotline', headers=self.case.owner,
-            json={'contact_phone': '+84 901-234-568'},
+            json={'contact_phone': '0912345678'},
         )
         self.assertEqual(updated.status_code, 200, updated.text)
-        self.assertEqual(updated.json()['contact_phone'], '+84 901-234-568')
+        self.assertEqual(updated.json()['contact_phone'], '0912345678')
         booking_detail = self.case.client.get(
             f"/bookings/{booking['id']}", headers=self.case.customer1,
         )
-        self.assertEqual(booking_detail.json()['facility_hotline'], '+84 901-234-568')
+        self.assertEqual(booking_detail.json()['facility_hotline'], '0912345678')
 
     def test_missing_facility_hotline_is_not_replaced_with_demo_data(self):
         created = self.case.client.post('/facilities', headers=self.case.owner, json={

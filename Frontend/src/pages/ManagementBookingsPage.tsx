@@ -418,6 +418,9 @@ export function ManagementBookingDetailPage() {
   const [selectedProductId, setSelectedProductId] = useState<number>();
   const [productQuantity, setProductQuantity] = useState(1);
   const [productLoading, setProductLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ApiBooking["product_items"][number]>();
+  const [deletingProduct, setDeletingProduct] = useState(false);
+  const [deleteProductError, setDeleteProductError] = useState("");
   const load = () =>
     Promise.all([
       apiRequest<ApiBooking>(`/bookings/${bookingId}`),
@@ -497,18 +500,42 @@ export function ManagementBookingDetailPage() {
       setBusy(false);
     }
   };
-  const removeProduct = async (itemId: number | null) => {
-    if (!booking || !itemId || !window.confirm("Xóa dịch vụ phát sinh này khỏi booking?")) return;
-    setBusy(true);
+  const openDeleteProduct = (item: ApiBooking["product_items"][number]) => {
+    if (!item.item_id || item.source !== "OWNER_DURING_USAGE") return;
+    setDeleteTarget(item);
+    setDeleteProductError("");
+  };
+  const closeDeleteProduct = () => {
+    if (deletingProduct) return;
+    setDeleteTarget(undefined);
+    setDeleteProductError("");
+  };
+  const confirmDeleteProduct = async () => {
+    if (!booking || !deleteTarget?.item_id || deletingProduct) return;
+    setDeletingProduct(true);
+    setDeleteProductError("");
     try {
-      const updated = await deleteManagedBookingProduct(booking.id, itemId);
+      const updated = await deleteManagedBookingProduct(booking.id, deleteTarget.item_id);
       setBooking(updated);
-      setSummary(await getPaymentSummary(updated.id));
-      toast("Đã xóa dịch vụ phát sinh.", "success");
+      setSummary((current) => current ? {
+        ...current,
+        court_amount: updated.court_amount,
+        service_amount: updated.service_amount,
+        total_amount: updated.total_amount,
+        deposit_amount: updated.deposit_amount,
+        additional_paid_amount: updated.additional_paid_amount,
+        paid_amount: updated.paid_amount,
+        remaining_amount: updated.remaining_amount,
+        payment_status: updated.payment_status,
+      } : current);
+      setDeleteTarget(undefined);
+      toast("Đã xóa dịch vụ khỏi booking.", "success");
     } catch (error) {
-      toast(error instanceof Error ? error.message : "Không thể xóa dịch vụ.", "error");
+      const message = error instanceof Error ? error.message : "Không thể xóa dịch vụ. Vui lòng thử lại.";
+      setDeleteProductError(message);
+      toast(message, "error");
     } finally {
-      setBusy(false);
+      setDeletingProduct(false);
     }
   };
   const decide = async (accept: boolean) => {
@@ -674,7 +701,7 @@ export function ManagementBookingDetailPage() {
                         <>
                           <Button size="sm" variant="outline" aria-label="Giảm số lượng" disabled={busy || item.quantity <= 1} onClick={() => void changeProductQuantity(item.item_id, item.quantity - 1)}><Minus size={13} /></Button>
                           <Button size="sm" variant="outline" aria-label="Tăng số lượng" disabled={busy} onClick={() => void changeProductQuantity(item.item_id, item.quantity + 1)}><Plus size={13} /></Button>
-                          <Button size="sm" variant="danger" aria-label="Xóa dịch vụ" disabled={busy} onClick={() => void removeProduct(item.item_id)}><Trash2 size={13} /></Button>
+                          <Button size="sm" variant="danger" aria-label={`Xóa dịch vụ ${item.name}`} disabled={busy || deletingProduct} onClick={() => openDeleteProduct(item)}><Trash2 size={13} /></Button>
                         </>
                       )}
                     </div>
@@ -770,6 +797,20 @@ export function ManagementBookingDetailPage() {
           })()}
           <Button className="w-full" loading={busy} disabled={!selectedProductId || productLoading} onClick={() => void addProduct()}>Thêm vào hóa đơn</Button>
         </div>
+      </Modal>
+      <Modal open={Boolean(deleteTarget)} onClose={closeDeleteProduct} title="Xóa dịch vụ?" description="Thao tác này chỉ xóa dịch vụ được chọn, không xóa booking.">
+        {deleteTarget && <div className="space-y-5">
+          <p className="text-sm leading-6 text-slate-700">Bạn có chắc muốn xóa <b className="break-words text-slate-950">{deleteTarget.name}</b> khỏi booking này không?</p>
+          <div className="grid gap-3 rounded-xl border border-red-100 bg-red-50/70 p-4 text-sm sm:grid-cols-2">
+            <div><span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Số lượng</span><b className="mt-1 block text-slate-900">{deleteTarget.quantity} {deleteTarget.unit}</b></div>
+            <div className="sm:text-right"><span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Thành tiền</span><b className="mt-1 block text-red-700">{money(deleteTarget.subtotal)}</b></div>
+          </div>
+          {deleteProductError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{deleteProductError}</p>}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" disabled={deletingProduct} onClick={closeDeleteProduct}>Hủy</Button>
+            <Button type="button" variant="danger" loading={deletingProduct} disabled={deletingProduct} leftIcon={<Trash2 size={16} />} onClick={() => void confirmDeleteProduct()}>{deletingProduct ? "Đang xóa..." : "Xóa dịch vụ"}</Button>
+          </div>
+        </div>}
       </Modal>
     </>
   );

@@ -16,6 +16,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { useEffect } from "react";
 import { NavLink } from "react-router-dom";
 import { usePermission } from "@/contexts/PermissionContext";
 import type { ManagementModule } from "@/types/permissions";
@@ -135,6 +136,12 @@ export function ManagementSidebar({
   onMobileClose,
 }: Props) {
   const { can } = usePermission();
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [mobileOpen]);
   const visible = nav.filter((item) => can(item.module));
   const content = (
     <>
@@ -184,7 +191,7 @@ export function ManagementSidebar({
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[calc(100vw-2rem)] overflow-x-hidden border-r border-slate-200 bg-white shadow-xl transition-all duration-200 lg:z-40 lg:block lg:max-w-none lg:shadow-none ${mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} ${collapsed ? "lg:w-[76px]" : "lg:w-64"}`}
+        className={`fixed inset-y-0 left-0 z-50 h-[100dvh] w-72 max-w-[calc(100vw-2rem)] overflow-x-hidden border-r border-slate-200 bg-white shadow-xl transition-all duration-200 lg:z-40 lg:block lg:max-w-none lg:shadow-none ${mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"} ${collapsed ? "lg:w-[76px]" : "lg:w-64"}`}
       >
         {content}
       </aside>

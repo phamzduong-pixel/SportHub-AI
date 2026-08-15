@@ -347,10 +347,52 @@ class FacilityProductTests(unittest.TestCase):
         )
         self.assertEqual(removed.status_code, 200, removed.text)
         self.assertEqual(removed.json()['product_items'], [])
-        self.assertEqual((removed.json()['service_amount'], removed.json()['total_amount']), (0, 200000))
+        self.assertEqual((removed.json()['court_amount'], removed.json()['service_amount'], removed.json()['total_amount']), (200000, 0, 200000))
         self.assertEqual(removed.json()['deposit_amount'], 60000)
+        self.assertEqual(removed.json()['paid_amount'], 60000)
+        self.assertEqual(removed.json()['remaining_amount'], 140000)
+        self.assertEqual(removed.json()['payment_status'], 'partial')
         with self.Session() as db:
             self.assertEqual(db.get(FacilityProduct, product['id']).reserved_quantity, 0)
+
+    def test_removing_one_booking_service_recalculates_from_remaining_items(self):
+        first = self.create_product(
+            name='Service A', product_type='SERVICE', unit='lan', price=25000,
+            sports=[self.field_sport()], stock_quantity=0, track_inventory=False,
+        )
+        second = self.create_product(
+            name='Service B', product_type='SERVICE', unit='lan', price=30000,
+            sports=[self.field_sport()], stock_quantity=0, track_inventory=False,
+        )
+        booking_id = self.make_active_booking()
+        added_first = self.client.post(
+            f'/bookings/{booking_id}/products', headers=self.owner_a,
+            json={'product_id': first['id'], 'quantity': 2},
+        )
+        self.assertEqual(added_first.status_code, 201, added_first.text)
+        first_item_id = added_first.json()['product_items'][0]['item_id']
+        added_second = self.client.post(
+            f'/bookings/{booking_id}/products', headers=self.owner_a,
+            json={'product_id': second['id'], 'quantity': 1},
+        )
+        self.assertEqual(added_second.status_code, 201, added_second.text)
+        self.assertEqual(added_second.json()['service_amount'], 80000)
+        self.assertEqual(added_second.json()['total_amount'], 280000)
+        self.assertEqual(added_second.json()['remaining_amount'], 220000)
+
+        removed = self.client.delete(
+            f'/bookings/{booking_id}/products/{first_item_id}', headers=self.owner_a,
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        data = removed.json()
+        self.assertEqual([item['name'] for item in data['product_items']], ['Service B'])
+        self.assertEqual(data['court_amount'], 200000)
+        self.assertEqual(data['service_amount'], 30000)
+        self.assertEqual(data['total_amount'], 230000)
+        self.assertEqual(data['deposit_amount'], 60000)
+        self.assertEqual(data['paid_amount'], 60000)
+        self.assertEqual(data['remaining_amount'], 170000)
+        self.assertEqual(data['payment_status'], 'partial')
 
     def test_during_usage_items_become_immutable_after_completion(self):
         product = self.create_product(

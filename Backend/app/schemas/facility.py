@@ -12,11 +12,8 @@ def normalize_phone(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
     phone = value.strip()
-    if not re.fullmatch(r'\+?[0-9\s().-]+', phone):
-        raise ValueError('Hotline không đúng định dạng')
-    digit_count = len(re.sub(r'\D', '', phone))
-    if digit_count < 9 or digit_count > 15:
-        raise ValueError('Hotline phải có từ 9 đến 15 chữ số')
+    if not re.fullmatch(r'0\d{9}', phone):
+        raise ValueError('Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0')
     return phone
 
 
