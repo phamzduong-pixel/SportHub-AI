@@ -2,17 +2,18 @@ import json
 import sys
 from pathlib import Path
 
-import joblib
 from sklearn.model_selection import train_test_split
 
 from ..datasets.loader import FEATURE_COLUMNS, TARGET_COLUMN, load_demand_dataset
+from ..inference.model_loader import MODEL_PATH as DEFAULT_MODEL_PATH, load_model_artifact
 from .metrics import calculate_metrics
-
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[1] / 'saved_models' / 'demand_pipeline.joblib'
 
 
 def evaluate_saved_model(model_path: str | Path = DEFAULT_MODEL_PATH) -> dict:
-    artifact = joblib.load(model_path)
+    if Path(model_path).resolve() != DEFAULT_MODEL_PATH.resolve():
+        raise ValueError('Evaluation chỉ chấp nhận artifact đã được model_loader kiểm tra')
+    load_model_artifact.cache_clear()
+    artifact = load_model_artifact()
     frame = load_demand_dataset()
     _, x_test, _, y_test = train_test_split(
         frame[FEATURE_COLUMNS], frame[TARGET_COLUMN], test_size=.2,

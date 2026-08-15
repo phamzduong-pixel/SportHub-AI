@@ -80,6 +80,10 @@ class RefreshTokenRequest(RequestModel):
     refresh_token: str = Field(min_length=20, max_length=2000)
 
 
+class LogoutRequest(RequestModel):
+    refresh_token: str = Field(min_length=20, max_length=2000)
+
+
 class ProfileUpdateRequest(RequestModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=8, max_length=20, pattern=r'^\+?[0-9 ]+$')

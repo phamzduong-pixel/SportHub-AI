@@ -35,7 +35,7 @@ def get_public_court(court_id: int, db: Session = Depends(get_db)):
         'name': court.facility.name,
         'location': court.facility.location,
         'description': court.facility.description,
-        'contact_phone': court.facility.contact_phone or '0901 234 567',
+        'contact_phone': court.facility.contact_phone,
         'opening_time': court.facility.opening_time.strftime('%H:%M') if court.facility.opening_time else None,
         'closing_time': court.facility.closing_time.strftime('%H:%M') if court.facility.closing_time else None,
         'amenities': court.facility.amenities or [], 'image_urls': (court.facility.image_urls or []) + [f'/api/facilities/images/{image.id}/content' for image in court.facility.images],

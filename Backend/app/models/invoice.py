@@ -22,6 +22,8 @@ class Invoice(Base):
     booking_date = Column(Date, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
+    court_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    service_amount = Column(Numeric(12, 2), nullable=False, default=0)
     total_amount = Column(Numeric(12, 2), nullable=False)
     deposit_amount = Column(Numeric(12, 2), nullable=False)
     remaining_payment_amount = Column(Numeric(12, 2), nullable=False)

@@ -21,9 +21,11 @@ export function PublicHeader() {
     { label: 'Đăng xuất', icon: <LogOut size={16} />, danger: true, onClick: signOut },
   ] : user?.role === 'SYSTEM_ADMIN' ? [
     { label: 'Quản trị hệ thống', icon: <ShieldCheck size={16} />, onClick: () => navigate('/system-admin') },
+    { label: 'Thông báo', icon: <Bell size={16} />, onClick: () => navigate('/notifications') },
     { label: 'Đăng xuất', icon: <LogOut size={16} />, danger: true, onClick: signOut },
   ] : [
     { label: 'Vào trang quản lý', icon: <Building2 size={16} />, onClick: () => navigate('/management/dashboard') },
+    { label: 'Thông báo', icon: <Bell size={16} />, onClick: () => navigate('/notifications') },
     { label: 'Hồ sơ cá nhân', icon: <UserRound size={16} />, onClick: () => navigate('/customer/profile') },
     { label: 'Lịch đặt sân của tôi', icon: <CalendarDays size={16} />, onClick: () => navigate('/customer/bookings') },
     { label: 'Sân yêu thích', icon: <Heart size={16} />, onClick: () => navigate('/customer/favorites') },

@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from ..core.config import settings
 from ..core.datetime_utils import as_utc
@@ -139,15 +139,26 @@ class MaintenanceService:
 
     def _affected_bookings(self, item):
         local_start, local_end = as_utc(item.starts_at).astimezone(self.tz), as_utc(item.ends_at).astimezone(self.tz)
-        bookings = self.db.scalars(select(Booking).options(joinedload(Booking.customer)).where(
+        bookings = self.db.scalars(select(Booking).options(
+            joinedload(Booking.customer), selectinload(Booking.booking_slots),
+        ).where(
             Booking.field_id == item.field_id, Booking.status.in_(BLOCKING_BOOKING_STATUSES),
             Booking.booking_date >= local_start.date(), Booking.booking_date <= local_end.date(),
         )).unique().all()
         result = []
         for booking in bookings:
-            starts = datetime.combine(booking.booking_date, booking.start_time_snapshot, tzinfo=self.tz).astimezone(timezone.utc)
-            ends = datetime.combine(booking.booking_date, booking.end_time_snapshot, tzinfo=self.tz).astimezone(timezone.utc)
-            if starts < as_utc(item.ends_at) and ends > as_utc(item.starts_at):
+            ranges = [
+                (detail.start_time_snapshot, detail.end_time_snapshot)
+                for detail in booking.booking_slots
+            ] or [(booking.start_time_snapshot, booking.end_time_snapshot)]
+            occupied = [(
+                datetime.combine(booking.booking_date, starts_at, tzinfo=self.tz).astimezone(timezone.utc),
+                datetime.combine(booking.booking_date, ends_at, tzinfo=self.tz).astimezone(timezone.utc),
+            ) for starts_at, ends_at in ranges]
+            conflicts = [interval for interval in occupied if interval[0] < as_utc(item.ends_at) and interval[1] > as_utc(item.starts_at)]
+            if conflicts:
+                starts = min(interval[0] for interval in conflicts)
+                ends = max(interval[1] for interval in conflicts)
                 result.append({'id': booking.id, 'booking_code': booking.booking_code, 'customer_name': booking.customer.full_name,
                                'starts_at': starts, 'ends_at': ends, 'status': booking.status, 'paid_amount': float(booking.paid_amount or 0)})
         return result

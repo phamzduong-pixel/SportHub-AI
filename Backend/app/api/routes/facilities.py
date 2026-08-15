@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -11,10 +11,12 @@ from ...models.user import User
 from ...schemas.facility import CancellationPolicyUpdate, FacilityCreate, FacilityHotlineUpdate, FacilityResponse, FacilityUpdate
 from ...services.audit_service import record_audit
 from ...services.facility_file_service import facility_file_response, facility_image_response, remove_facility_file, store_facility_file
+from ...services.notification_service import NotificationService
 from ..dependencies import get_current_user, require_owner
 
 router = APIRouter(prefix='/facilities', tags=['facilities'])
 EDITABLE = {FacilityStatus.DRAFT.value, FacilityStatus.REJECTED.value}
+DOCUMENT_TYPES = {'BUSINESS_REGISTRATION', 'HOUSEHOLD_BUSINESS_LICENSE', 'OTHER', 'BUSINESS_LICENSE'}
 SPORTS = {'Bóng đá', 'Cầu lông', 'Pickleball', 'Tennis', 'Bóng rổ', 'Bóng chuyền'}
 
 
@@ -36,7 +38,7 @@ def response(db: Session, facility: Facility):
     data = {column.name: getattr(facility, column.name) for column in Facility.__table__.columns}
     data['field_count'] = int(db.scalar(select(func.count(Field.id)).where(Field.facility_id == facility.id)) or 0)
     data['images'] = [{**{column.name: getattr(item, column.name) for column in FacilityImage.__table__.columns if column.name not in {'facility_id', 'file_path'}}, 'url': f'/api/facilities/{facility.id}/images/{item.id}/content'} for item in facility.images]
-    data['documents'] = [{column.name: getattr(item, column.name) for column in FacilityDocument.__table__.columns if column.name not in {'facility_id', 'file_path'}} for item in facility.documents]
+    data['documents'] = [{**{column.name: getattr(item, column.name) for column in FacilityDocument.__table__.columns if column.name not in {'facility_id', 'file_path', 'file_sha256'}}, 'url': f'/api/facilities/{facility.id}/documents/{item.id}/content'} for item in facility.documents]
     data['reviews'] = [{column.name: getattr(item, column.name) for column in FacilityReviewEvent.__table__.columns if column.name != 'facility_id'} for item in facility.reviews]
     return data
 
@@ -73,17 +75,21 @@ def create_facility(payload: FacilityCreate, owner: User = Depends(require_owner
 @router.put('/{facility_id}', response_model=FacilityResponse)
 def update_facility(facility_id: int, payload: FacilityUpdate, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    data = payload.model_dump(exclude={'cancellation_rules'}, exclude_none=False)
-    if facility.status == FacilityStatus.PENDING_REVIEW.value:
+    data = payload.model_dump(exclude={'cancellation_rules', 'free_cancellation_minutes'}, exclude_none=False)
+    if facility.status == FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Hồ sơ đang chờ xét duyệt và không thể chỉnh sửa')
     if facility.status == FacilityStatus.SUSPENDED.value:
         raise HTTPException(status_code=409, detail='Cơ sở đang tạm ngừng; vui lòng liên hệ System Admin')
+    if facility.status == FacilityStatus.APPROVED.value and (not payload.name.strip() or not payload.location.strip()):
+        raise HTTPException(status_code=422, detail='Cơ sở đã duyệt phải có tên và địa chỉ')
     important_changed = facility.status == FacilityStatus.APPROVED.value and (
         payload.name.strip() != facility.name or payload.location.strip() != facility.location
     )
     for key, value in data.items():
-        if key in {'name', 'location', 'description', 'contact_email', 'city', 'district'} and isinstance(value, str):
+        if key in {'description', 'contact_email', 'city', 'district'} and isinstance(value, str):
             value = value.strip() or None
+        elif key in {'name', 'location'} and isinstance(value, str):
+            value = value.strip()
         setattr(facility, key, value)
     if payload.free_cancellation_minutes is not None:
         facility.cancellation_rules = binary_cancellation_rules(payload.free_cancellation_minutes)
@@ -97,6 +103,31 @@ def update_facility(facility_id: int, payload: FacilityUpdate, owner: User = Dep
     return response(db, owned_facility(db, facility.id, owner.id, True))
 
 
+@router.delete('/{facility_id}/draft', status_code=204)
+def delete_facility_draft(facility_id: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+    facility = owned_facility(db, facility_id, owner.id, True)
+    if facility.status != FacilityStatus.DRAFT.value:
+        raise HTTPException(status_code=409, detail='Chỉ hồ sơ ở trạng thái DRAFT mới có thể xóa')
+    if db.scalar(select(Field.id).where(Field.facility_id == facility.id).limit(1)) is not None:
+        raise HTTPException(status_code=409, detail='Bản nháp đang có dữ liệu sân liên kết và không thể xóa')
+
+    image_paths = [item.file_path for item in facility.images]
+    document_paths = [item.file_path for item in facility.documents]
+    record_audit(db, owner, 'facility', facility.id, 'facility_draft_deleted', {'name': facility.name})
+    db.delete(facility)
+    db.commit()
+
+    for path in image_paths:
+        still_referenced = db.scalar(select(FacilityImage.id).where(FacilityImage.file_path == path).limit(1))
+        if still_referenced is None:
+            remove_facility_file(path, False)
+    for path in document_paths:
+        still_referenced = db.scalar(select(FacilityDocument.id).where(FacilityDocument.file_path == path).limit(1))
+        if still_referenced is None:
+            remove_facility_file(path, True)
+    return Response(status_code=204)
+
+
 @router.post('/{facility_id}/submit', response_model=FacilityResponse)
 def submit_facility(facility_id: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
@@ -108,17 +139,21 @@ def submit_facility(facility_id: int, owner: User = Depends(require_owner), db: 
             missing.append(key)
     if not facility.sports:
         missing.append('sports')
-    if not facility.images:
-        missing.append('images')
-    if not facility.documents:
-        missing.append('documents')
+    if not any(image.category == 'COVER' for image in facility.images):
+        missing.append('cover_image')
+    if not facility.documents or any(
+        not document.document_number or document.document_type not in DOCUMENT_TYPES
+        for document in facility.documents
+    ):
+        missing.append('verification_documents')
     if missing:
         raise HTTPException(status_code=422, detail='Hồ sơ chưa đầy đủ: ' + ', '.join(missing))
     old = facility.status
-    facility.status = FacilityStatus.PENDING_REVIEW.value; facility.is_active = False
-    facility.submitted_at = datetime.now(timezone.utc); facility.rejection_reason = None
+    facility.status = FacilityStatus.PENDING_APPROVAL.value; facility.is_active = False
+    facility.submitted_at = datetime.now(timezone.utc); facility.reviewed_at = None; facility.rejection_reason = None
     add_event(db, facility, owner, 'SUBMITTED', old)
     record_audit(db, owner, 'facility', facility.id, 'facility_submitted', {})
+    NotificationService(db).facility_submitted(facility.id, facility.name, owner.full_name)
     db.commit()
     return response(db, owned_facility(db, facility.id, owner.id, True))
 
@@ -126,7 +161,7 @@ def submit_facility(facility_id: int, owner: User = Depends(require_owner), db: 
 @router.post('/{facility_id}/cancel-review', response_model=FacilityResponse)
 def cancel_review(facility_id: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    if facility.status != FacilityStatus.PENDING_REVIEW.value:
+    if facility.status != FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Chỉ hồ sơ đang chờ xét duyệt mới có thể hủy')
     old = facility.status; facility.status = FacilityStatus.DRAFT.value; facility.is_active = False
     add_event(db, facility, owner, 'REVIEW_CANCELLED', old)
@@ -137,7 +172,7 @@ def cancel_review(facility_id: int, owner: User = Depends(require_owner), db: Se
 @router.post('/{facility_id}/images', response_model=FacilityResponse)
 async def upload_image(facility_id: int, category: str = Form('ADDITIONAL'), image: UploadFile = File(...), owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    if facility.status == FacilityStatus.PENDING_REVIEW.value:
+    if facility.status == FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Không thể thay ảnh khi hồ sơ đang chờ duyệt')
     category = category.upper()
     if category not in {'COVER', 'FRONT', 'COURT_AREA', 'ADDITIONAL'}:
@@ -158,7 +193,7 @@ def owned_image_content(facility_id: int, image_id: int, user: User = Depends(ge
 @router.delete('/{facility_id}/images/{image_id}', response_model=FacilityResponse)
 def delete_image(facility_id: int, image_id: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    if facility.status == FacilityStatus.PENDING_REVIEW.value:
+    if facility.status == FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Không thể xóa ảnh khi hồ sơ đang chờ duyệt')
     item = db.scalar(select(FacilityImage).where(FacilityImage.id == image_id, FacilityImage.facility_id == facility.id))
     if item is None: raise HTTPException(status_code=404, detail='Không tìm thấy ảnh')
@@ -175,21 +210,34 @@ def image_content(image_id: int, db: Session = Depends(get_db)):
 
 
 @router.post('/{facility_id}/documents', response_model=FacilityResponse)
-async def upload_document(facility_id: int, document_type: str = Form(...), document_name: str = Form(...), document_number: str | None = Form(None), issued_date: str | None = Form(None), issued_by: str | None = Form(None), document: UploadFile = File(...), owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+async def upload_document(facility_id: int, document_type: str = Form(...), document_name: str = Form(...), document_number: str = Form(...), issued_date: str | None = Form(None), issued_by: str | None = Form(None), document: UploadFile = File(...), owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    if facility.status == FacilityStatus.PENDING_REVIEW.value:
+    if facility.status == FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Không thể thay tài liệu khi hồ sơ đang chờ duyệt')
     from datetime import date
     try: parsed_date = date.fromisoformat(issued_date) if issued_date else None
     except ValueError: raise HTTPException(status_code=422, detail='Ngày cấp không hợp lệ')
-    if len(document_type.strip()) < 2 or len(document_name.strip()) < 2:
-        raise HTTPException(status_code=422, detail='Loại và tên tài liệu là bắt buộc')
+    document_type = document_type.strip().upper()
+    document_number = document_number.strip()
+    if document_type not in DOCUMENT_TYPES:
+        raise HTTPException(status_code=422, detail='Loại giấy tờ xác minh không hợp lệ')
+    if len(document_name.strip()) < 2 or len(document_number) < 2:
+        raise HTTPException(status_code=422, detail='Tên và số giấy tờ là bắt buộc')
+    if len(facility.documents) >= 10:
+        raise HTTPException(status_code=422, detail='Mỗi hồ sơ tối đa 10 tệp giấy tờ')
     if facility.status == FacilityStatus.APPROVED.value:
         old = facility.status; facility.status = FacilityStatus.DRAFT.value; facility.is_active = False
         facility.approved_at = None; facility.approved_by = None
         add_event(db, facility, owner, 'VERIFICATION_DOCUMENT_CHANGED', old, 'Tài liệu xác minh thay đổi; cần xét duyệt lại')
     stored = await store_facility_file(document, facility.id, True)
-    item = FacilityDocument(facility_id=facility.id, document_type=document_type.strip(), document_name=document_name.strip(), document_number=(document_number or '').strip() or None, issued_date=parsed_date, issued_by=(issued_by or '').strip() or None, **stored)
+    duplicate = db.scalar(select(FacilityDocument.id).where(
+        FacilityDocument.facility_id == facility.id,
+        FacilityDocument.file_sha256 == stored['file_sha256'],
+    ))
+    if duplicate is not None:
+        remove_facility_file(stored['file_path'], True)
+        raise HTTPException(status_code=409, detail='Tệp này đã có trong hồ sơ')
+    item = FacilityDocument(facility_id=facility.id, document_type=document_type, document_name=document_name.strip(), document_number=document_number, issued_date=parsed_date, issued_by=(issued_by or '').strip() or None, **stored)
     db.add(item); db.commit()
     return response(db, owned_facility(db, facility.id, owner.id, True))
 
@@ -205,7 +253,7 @@ def document_content(facility_id: int, document_id: int, user: User = Depends(ge
 @router.delete('/{facility_id}/documents/{document_id}', response_model=FacilityResponse)
 def delete_document(facility_id: int, document_id: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     facility = owned_facility(db, facility_id, owner.id, True)
-    if facility.status == FacilityStatus.PENDING_REVIEW.value:
+    if facility.status == FacilityStatus.PENDING_APPROVAL.value:
         raise HTTPException(status_code=409, detail='Không thể xóa tài liệu khi hồ sơ đang chờ duyệt')
     item = db.scalar(select(FacilityDocument).where(FacilityDocument.id == document_id, FacilityDocument.facility_id == facility.id))
     if item is None: raise HTTPException(status_code=404, detail='Không tìm thấy tài liệu')

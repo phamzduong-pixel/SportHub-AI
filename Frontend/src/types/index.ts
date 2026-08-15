@@ -42,5 +42,3 @@ export interface Booking {
   id: string; customer: string; venue: string; date: string; time: string;
   amount: number; status: 'Đã xác nhận' | 'Chờ xác nhận' | 'Đã hoàn thành' | 'Đã hủy';
 }
-
-export interface DashboardMetric { label: string; value: string; change: string; trend: 'up' | 'down'; }

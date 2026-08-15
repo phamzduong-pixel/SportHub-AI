@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
 from app.database.base import Base
 from app.database.demo_seed import seed_demo_db
-from app.models import Booking, Facility, Field, Invoice, Payment, Review, TimeSlot, User, UserFavoriteField
+from app.models import Booking, Facility, Field, Invoice, Payment, ProductCatalogItem, Review, TimeSlot, User, UserFavoriteField
 
 
 class DemoSeedTests(unittest.TestCase):
@@ -39,6 +39,7 @@ class DemoSeedTests(unittest.TestCase):
         with self.Session() as session:
             seed_demo_db(session)
             first = self._counts(session)
+            first_catalog_count = session.scalar(select(func.count(ProductCatalogItem.id)))
             missing_price = session.scalar(select(TimeSlot).where(TimeSlot.name == 'Ca 08:00'))
             missing_price.weekend_price = None
             removable = session.scalar(select(TimeSlot).where(TimeSlot.name == 'Ca chiều'))
@@ -46,12 +47,23 @@ class DemoSeedTests(unittest.TestCase):
             session.commit()
             seed_demo_db(session)
             second = self._counts(session)
+            second_catalog_count = session.scalar(select(func.count(ProductCatalogItem.id)))
             self.assertEqual(first, second)
             self.assertEqual(first, (3, 3, 3, 9, 3, 3, 1, 1, 1))
+            self.assertEqual(first_catalog_count, 47)
+            self.assertEqual(second_catalog_count, first_catalog_count)
             self.assertEqual(session.scalar(select(func.count(Field.id)).where(Field.facility_id.is_(None))), 0)
             self.assertEqual(session.scalar(select(func.count(TimeSlot.id)).where(
                 TimeSlot.weekday_price.is_(None) | TimeSlot.weekend_price.is_(None)
             )), 0)
+
+    def test_catalog_is_seeded_without_demo_accounts(self):
+        settings.SEED_DEMO_DATA = False
+        with self.Session() as session:
+            seed_demo_db(session)
+            seed_demo_db(session)
+            self.assertEqual(session.scalar(select(func.count(ProductCatalogItem.id))), 47)
+            self.assertEqual(session.scalar(select(func.count(User.id))), 0)
 
     @staticmethod
     def _counts(session):

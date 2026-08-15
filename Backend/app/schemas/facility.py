@@ -47,8 +47,9 @@ class CancellationPolicyUpdate(RequestModel):
 
 
 class FacilityCreate(RequestModel):
-    name: str = Field(min_length=2, max_length=160)
-    location: str = Field(min_length=5, max_length=500)
+    # Drafts may be incomplete; submit_facility performs the strict business validation.
+    name: str = Field(default='', max_length=160)
+    location: str = Field(default='', max_length=500)
     description: str | None = Field(default=None, max_length=2000)
     contact_phone: str | None = Field(default=None, max_length=20)
     contact_email: str | None = Field(default=None, max_length=255)
@@ -104,7 +105,7 @@ class FacilityHotlineUpdate(RequestModel):
 class FacilityDocumentMeta(RequestModel):
     document_type: str = Field(min_length=2, max_length=50)
     document_name: str = Field(min_length=2, max_length=255)
-    document_number: str | None = Field(default=None, max_length=100)
+    document_number: str = Field(min_length=2, max_length=100)
     issued_date: date | None = None
     issued_by: str | None = Field(default=None, max_length=255)
 
@@ -146,6 +147,7 @@ class FacilityDocumentResponse(BaseModel):
     mime_type: str
     file_size: int
     created_at: datetime
+    url: str | None = None
 
 
 class FacilityReviewEventResponse(BaseModel):

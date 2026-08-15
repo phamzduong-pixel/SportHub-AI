@@ -1,21 +1,20 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
+import re
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..core.ownership import management_owner_id
-from ..core.datetime_utils import as_utc
 from ..models.field import Booking, Field
 from ..models.facility import Facility
 from ..models.payment import Payment, PaymentType
+from ..models.owner_application import OwnerApplication
 from ..models.user import User
 from ..models.time_slot import TimeSlot
-from ..models.operations import FieldBlock
-from ..models.maintenance import FieldMaintenance
 from .booking_repository import BookingRepository
+from ..services.location_utils import location_matches
 
 HISTORY_STATUSES = ('pending_payment', 'pending_confirmation', 'confirmed', 'completed')
-BLOCKING_STATUSES = ('pending_confirmation', 'confirmed', 'in_progress')
 
 
 class AIRepository:
@@ -63,6 +62,12 @@ class AIRepository:
     def latest_payment(self, booking_id: int):
         return self.db.scalar(
             select(Payment).where(Payment.booking_id == booking_id).order_by(Payment.created_at.desc()).limit(1)
+        )
+
+    def latest_owner_application(self, customer_id: int):
+        return self.db.scalar(
+            select(OwnerApplication).where(OwnerApplication.customer_id == customer_id)
+            .order_by(OwnerApplication.created_at.desc(), OwnerApplication.id.desc()).limit(1)
         )
 
     def platform_account_summary(self):
@@ -130,42 +135,46 @@ class AIRepository:
             query = query.where(func.lower(Field.sport_type) == sport_type.lower())
         return self.db.execute(query.order_by(Field.name, TimeSlot.start_time)).all()
 
-    def available_candidates(self, sport_type: str | None, booking_date: date, max_price: float | None):
-        inventory = self.inventory(sport_type)
+    def search_venues(self, *, location: str | None = None, sport_type: str | None = None,
+                      court_type: str | None = None, max_price: float | None = None, limit: int | None = 6):
+        query = select(Field).where(
+            Field.status == 'available',
+            or_(Field.facility_id.is_(None), Field.facility.has(and_(
+                Facility.is_active.is_(True), Facility.status == 'APPROVED',
+            ))),
+            *self._field_scope(),
+        )
+        fields = list(self.db.scalars(query.order_by(Field.rating.desc(), Field.name)).all())
+        if sport_type:
+            normalized_sport = sport_type.casefold()
+            fields = [field for field in fields if field.sport_type.casefold() == normalized_sport]
+        if location:
+            fields = [field for field in fields if location_matches(
+                location, field.location,
+                field.facility.location if field.facility else None,
+                field.facility.city if field.facility else None,
+                field.facility.district if field.facility else None,
+            )]
+        if court_type:
+            people = re.search(r'\d{1,2}', court_type)
+            if people:
+                fields = [field for field in fields if int(field.capacity or 0) >= int(people[0])]
         if max_price is not None:
-            inventory = [(field, slot) for field, slot in inventory if float(slot.price) <= max_price]
-        if not inventory:
-            return []
-        field_ids = {field.id for field, _ in inventory}
-        bookings = list(self.db.scalars(select(Booking).where(
-            Booking.field_id.in_(field_ids), Booking.booking_date == booking_date,
-            or_(
-                Booking.status.in_(BLOCKING_STATUSES),
-                and_(Booking.status == 'pending_payment', Booking.hold_expires_at > datetime.now(timezone.utc)),
-            ),
-        )).all())
-        blocks = list(self.db.scalars(select(FieldBlock).where(
-            FieldBlock.field_id.in_(field_ids), FieldBlock.block_date == booking_date,
-        )).all())
-        day_start, day_end = BookingRepository._day_bounds(booking_date)
-        maintenances = list(self.db.scalars(select(FieldMaintenance).where(
-            FieldMaintenance.field_id.in_(field_ids),
-            FieldMaintenance.status.in_(('SCHEDULED', 'IN_PROGRESS')),
-            FieldMaintenance.starts_at < day_end, FieldMaintenance.ends_at > day_start,
-        )).all())
-        return [
-            (field, slot) for field, slot in inventory
-            if not any(
-                booking.field_id == field.id
-                and booking.start_time_snapshot < slot.end_time
-                and booking.end_time_snapshot > slot.start_time
-                for booking in bookings
-            )
-            and not any(block.field_id == field.id and block.start_time < slot.end_time and block.end_time > slot.start_time for block in blocks)
-            and not any(
-                maintenance.field_id == field.id
-                and as_utc(maintenance.starts_at) < BookingRepository._slot_bounds(booking_date, slot.start_time, slot.end_time)[1]
-                and as_utc(maintenance.ends_at) > BookingRepository._slot_bounds(booking_date, slot.start_time, slot.end_time)[0]
-                for maintenance in maintenances
-            )
-        ]
+            fields = [field for field in fields if float(field.base_price) <= max_price]
+        return fields[:limit] if limit is not None else fields
+
+    def count_venues(self, *, location: str | None = None, sport_type: str | None = None) -> int:
+        fields = self.search_venues(location=location, sport_type=sport_type, limit=None)
+        venue_keys = {
+            ('facility', field.facility_id) if field.facility_id is not None else ('legacy_field', field.id)
+            for field in fields
+        }
+        return len(venue_keys)
+
+    def available_candidates(self, sport_type: str | None, booking_date: date, max_price: float | None):
+        # Compatibility wrapper: booking and every AI flow share one availability source.
+        from ..services.availability_service import AvailabilityService
+        return AvailabilityService(BookingRepository(self.db)).available_pairs(
+            booking_date=booking_date, sport_type=sport_type, max_price=max_price,
+            owner_id=self.owner_id, include_legacy_unowned=self.include_legacy_unowned,
+        )

@@ -13,6 +13,7 @@ from app.main import app
 from app.models.facility import Facility
 from app.models.field import Booking, Field
 from app.models.payment import Payment
+from app.models.product import BookingProductItem, FacilityProduct
 from app.models.time_slot import TimeSlot
 from app.models.user import User, UserRole
 
@@ -39,17 +40,29 @@ class RevenueAnalyticsTests(unittest.TestCase):
             db.add_all([slot_a, slot_a2, slot_b]); db.flush()
             today = date.today(); paid_at = datetime.now(timezone.utc)
 
-            def booking(code, total, status, field=field_a, slot=slot_a, day=today):
-                item = Booking(booking_code=code, customer_id=customer.id, facility_id=field.facility_id, facility_name_snapshot=field.facility.name, field_id=field.id, time_slot_id=slot.id, booking_date=day, start_time_snapshot=slot.start_time, end_time_snapshot=slot.end_time, price_snapshot=total, total_amount=total, deposit_amount=0, paid_amount=0, remaining_amount=total, status=status)
+            def booking(code, total, status, field=field_a, slot=slot_a, day=today, court_amount=0, service_amount=0):
+                item = Booking(booking_code=code, customer_id=customer.id, facility_id=field.facility_id, facility_name_snapshot=field.facility.name, field_id=field.id, time_slot_id=slot.id, booking_date=day, start_time_snapshot=slot.start_time, end_time_snapshot=slot.end_time, price_snapshot=total, court_amount=court_amount, service_amount=service_amount, total_amount=total, deposit_amount=0, paid_amount=0, remaining_amount=total, status=status)
                 db.add(item); db.flush(); return item
 
             unpaid = booking('REV-UNPAID', 100000, 'pending_payment')
-            completed = booking('REV-COMPLETE', 300000, 'completed')
+            completed = booking('REV-COMPLETE', 300000, 'completed', court_amount=240000, service_amount=60000)
             confirmed = booking('REV-CONFIRMED', 150000, 'confirmed', slot=slot_a2)
             owner_cancel = booking('REV-OWNER-CANCEL', 200000, 'cancelled_by_owner')
             late_cancel = booking('REV-LATE-CANCEL', 250000, 'cancelled_by_customer')
             other_owner = booking('REV-OTHER-OWNER', 999000, 'completed', field_b, slot_b)
             old = booking('REV-OLD', 40000, 'completed', day=today - timedelta(days=3))
+            product = FacilityProduct(
+                facility_id=facility_a.id, name='Vợt thuê snapshot', product_type='RENT',
+                price=99999, unit='cây', status='ACTIVE', stock_quantity=5,
+                reserved_quantity=0, track_inventory=True,
+            )
+            db.add(product); db.flush()
+            db.add(BookingProductItem(
+                booking_id=completed.id, product_id=product.id,
+                product_name_snapshot='Vợt thuê snapshot', product_type_snapshot='RENT',
+                unit_snapshot='cây', unit_price_snapshot=30000, quantity=2,
+                line_total=60000, inventory_status='RETURNED',
+            ))
 
             def payment(booking_item, code, amount, payment_type, status='paid', escrow='held'):
                 db.add(Payment(booking_id=booking_item.id, customer_id=customer.id, owner_id=booking_item.field.owner_id, transaction_code=code, amount=amount, payment_method='bank_transfer', payment_type=payment_type, status=status, payment_status=status, escrow_status=escrow, paid_at=paid_at if status == 'paid' else None))
@@ -99,12 +112,20 @@ class RevenueAnalyticsTests(unittest.TestCase):
         self.assertEqual(summary['completed_revenue'], 300000)
         self.assertEqual(summary['refunded_amount'], 200000)
         self.assertEqual(summary['net_revenue'], 425000)
+        self.assertEqual(summary['court_revenue'], 365000)
+        self.assertEqual(summary['service_revenue'], 60000)
+        self.assertEqual(summary['total_revenue'], 425000)
         self.assertEqual(summary['completed_bookings'], 1)
         self.assertEqual(summary['cancelled_bookings'], 2)
         complete = next(item for item in data['transactions'] if item['booking_code'] == 'REV-COMPLETE')
         self.assertEqual(complete['collected_amount'], 300000)  # deposit + remaining, each transaction exactly once
         failed = next(item for item in data['transactions'] if item['booking_code'] == 'REV-CONFIRMED')
         self.assertEqual(failed['collected_amount'], 50000)
+        self.assertEqual(complete['court_amount'], 240000)
+        self.assertEqual(complete['service_amount'], 60000)
+        self.assertEqual(data['popular_products'][0]['name'], 'Vợt thuê snapshot')
+        self.assertEqual(data['popular_products'][0]['quantity'], 2)
+        self.assertEqual(data['popular_products'][0]['revenue'], 60000)
 
     def test_refund_owner_cancel_and_forfeited_deposit(self):
         transactions = {item['booking_code']: item for item in self.report(self.owner_a)['transactions']}

@@ -12,9 +12,10 @@ from ...database.session import get_db
 from ...models.owner_application import OwnerApplication, OwnerApplicationStatus
 from ...models.user import User, UserRole
 from ...schemas.owner_application import OwnerApplicationDraft, OwnerApplicationRequest, OwnerApplicationResponse, OwnerApplicationWithdraw
-from ...schemas.user import ChangePasswordRequest, LoginRequest, MessageResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, TokenResponse, UserResponse
+from ...schemas.user import ChangePasswordRequest, LoginRequest, LogoutRequest, MessageResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, TokenResponse, UserResponse
 from ..dependencies import get_current_user
 from ...services.audit_service import record_audit
+from ...services.notification_service import NotificationService
 from ...services.avatar_service import avatar_response, delete_local_avatar, store_avatar
 
 router = APIRouter(prefix='/auth', tags=['auth'])
@@ -92,8 +93,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if user.role not in {role.value for role in UserRole}:
         raise HTTPException(status_code=403, detail='Vai trò tài khoản không còn được hỗ trợ')
     return TokenResponse(
-        access_token=create_access_token({'sub': str(user.id), 'role': user.role}),
-        refresh_token=create_refresh_token({'sub': str(user.id), 'role': user.role}),
+        access_token=create_access_token({'sub': str(user.id), 'role': user.role, 'sv': user.session_version}),
+        refresh_token=create_refresh_token({'sub': str(user.id), 'role': user.role, 'sv': user.session_version}),
         user=user_response(user),
     )
 
@@ -103,21 +104,39 @@ def refresh_session(payload: RefreshTokenRequest, db: Session = Depends(get_db))
     try:
         claims = decode_refresh_token(payload.refresh_token)
         user_id = int(claims.get('sub', ''))
+        session_version = int(claims.get('sv', -1))
     except (JWTError, TypeError, ValueError):
         raise HTTPException(status_code=401, detail='Refresh token không hợp lệ hoặc đã hết hạn')
     user = db.get(User, user_id)
     if user is None or not user.is_active or user.role not in {role.value for role in UserRole}:
         raise HTTPException(status_code=401, detail='Tài khoản không còn hoạt động')
+    result = db.execute(update(User).where(
+        User.id == user.id, User.session_version == session_version,
+    ).values(session_version=User.session_version + 1))
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=401, detail='Refresh token đã hết hiệu lực hoặc đã được sử dụng')
+    db.commit(); db.refresh(user)
     return TokenResponse(
-        access_token=create_access_token({'sub': str(user.id), 'role': user.role}),
-        refresh_token=create_refresh_token({'sub': str(user.id), 'role': user.role}),
+        access_token=create_access_token({'sub': str(user.id), 'role': user.role, 'sv': user.session_version}),
+        refresh_token=create_refresh_token({'sub': str(user.id), 'role': user.role, 'sv': user.session_version}),
         user=user_response(user),
     )
 
 
 @router.post('/logout', response_model=MessageResponse)
-def logout():
-    return {'message': 'Đăng xuất thành công; client đã xóa access/refresh token'}
+def logout(payload: LogoutRequest, db: Session = Depends(get_db)):
+    try:
+        claims = decode_refresh_token(payload.refresh_token)
+        user_id = int(claims.get('sub', ''))
+        session_version = int(claims.get('sv', -1))
+    except (JWTError, TypeError, ValueError):
+        return {'message': 'Đăng xuất thành công'}
+    db.execute(update(User).where(
+        User.id == user_id, User.session_version == session_version,
+    ).values(session_version=User.session_version + 1))
+    db.commit()
+    return {'message': 'Đăng xuất thành công'}
 
 
 @router.get('/me', response_model=UserResponse)
@@ -147,6 +166,7 @@ def request_owner(payload: OwnerApplicationRequest, current_user: User = Depends
     try:
         db.flush()
         record_audit(db, current_user, 'owner_application', item.id, 'partner_application_submitted', {'status': item.status})
+        NotificationService(db).partner_submitted(item.id, current_user.full_name)
         db.commit(); db.refresh(item)
     except SQLAlchemyError:
         db.rollback()
@@ -281,5 +301,6 @@ def change_password(payload: ChangePasswordRequest, current_user: User = Depends
     if verify_password(payload.new_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail='Mật khẩu mới phải khác mật khẩu hiện tại')
     current_user.hashed_password = get_password_hash(payload.new_password)
+    current_user.session_version = int(current_user.session_version or 0) + 1
     db.commit()
     return {'message': 'Đổi mật khẩu thành công'}

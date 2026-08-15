@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..models.field import Booking, Field
 from ..models.payment import Payment
+from ..models.product import BookingProductItem
 from ..models.user import User
 
 
@@ -112,5 +113,6 @@ class PaymentRepository:
         return select(Payment).options(
             joinedload(Payment.booking).joinedload(Booking.customer),
             joinedload(Payment.booking).joinedload(Booking.field),
+            joinedload(Payment.booking).selectinload(Booking.product_items).selectinload(BookingProductItem.added_by_user),
             joinedload(Payment.confirmer),
         )

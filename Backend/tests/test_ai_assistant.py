@@ -1,20 +1,36 @@
 from datetime import date, timedelta
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app.main import app
 
 
+class AssistantRankingProvider:
+    def generate_json(self, **kwargs):
+        available = kwargs['system_data']['available_slots']
+        return {'status': 'OK', 'recommendations': [
+            {'court_id': item['court_id'], 'slot_id': item['slot_id'], 'reason': 'Phù hợp nhu cầu đã chọn.'}
+            for item in available[:3]
+        ]}
+
+
 class AIAssistantTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=AssistantRankingProvider())
+        cls.provider_patch.start()
         cls.client = TestClient(app)
         cls.context = cls.client.__enter__()
 
     @classmethod
     def tearDownClass(cls):
-        cls.client.__exit__(None, None, None)
+        try:
+            cls.client.__exit__(None, None, None)
+        finally:
+            cls.client.close()
+            cls.provider_patch.stop()
 
     def test_customer_search_uses_live_available_inventory(self):
         tomorrow = (date.today() + timedelta(days=1)).isoformat()
@@ -61,6 +77,8 @@ class AIAssistantTests(unittest.TestCase):
         self.assertEqual(payload['understood']['sport_type'], 'cầu lông')
         self.assertIsNone(payload['understood']['booking_date'])
         self.assertEqual(payload['suggestions'], [])
+        self.assertEqual(payload['status'], 'NEED_MORE_DATA')
+        self.assertEqual(payload['missing_fields'], ['date'])
 
     def test_understands_natural_tomorrow_time_and_duration(self):
         response = self.client.post('/ai/assistant', json={'message': 'Tìm sân cầu lông 8 giờ sáng mai chơi 2 tiếng'})

@@ -51,6 +51,26 @@ class PartnerApplicationTests(unittest.TestCase):
             'legal_confirmed': True,
         }
 
+    def test_admin_receives_partner_application_notification(self):
+        customer = self.headers('customer@partner.local', 'Customer@123')
+        admin = self.headers('admin@partner.local', 'Admin@123456')
+        submitted = self.client.post('/auth/owner-application/submit', headers=customer, json=self.payload())
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+        types = [item['type'] for item in self.client.get('/notifications', headers=admin).json()['items']]
+        self.assertIn('PARTNER_APPLICATION_SUBMITTED', types)
+
+    def test_partner_application_result_notification(self):
+        customer = self.headers('customer@partner.local', 'Customer@123')
+        admin = self.headers('admin@partner.local', 'Admin@123456')
+        item = self.client.post('/auth/owner-application/submit', headers=customer, json=self.payload()).json()
+        reviewed = self.client.patch(
+            f"/admin/owner-applications/{item['id']}/review", headers=admin,
+            json={'action': 'REJECT', 'admin_note': 'Cần bổ sung thông tin cơ sở'},
+        )
+        self.assertEqual(reviewed.status_code, 200, reviewed.text)
+        types = [value['type'] for value in self.client.get('/notifications', headers=customer).json()['items']]
+        self.assertIn('PARTNER_APPLICATION_REJECTED', types)
+
     def test_customer_submits_without_documents_and_stays_customer(self):
         customer = self.headers('customer@partner.local', 'Customer@123')
         draft = self.client.put('/auth/owner-application', headers=customer, json={**self.payload(), 'legal_confirmed': False})
@@ -63,6 +83,9 @@ class PartnerApplicationTests(unittest.TestCase):
         self.assertNotIn('identity_number', submitted.json()['representative'])
         self.assertEqual(self.client.get('/auth/me', headers=customer).json()['role'], 'CUSTOMER')
         self.assertEqual(self.client.post('/auth/owner-application/submit', headers=customer, json=self.payload()).status_code, 409)
+        admin = self.headers('admin@partner.local', 'Admin@123456')
+        notifications = self.client.get('/notifications', headers=admin).json()['items']
+        self.assertIn('PARTNER_APPLICATION_SUBMITTED', [item['type'] for item in notifications])
 
     def test_admin_approve_grants_owner(self):
         customer = self.headers('customer@partner.local', 'Customer@123')
@@ -73,6 +96,13 @@ class PartnerApplicationTests(unittest.TestCase):
         self.assertEqual(approved.json()['status'], 'APPROVED')
         fresh = self.client.post('/auth/login', json={'email': 'customer@partner.local', 'password': 'Customer@123'}).json()['user']
         self.assertEqual(fresh['role'], 'OWNER')
+        self.assertEqual(self.client.get('/auth/me', headers=customer).json()['role'], 'OWNER')
+        self.assertEqual(self.client.get('/facilities', headers=customer).status_code, 200)
+        notifications = self.client.get('/notifications', headers=customer).json()['items']
+        self.assertIn('PARTNER_APPLICATION_APPROVED', [item['type'] for item in notifications])
+
+    def test_role_change_reflected_after_partner_approval(self):
+        self.test_admin_approve_grants_owner()
 
     def test_reject_requires_reason_and_customer_can_edit_resubmit(self):
         customer = self.headers('customer@partner.local', 'Customer@123')
@@ -81,6 +111,8 @@ class PartnerApplicationTests(unittest.TestCase):
         self.assertEqual(self.client.patch('/admin/owner-applications/' + str(item['id']) + '/review', headers=admin, json={'action': 'REJECT', 'admin_note': ' '}).status_code, 422)
         rejected = self.client.patch('/admin/owner-applications/' + str(item['id']) + '/review', headers=admin, json={'action': 'REJECT', 'admin_note': 'Thong tin lien he chua ro'})
         self.assertEqual(rejected.json()['status'], 'REJECTED')
+        notifications = self.client.get('/notifications', headers=customer).json()['items']
+        self.assertIn('PARTNER_APPLICATION_REJECTED', [item['type'] for item in notifications])
         self.assertEqual(rejected.json()['rejection_reason'], 'Thong tin lien he chua ro')
         updated = self.payload('Sport Center Updated')
         resubmitted = self.client.post('/auth/owner-application/submit', headers=customer, json=updated)

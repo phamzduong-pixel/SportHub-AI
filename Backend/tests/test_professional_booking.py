@@ -243,6 +243,26 @@ class ProfessionalBookingWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(booking_detail.json()['facility_hotline'], '+84 901-234-568')
 
+    def test_missing_facility_hotline_is_not_replaced_with_demo_data(self):
+        created = self.case.client.post('/facilities', headers=self.case.owner, json={
+            'name': 'Cơ sở chưa có hotline', 'location': 'Quận 4',
+        })
+        self.assertEqual(created.status_code, 201, created.text)
+        facility_id = created.json()['id']
+        with self.case.Session() as db:
+            from app.models.facility import Facility
+            facility = db.get(Facility, facility_id)
+            facility.status = 'APPROVED'; facility.is_active = True
+            field = db.get(Field, self.case.field_id)
+            field.facility_id = facility_id
+            db.commit()
+
+        public_detail = self.case.client.get(f'/public/courts/{self.case.field_id}')
+        self.assertEqual(public_detail.status_code, 200, public_detail.text)
+        self.assertIsNone(public_detail.json()['facility']['contact_phone'])
+        booking = self.case.create()
+        self.assertIsNone(booking['facility_hotline'])
+
         invalid = self.case.client.patch(
             f'/facilities/{facility_id}/hotline', headers=self.case.owner,
             json={'contact_phone': 'hotline-abc'},
@@ -297,6 +317,9 @@ class ConcurrentBookingTests(unittest.TestCase):
         self.assertEqual(sorted(response.status_code for response in responses), [201, 409])
         with self.Session() as db:
             self.assertEqual(db.query(Booking).filter(Booking.booking_date == date.fromisoformat(booking_date)).count(), 1)
+
+    def test_concurrent_booking_still_prevents_overlap(self):
+        self.test_overlapping_slots_created_at_same_time_only_allow_one()
 
 
 if __name__ == '__main__':

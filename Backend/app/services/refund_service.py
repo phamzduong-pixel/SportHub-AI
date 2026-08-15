@@ -13,11 +13,13 @@ from ..models.payment import EscrowStatus, Payment, PaymentStatus
 from ..models.refund import BookingActivity, RefundRequest, RefundStatus
 from ..models.user import User
 from .audit_service import record_audit
+from .notification_service import NotificationService
 
 
 class RefundService:
     def __init__(self, db: Session):
         self.db = db
+        self.notifications = NotificationService(db)
 
     def list_my(self, user: User, *, status: str | None, page: int, page_size: int):
         return self._list(customer_id=user.id, owner_id=None, status=status, page=page, page_size=page_size)
@@ -88,6 +90,7 @@ class RefundService:
             'refund_id': item.id, 'amount': float(item.amount), 'transaction_reference': reference,
             'evidence_url': payload.evidence_url,
         })
+        self.notifications.booking_event(item.booking, 'PAYMENT_REFUNDED')
         try:
             self.db.commit()
         except IntegrityError:

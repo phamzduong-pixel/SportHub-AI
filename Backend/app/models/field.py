@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, Time, text
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text, Time, UniqueConstraint, text
 from sqlalchemy.orm import relationship
 
 from ..database.base import Base
@@ -77,6 +77,8 @@ class Booking(Base):
     start_time_snapshot = Column(Time, nullable=False)
     end_time_snapshot = Column(Time, nullable=False)
     price_snapshot = Column(Numeric(12, 2), nullable=False)
+    court_amount = Column(Numeric(12, 2), nullable=False, default=0)
+    service_amount = Column(Numeric(12, 2), nullable=False, default=0)
     total_amount = Column(Numeric(12, 2), nullable=False)
     deposit_type = Column(String(20), nullable=False, default='percentage')
     deposit_value = Column(Numeric(12, 2), nullable=False, default=30)
@@ -111,3 +113,29 @@ class Booking(Base):
     refund_request = relationship('RefundRequest', back_populates='booking', uselist=False, passive_deletes=True)
     review = relationship('Review', back_populates='booking', uselist=False, passive_deletes=True)
     activities = relationship('BookingActivity', back_populates='booking', passive_deletes=True, order_by='BookingActivity.created_at')
+    booking_slots = relationship(
+        'BookingSlot', back_populates='booking', cascade='all, delete-orphan',
+        order_by='BookingSlot.position', lazy='selectin',
+    )
+    product_items = relationship(
+        'BookingProductItem', back_populates='booking', cascade='all, delete-orphan', lazy='selectin',
+    )
+
+
+class BookingSlot(Base):
+    __tablename__ = 'booking_slots'
+    __table_args__ = (
+        UniqueConstraint('booking_id', 'time_slot_id', name='uq_booking_slot'),
+        UniqueConstraint('booking_id', 'position', name='uq_booking_slot_position'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    booking_id = Column(Integer, ForeignKey('bookings.id', ondelete='CASCADE'), nullable=False, index=True)
+    time_slot_id = Column(Integer, ForeignKey('time_slots.id', ondelete='RESTRICT'), nullable=False, index=True)
+    position = Column(Integer, nullable=False)
+    name_snapshot = Column(String(120), nullable=False)
+    start_time_snapshot = Column(Time, nullable=False)
+    end_time_snapshot = Column(Time, nullable=False)
+    price_snapshot = Column(Numeric(12, 2), nullable=False)
+    booking = relationship('Booking', back_populates='booking_slots')
+    time_slot = relationship('TimeSlot', back_populates='booking_slots')

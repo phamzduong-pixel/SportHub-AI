@@ -1,9 +1,9 @@
 from datetime import time
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from ..models.field import Booking
+from ..models.field import Booking, BookingSlot
 from ..models.time_slot import TimeSlot
 
 class TimeSlotRepository:
@@ -51,4 +51,9 @@ class TimeSlotRepository:
         self.db.commit()
 
     def has_booking_usage(self, time_slot_id: int) -> bool:
-        return self.db.scalar(select(Booking.id).where(Booking.time_slot_id == time_slot_id).limit(1)) is not None
+        return self.db.scalar(select(Booking.id).outerjoin(
+            BookingSlot, BookingSlot.booking_id == Booking.id,
+        ).where(or_(
+            Booking.time_slot_id == time_slot_id,
+            BookingSlot.time_slot_id == time_slot_id,
+        )).limit(1)) is not None

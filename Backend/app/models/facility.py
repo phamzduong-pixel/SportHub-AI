@@ -16,7 +16,7 @@ def default_cancellation_rules():
 
 class FacilityStatus(str, Enum):
     DRAFT = 'DRAFT'
-    PENDING_REVIEW = 'PENDING_REVIEW'
+    PENDING_APPROVAL = 'PENDING_APPROVAL'
     APPROVED = 'APPROVED'
     REJECTED = 'REJECTED'
     SUSPENDED = 'SUSPENDED'
@@ -77,7 +77,7 @@ class FacilityImage(Base):
 
 
 class FacilityDocument(Base):
-    __tablename__ = 'facility_documents'
+    __tablename__ = 'facility_verification_documents'
     id = Column(Integer, primary_key=True)
     facility_id = Column(Integer, ForeignKey('facilities.id', ondelete='CASCADE'), nullable=False, index=True)
     document_type = Column(String(50), nullable=False)
@@ -89,6 +89,7 @@ class FacilityDocument(Base):
     original_name = Column(String(255), nullable=False)
     mime_type = Column(String(50), nullable=False)
     file_size = Column(Integer, nullable=False)
+    file_sha256 = Column(String(64), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     facility = relationship('Facility', back_populates='documents')
 

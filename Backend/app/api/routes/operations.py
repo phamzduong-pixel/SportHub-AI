@@ -1,13 +1,13 @@
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ...core.ownership import management_owner_id, owns_field
 from ...database.session import get_db
-from ...models.field import Booking, Field
+from ...models.field import Booking, BookingSlot, Field
 from ...models.operations import AuditLog, BookingComplaint, FieldBlock
 from ...models.user import User
 from ...schemas.operations import AuditLogResponse, ComplaintCreate, ComplaintResponse, ComplaintUpdate, FieldBlockCreate, FieldBlockResponse
@@ -47,7 +47,18 @@ def create_block(payload: FieldBlockCreate, user: User = Depends(require_owner),
     overlap = db.scalar(select(FieldBlock.id).where(FieldBlock.field_id == field.id, FieldBlock.block_date == payload.block_date, FieldBlock.start_time < payload.end_time, FieldBlock.end_time > payload.start_time))
     if overlap:
         raise HTTPException(status_code=409, detail='Khoảng khóa sân bị trùng với lịch khóa hiện có')
-    booking = db.scalar(select(Booking.id).where(Booking.field_id == field.id, Booking.booking_date == payload.block_date, Booking.status.in_(('pending_payment','pending_confirmation','confirmed','in_progress')), Booking.start_time_snapshot < payload.end_time, Booking.end_time_snapshot > payload.start_time))
+    booking = db.scalar(select(Booking.id).outerjoin(BookingSlot, BookingSlot.booking_id == Booking.id).where(
+        Booking.field_id == field.id, Booking.booking_date == payload.block_date,
+        Booking.status.in_(('pending_payment','pending_confirmation','confirmed','in_progress')),
+        or_(
+            BookingSlot.start_time_snapshot < payload.end_time,
+            and_(~Booking.booking_slots.any(), Booking.start_time_snapshot < payload.end_time),
+        ),
+        or_(
+            BookingSlot.end_time_snapshot > payload.start_time,
+            and_(~Booking.booking_slots.any(), Booking.end_time_snapshot > payload.start_time),
+        ),
+    ))
     if booking:
         raise HTTPException(status_code=409, detail='Không thể khóa khoảng thời gian đang có booking hoạt động')
     item = FieldBlock(**payload.model_dump(), created_by=user.id)

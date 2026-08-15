@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 from types import SimpleNamespace
@@ -15,6 +15,8 @@ from ..models.field import BookingStatus
 from ..models.payment import EscrowStatus, Payment, PaymentMethod, PaymentStatus, PaymentType
 from ..models.refund import BookingActivity, RefundRequest, RefundStatus
 from .audit_service import record_audit
+from .notification_service import NotificationService
+from .inventory_service import InventoryService
 from ..models.user import User
 from ..repositories.payment_repository import PaymentRepository
 from ..schemas.payment import DepositReceiptResponse, PaymentResponse, PaymentSummary
@@ -23,6 +25,8 @@ from ..schemas.payment import DepositReceiptResponse, PaymentResponse, PaymentSu
 class PaymentService:
     def __init__(self, repository: PaymentRepository):
         self.repository = repository
+        self.notifications = NotificationService(repository.db)
+        self.inventory = InventoryService(repository.db)
 
     def create(self, payload, user: User) -> PaymentResponse:
         if payload.payment_method == PaymentMethod.MOCK_ONLINE and settings.PAYMENT_MODE != 'demo':
@@ -33,6 +37,7 @@ class PaymentService:
         now = datetime.now(timezone.utc)
         expires_at = booking.hold_expires_at
         if booking.status == BookingStatus.PENDING_PAYMENT.value and expires_at and expires_at.replace(tzinfo=expires_at.tzinfo or timezone.utc) <= now:
+            self._release_inventory(booking)
             self.repository.update_booking(booking, {'status': BookingStatus.EXPIRED.value, 'hold_expires_at': None})
             raise HTTPException(status_code=409, detail='Thời gian giữ chỗ đã hết. Vui lòng chọn lại khung giờ.')
 
@@ -151,6 +156,25 @@ class PaymentService:
         facility_name = booking.facility_name_snapshot or (
             booking.field.facility.name if booking.field.facility else booking.field.location
         )
+        slot_snapshots = booking.booking_slots or []
+        selected_slots = [{
+            'time_slot_id': item.time_slot_id, 'name': item.name_snapshot,
+            'start_time': item.start_time_snapshot, 'end_time': item.end_time_snapshot,
+            'price': item.price_snapshot,
+        } for item in slot_snapshots] or [{
+            'time_slot_id': booking.time_slot_id, 'name': booking.time_slot.name,
+            'start_time': booking.start_time_snapshot, 'end_time': booking.end_time_snapshot,
+            'price': booking.price_snapshot,
+        }]
+        duration_minutes = sum(
+            (datetime.combine(date.min, item['end_time']) - datetime.combine(date.min, item['start_time'])).seconds // 60
+            for item in selected_slots
+        )
+        product_items = self._product_snapshots(booking)
+        service_amount = Decimal(booking.service_amount or 0)
+        court_amount = Decimal(booking.court_amount or 0)
+        if court_amount == 0 and service_amount == 0:
+            court_amount = Decimal(booking.total_amount)
         return DepositReceiptResponse.model_validate({
             'receipt_number': f'REC-{payment.transaction_code}',
             'booking_id': booking.id,
@@ -163,6 +187,11 @@ class PaymentService:
             'booking_date': booking.booking_date,
             'start_time': booking.start_time_snapshot.strftime('%H:%M'),
             'end_time': booking.end_time_snapshot.strftime('%H:%M'),
+            'duration_minutes': duration_minutes,
+            'selected_slots': selected_slots,
+            'court_amount': court_amount,
+            'service_amount': service_amount,
+            'product_items': product_items,
             'total_amount': payment.total_amount,
             'deposit_paid': payment.amount,
             'remaining_amount': max(Decimal(payment.total_amount) - Decimal(payment.amount), Decimal(0)),
@@ -268,6 +297,14 @@ class PaymentService:
             from_status=payment.booking.status, to_status=booking_data.get('status', payment.booking.status),
             details={'payment_id': payment.id, 'transaction_code': payment.transaction_code, 'amount': float(payment.amount), 'escrow_status': EscrowStatus.HELD.value},
         ))
+        if payment.booking.status in initial_statuses:
+            self.notifications.booking_event(payment.booking, 'DEPOSIT_PAID')
+            self.notifications.booking_event(payment.booking, 'WAITING_OWNER_CONFIRM')
+            self.notifications.notify_owner_for_booking(payment.booking, 'OWNER_NEW_BOOKING')
+        else:
+            if remaining == 0:
+                self.notifications.booking_event(payment.booking, 'PAYMENT_COMPLETED')
+            self.notifications.notify_owner_for_booking(payment.booking, 'PAYMENT_UPDATED')
         return self.response(self.repository.settle(payment, payment_data, payment.booking, booking_data))
 
     def _settle_refund(self, payment: Payment, confirmed_by: int | None, verification_source: str, note: str | None, provider_reference: str | None):
@@ -298,6 +335,8 @@ class PaymentService:
         ))
         if actor:
             record_audit(self.repository.db, actor, 'refund', request.id if request else payment.id, 'refund_completed', {'booking_id': payment.booking_id, 'amount': float(payment.amount), 'transaction_reference': reference})
+        self.notifications.booking_event(payment.booking, 'PAYMENT_REFUNDED')
+        self.notifications.notify_owner_for_booking(payment.booking, 'PAYMENT_UPDATED')
         return self.response(self.repository.settle(payment, {
             'status': PaymentStatus.REFUNDED.value, 'payment_status': PaymentStatus.REFUNDED.value,
             'escrow_status': EscrowStatus.REFUNDED.value,
@@ -324,6 +363,7 @@ class PaymentService:
             **self._note_update(note),
         })
         if updated.booking.status == BookingStatus.PENDING_PAYMENT.value:
+            self._release_inventory(updated.booking, user.id)
             self.repository.update_booking(updated.booking, {'status': BookingStatus.EXPIRED.value, 'hold_expires_at': None})
             updated = self.repository.get(updated.id)
         return self.response(updated)
@@ -339,6 +379,8 @@ class PaymentService:
         state = 'paid' if remaining == 0 else ('partial' if paid > 0 else 'unpaid')
         return PaymentSummary(
             booking_id=booking.id, booking_code=booking.booking_code,
+            court_amount=float(booking.court_amount or 0),
+            service_amount=float(booking.service_amount or 0),
             total_amount=float(total), deposit_amount=float(deposit),
             additional_paid_amount=float(max(paid - deposit, Decimal(0))),
             paid_amount=float(paid), pending_amount=float(pending),
@@ -388,6 +430,7 @@ class PaymentService:
             return payment
         booking_data = {}
         if payment.booking.status == BookingStatus.PENDING_PAYMENT.value:
+            self._release_inventory(payment.booking)
             booking_data = {'status': BookingStatus.EXPIRED.value, 'hold_expires_at': None}
         return self.repository.settle(
             payment, {
@@ -409,6 +452,10 @@ class PaymentService:
             return owner_ids[0]
         raise HTTPException(status_code=409, detail='Sân chưa được gán cho chủ sở hữu hợp lệ')
 
+    def _release_inventory(self, booking, actor_id: int | None = None):
+        for item in booking.product_items:
+            self.inventory.release(item, actor_id=actor_id)
+
     @staticmethod
     def _can_manage(user: User) -> bool:
         return user.role == 'OWNER'
@@ -421,10 +468,26 @@ class PaymentService:
     def _transaction_code():
         return f'PAY-{datetime.now():%y%m%d}-{uuid4().hex[:8].upper()}'
 
+    @staticmethod
+    def _product_snapshots(booking):
+        return [{
+            'item_id': item.id, 'product_id': item.product_id, 'name': item.product_name_snapshot,
+            'product_type': item.product_type_snapshot, 'unit': item.unit_snapshot,
+            'quantity': item.quantity, 'unit_price': item.unit_price_snapshot,
+            'subtotal': item.line_total, 'inventory_status': item.inventory_status,
+            'source': item.source, 'added_by': item.added_by,
+            'added_by_name': item.added_by_user.full_name if item.added_by_user else None,
+            'added_at': item.created_at,
+        } for item in booking.product_items]
+
     def response(self, payment: Payment) -> PaymentResponse:
         booking = payment.booking
         invoice = None
         if payment.status == PaymentStatus.PAID.value and payment.paid_at:
+            service_amount = Decimal(booking.service_amount or 0)
+            court_amount = Decimal(booking.court_amount or 0)
+            if court_amount == 0 and service_amount == 0:
+                court_amount = Decimal(booking.total_amount)
             invoice = {
                 'invoice_number': f'INV-{payment.transaction_code}',
                 'transaction_code': payment.transaction_code,
@@ -436,6 +499,9 @@ class PaymentService:
                     booking.field.facility.name if booking.field.facility else booking.field.location
                 ),
                 'booking_date': booking.booking_date,
+                'court_amount': court_amount,
+                'service_amount': service_amount,
+                'product_items': self._product_snapshots(booking),
                 'total_amount': payment.total_amount,
                 'deposit_amount': payment.deposit_amount,
                 'remaining_payment_amount': max(Decimal(payment.paid_amount) - Decimal(payment.deposit_amount), Decimal(0)),
@@ -452,6 +518,9 @@ class PaymentService:
             'owner_id': payment.owner_id or self._owner_id(booking),
             'customer_name': booking.customer.full_name, 'field_name': booking.field.name,
             'booking_date': booking.booking_date, 'booking_total': booking.total_amount,
+            'court_amount': booking.court_amount or 0,
+            'service_amount': booking.service_amount or 0,
+            'product_items': self._product_snapshots(booking),
             'transaction_code': payment.transaction_code, 'amount': payment.amount,
             'total_amount': payment.total_amount, 'deposit_amount': payment.deposit_amount,
             'remaining_amount': payment.remaining_amount, 'paid_amount': payment.paid_amount,

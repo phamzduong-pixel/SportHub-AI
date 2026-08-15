@@ -1,10 +1,11 @@
-import { Bell, Building2, ChevronDown, Menu, Plus, Search } from 'lucide-react';
+import { Building2, ChevronDown, Menu, Plus, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Dropdown, useToast } from '@/components/common';
 import { useAuth } from '@/contexts/AuthContext';
 import { PermissionGuard, usePermission } from '@/contexts/PermissionContext';
 import { apiRequest } from '@/services/apiClient';
+import { NotificationBell } from '@/components/notifications/NotificationBell';
 
 const names: Record<string, string> = { dashboard: 'Tổng quan', calendar: 'Lịch đặt sân', bookings: 'Danh sách booking', venues: 'Cơ sở', courts: 'Sân', schedules: 'Khung giờ', pricing: 'Bảng giá', customers: 'Khách hàng', payments: 'Thanh toán', complaints: 'Khiếu nại', reports: 'Báo cáo', 'ai-insights': 'Phân tích AI', settings: 'Cài đặt' };
 
@@ -26,7 +27,7 @@ export function ManagementHeader({ onMenu }: { onMenu: () => void }) {
     <div className="ml-auto flex min-w-0 items-center gap-0.5 min-[375px]:gap-1.5">
       <label className="hidden items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-1.5 md:flex"><Building2 size={16} className="shrink-0 text-brand-700" /><select aria-label="Cơ sở đang quản lý" className="max-w-36 bg-transparent text-xs font-semibold outline-none">{venues.map((venue) => <option key={venue.id}>{venue.name}</option>)}</select></label>
       <PermissionGuard module="calendar" action="create"><Dropdown trigger={<span className="flex h-10 items-center gap-1.5 rounded-lg bg-brand-600 px-2.5 text-xs font-semibold text-white sm:h-9"><Plus size={17} /><span className="hidden sm:inline">Tạo nhanh</span></span>} items={[{ label: 'Tạo booking', onClick: () => navigate('/management/calendar') }, { label: 'Khóa khung giờ', onClick: () => navigate('/management/schedules') }]} /></PermissionGuard>
-      <Dropdown trigger={<span className="relative grid h-10 w-10 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 sm:h-9 sm:w-9"><Bell size={19} /></span>} items={[{ label: 'Xem danh sách booking', onClick: () => navigate('/management/bookings') }]} />
+      <NotificationBell />
       <Dropdown trigger={<span className="flex min-w-0 items-center gap-1 rounded-lg p-1 hover:bg-slate-50 sm:gap-2 sm:p-1.5">{user.avatarUrl ? <img src={user.avatarUrl} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-brand-100 text-xs font-bold text-brand-700">{user.avatar}</span>}<span className="hidden min-w-0 text-left lg:block"><b className="block truncate text-xs text-slate-800">{user.name}</b><small className="text-[10px] text-slate-500">{user.role === 'OWNER' ? 'Chủ sân' : user.title}</small></span><ChevronDown size={14} className="hidden shrink-0 min-[375px]:block" /></span>} items={[{ label: 'Cài đặt tài khoản', onClick: () => navigate('/management/settings') }, { label: 'Đăng xuất', danger: true, onClick: signOut }]} />
     </div>
   </header>;

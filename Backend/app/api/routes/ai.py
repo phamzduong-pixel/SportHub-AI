@@ -10,15 +10,50 @@ from ...models.user import User
 from ...repositories.ai_repository import AIRepository
 from ...schemas.ai import (
     AssistantRequest, AssistantResponse, CustomerRecommendationResponse,
+    BookingMessageRequest, BookingMessageResponse, OccupancySummaryResponse,
+    SlotRecommendationRequest, SlotRecommendationResponse,
     DemandOverviewResponse, DemandPredictionRequest, DemandPredictionResponse,
     ModelMetricsResponse, RecommendationResponse,
 )
 from ...services.ai_assistant_service import AIAssistantService
+from ...services.ai_feature_service import AIFeatureService
+from ...services.booking_message_service import BookingMessageService
 from ...services.customer_recommendation_service import CustomerRecommendationService
-from ..dependencies import get_optional_current_user, require_owner
+from ..dependencies import get_current_user, get_optional_current_user, require_owner
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 logger = logging.getLogger(__name__)
+
+
+@router.post('/recommend-slots', response_model=SlotRecommendationResponse)
+def recommend_slots(
+    payload: SlotRecommendationRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if current_user.role not in ('CUSTOMER', 'OWNER'):
+        raise HTTPException(status_code=403, detail='Chức năng gợi ý slot dành cho CUSTOMER')
+    return AIFeatureService(db).recommend_slots(payload)
+
+
+@router.post('/generate-booking-message', response_model=BookingMessageResponse)
+def generate_booking_message(
+    payload: BookingMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return BookingMessageService(db).generate(payload, current_user)
+
+
+@router.get('/occupancy-summary', response_model=OccupancySummaryResponse)
+def occupancy_summary(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    field_id: int | None = Query(default=None, gt=0),
+    current_user: User = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    return AIFeatureService(db).occupancy_summary(current_user, date_from, date_to, field_id)
 
 
 @router.get('/customer-recommendations', response_model=CustomerRecommendationResponse)
@@ -38,7 +73,7 @@ def assistant(
     db: Session = Depends(get_db),
 ):
     """Read-only, domain-scoped assistant backed exclusively by SportHub data."""
-    logger.info('AI request received: %s', payload.message)
+    logger.info('AI assistant request received')
     try:
         result = AIAssistantService(AIRepository(db), current_user=current_user).ask(
             payload.message,

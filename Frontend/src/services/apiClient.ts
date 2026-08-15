@@ -11,17 +11,27 @@ export const readToken = () => localStorage.getItem(TOKEN_KEY);
 export const saveToken = (token: string) => localStorage.setItem(TOKEN_KEY, token);
 export const readRefreshToken = () => localStorage.getItem(REFRESH_TOKEN_KEY);
 export const saveRefreshToken = (token: string) => localStorage.setItem(REFRESH_TOKEN_KEY, token);
-export const clearToken = () => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(REFRESH_TOKEN_KEY); };
+let authGeneration = 0;
+export const clearToken = () => { authGeneration += 1; localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(REFRESH_TOKEN_KEY); };
 let refreshPromise: Promise<boolean> | null = null;
 
 async function tryRefresh(): Promise<boolean> {
   const refreshToken = readRefreshToken(); if (!refreshToken) return false;
+  const generation = authGeneration;
   if (!refreshPromise) refreshPromise = fetch(buildApiUrl('/auth/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) }).then(async (response) => {
     if (!response.ok) return false;
     const result = await response.json() as { access_token: string; refresh_token: string };
+    if (generation !== authGeneration || readRefreshToken() !== refreshToken) return false;
     saveToken(result.access_token); saveRefreshToken(result.refresh_token); return true;
   }).catch(() => false).finally(() => { refreshPromise = null; });
   return refreshPromise;
+}
+
+export async function revokeSession(refreshToken: string): Promise<void> {
+  await fetch(buildApiUrl('/auth/logout'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+  }).catch(() => undefined);
 }
 
 /**

@@ -23,6 +23,67 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result.entities.price_max, 150000)
         self.assertFalse(result.needs_clarification)
 
+    def test_intent_search_venue(self):
+        result = self.route('Tìm sân bóng 7 người tối thứ Sáu')
+        self.assertEqual(result.intent, AssistantIntent.SEARCH_VENUE)
+        self.assertEqual(result.entities.sport_type, 'bóng đá')
+        self.assertEqual(result.entities.court_type, '7 người')
+        self.assertEqual(result.entities.preferred_time, 'evening')
+
+    def test_intent_recommend_slot(self):
+        result = self.route('Gợi ý khung giờ phù hợp cho sân cầu lông ngày mai')
+        self.assertEqual(result.intent, AssistantIntent.RECOMMEND_SLOT)
+        self.assertEqual(result.entities.date, '2026-08-11')
+
+    def test_follow_up_keeps_context(self):
+        result = self.route('Ngày mai thì sao?', {
+            'sport_type': 'tennis', 'booking_date': '2026-08-14',
+            'start_time': '19:00', 'result_field_ids': [10, 11],
+        })
+        self.assertTrue(result.is_follow_up)
+        self.assertEqual(result.entities.sport_type, 'tennis')
+        self.assertEqual(result.entities.start_time, '19:00')
+        self.assertEqual(result.entities.date, '2026-08-11')
+        self.assertFalse(result.context_reset)
+
+    def test_new_request_clears_old_context(self):
+        result = self.route('Tìm sân tennis ngày mai', {
+            'sport_type': 'cầu lông', 'booking_date': '2026-08-14',
+            'start_time': '19:00', 'field_id': 10, 'result_field_ids': [10, 11],
+        })
+        self.assertTrue(result.context_reset)
+        self.assertEqual(result.entities.sport_type, 'tennis')
+        self.assertIsNone(result.entities.start_time)
+
+    def test_search_time_change_is_not_booking_reschedule(self):
+        result = self.route('Đổi sang 8 giờ', {
+            'sport_type': 'cầu lông', 'booking_date': '2026-08-11', 'start_time': '19:00',
+        })
+        self.assertEqual(result.intent, AssistantIntent.RECOMMEND_SLOT)
+        self.assertEqual(result.entities.start_time, '08:00')
+
+    def test_second_result_phrase_routes_as_follow_up(self):
+        result = self.route('Cho tôi sân thứ 2', {
+            'sport_type': 'cầu lông', 'booking_date': '2026-08-11', 'result_field_ids': [3, 7],
+        })
+        self.assertEqual(result.intent, AssistantIntent.FOLLOW_UP)
+
+    def test_cheaper_phrase_routes_as_slot_recommendation(self):
+        result = self.route('Còn sân nào rẻ hơn?', {
+            'sport_type': 'cầu lông', 'booking_date': '2026-08-11', 'reference_price': 200000,
+        })
+        self.assertEqual(result.intent, AssistantIntent.RECOMMEND_SLOT)
+
+    def test_intent_occupancy_insight(self):
+        for message in ('Tuần này sân nào ít khách?', 'Khung giờ nào đang thấp điểm?', 'Tôi nên chạy ưu đãi lúc nào?'):
+            with self.subTest(message=message):
+                self.assertEqual(self.route(message).intent, AssistantIntent.OCCUPANCY_INSIGHT)
+
+    def test_product_questions_use_backend_product_intent(self):
+        for message in ('Sản phẩm còn hàng không?', 'Có dịch vụ thêm nào?', 'Số lượng vợt cho thuê còn bao nhiêu?'):
+            with self.subTest(message=message):
+                self.assertEqual(self.route(message).intent, AssistantIntent.GET_PRODUCTS)
+
     def test_availability_uses_conversation_context(self):
         result = self.route('Sân này còn 19h không?', {
             'sport_type': 'cầu lông', 'booking_date': '2026-08-11', 'field_id': 12,
@@ -84,6 +145,21 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(payload['intent'], 'OUT_OF_SCOPE')
         self.assertEqual(payload['suggestions'], [])
         self.assertEqual(repository.queries, 0)
+
+    def test_out_of_scope_clears_old_results(self):
+        class NoQueryRepository:
+            def scope_for_user(self, _user):
+                pass
+
+            def __getattr__(self, _name):
+                raise AssertionError('OUT_OF_SCOPE không được query repository')
+
+        payload = AIAssistantService(NoQueryRepository()).ask('Viết code Python', context={
+            'sport_type': 'tennis', 'result_field_ids': [1, 2], 'result_time_slot_ids': [3, 4],
+        })
+        self.assertTrue(payload['context_reset'])
+        self.assertEqual(payload['understood'].get('result_field_ids'), None)
+        self.assertEqual(payload['suggestions'], [])
 
 
 if __name__ == '__main__':

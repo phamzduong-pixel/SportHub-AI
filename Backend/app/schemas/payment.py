@@ -5,6 +5,7 @@ from math import ceil
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..models.payment import PaymentMethod, PaymentStatus, PaymentType
+from .booking import BookingProductSnapshot, BookingSlotSnapshot
 from .user import RequestModel
 
 
@@ -46,6 +47,9 @@ class InvoiceInfo(BaseModel):
     field_name: str
     facility_name: str
     booking_date: date
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     total_amount: float
     deposit_amount: float
     remaining_payment_amount: float
@@ -68,6 +72,11 @@ class DepositReceiptResponse(BaseModel):
     booking_date: date
     start_time: str
     end_time: str
+    duration_minutes: int
+    selected_slots: list[BookingSlotSnapshot] = []
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     total_amount: float
     deposit_paid: float
     remaining_amount: float
@@ -95,6 +104,9 @@ class PaymentResponse(BaseModel):
     field_name: str
     booking_date: date
     booking_total: float
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     transaction_code: str
     amount: float
     total_amount: float
@@ -144,6 +156,8 @@ class PaymentListResponse(BaseModel):
 class PaymentSummary(BaseModel):
     booking_id: int
     booking_code: str
+    court_amount: float
+    service_amount: float
     total_amount: float
     deposit_amount: float
     additional_paid_amount: float

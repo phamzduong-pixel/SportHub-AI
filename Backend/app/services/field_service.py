@@ -45,6 +45,13 @@ class FieldService:
             raise HTTPException(status_code=409, detail='Chỉ có thể tạo sân trong cơ sở đã được duyệt và đang hoạt động')
         data['location'] = facility.location
         item = self.repository.create(data)
+        
+        # Sync sport_type to facility
+        if item.sport_type:
+            current_sports = set(facility.sports or [])
+            if item.sport_type not in current_sports:
+                facility.sports = list(current_sports | {item.sport_type})
+                
         record_audit(self.repository.db, user, 'field', item.id, 'field_created', {'name': item.name, 'base_price': float(item.base_price), 'status': item.status})
         self.repository.db.commit(); return item
 
@@ -61,6 +68,15 @@ class FieldService:
             data['location'] = facility.location
         old_price = float(field.base_price); old_status = field.status
         item = self.repository.update(field, data)
+
+        # Sync sport_type to facility
+        if item.sport_type:
+            fac = self.repository.db.get(Facility, item.facility_id)
+            if fac:
+                current_sports = set(fac.sports or [])
+                if item.sport_type not in current_sports:
+                    fac.sports = list(current_sports | {item.sport_type})
+
         record_audit(self.repository.db, user, 'field', item.id, 'field_updated', {'old_base_price': old_price, 'new_base_price': float(item.base_price), 'old_status': old_status, 'new_status': item.status})
         self.repository.db.commit(); return item
 

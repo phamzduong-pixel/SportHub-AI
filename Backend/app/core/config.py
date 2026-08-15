@@ -14,6 +14,9 @@ class Settings:
     SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_urlsafe(48)
     API_KEY_ENCRYPTION_KEY = os.getenv('API_KEY_ENCRYPTION_KEY')
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-5.6')
+    AI_PROVIDER_TIMEOUT_SECONDS = float(os.getenv('AI_PROVIDER_TIMEOUT_SECONDS', '8'))
+    AI_PROVIDER_MAX_RETRIES = int(os.getenv('AI_PROVIDER_MAX_RETRIES', '1'))
     ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES', '1440'))
     ALGORITHM = 'HS256'
     DATABASE_URL = os.getenv('DATABASE_URL', f"sqlite:///{DATA_DIR / 'sporthub.db'}")

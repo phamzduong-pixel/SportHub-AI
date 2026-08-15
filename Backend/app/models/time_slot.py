@@ -21,3 +21,4 @@ class TimeSlot(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     field = relationship('Field', back_populates='time_slots')
     bookings = relationship('Booking', back_populates='time_slot', passive_deletes=True)
+    booking_slots = relationship('BookingSlot', back_populates='time_slot', passive_deletes=True)

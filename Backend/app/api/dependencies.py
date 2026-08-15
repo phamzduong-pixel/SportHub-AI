@@ -21,10 +21,13 @@ def _resolve_user(token: str | None, db: Session) -> User:
     try:
         payload = decode_access_token(token)
         user_id = int(payload.get('sub', ''))
+        session_version = int(payload.get('sv', -1))
     except (JWTError, TypeError, ValueError):
         raise credentials_error
     user = db.get(User, user_id)
     if user is None:
+        raise credentials_error
+    if session_version != int(user.session_version or 0):
         raise credentials_error
     if not user.is_active:
         raise HTTPException(status_code=403, detail='Tài khoản đã bị khóa')

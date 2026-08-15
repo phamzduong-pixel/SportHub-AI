@@ -5,6 +5,7 @@ from pathlib import Path
 
 import joblib
 import pandas as pd
+import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
@@ -19,6 +20,8 @@ SAVED_MODELS_DIR = Path(__file__).resolve().parents[1] / 'saved_models'
 MODEL_PATH = SAVED_MODELS_DIR / 'demand_pipeline.joblib'
 METRICS_PATH = SAVED_MODELS_DIR / 'metrics.json'
 COMPARISON_PATH = SAVED_MODELS_DIR / 'model_comparison.csv'
+METADATA_PATH = SAVED_MODELS_DIR / 'model_metadata.json'
+MODEL_VERSION = 'demand-rf-v1'
 
 
 def candidate_models():
@@ -48,6 +51,9 @@ def train_and_save() -> dict:
     best = comparison[0]; trained_at = datetime.now(timezone.utc).isoformat()
     metadata = {
         'model_name': best['model_name'], 'trained_at': trained_at,
+        'model_type': type(trained[best['model_name']].named_steps['classifier']).__name__,
+        'model_version': MODEL_VERSION, 'sklearn_version': sklearn.__version__,
+        'feature_names': FEATURE_COLUMNS,
         'dataset_path': str(DEFAULT_DATASET_PATH), 'dataset_type': 'synthetic',
         'dataset_note': 'Dữ liệu mô phỏng có seed cố định cho mục đích học tập, không phải dữ liệu thị trường thực tế.',
         'dataset_rows': len(frame), 'train_size': len(x_train), 'test_size': len(x_test),
@@ -59,6 +65,7 @@ def train_and_save() -> dict:
     SAVED_MODELS_DIR.mkdir(parents=True, exist_ok=True)
     joblib.dump(artifact, MODEL_PATH)
     METRICS_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    METADATA_PATH.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
     pd.DataFrame([{key: value for key, value in item.items() if key != 'confusion_matrix'} for item in comparison]).to_csv(COMPARISON_PATH, index=False)
     return report
 

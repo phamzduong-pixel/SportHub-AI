@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -38,10 +39,12 @@ class MaintenanceWorkflowTests(unittest.TestCase):
             field_b = Field(owner_id=owner_b.id, facility_id=facility_b.id, name='Sân bảo trì B', sport_type='Bóng đá', location='B', capacity=10, base_price=500000, status='available', amenities=[])
             db.add_all([field_a, field_b]); db.flush()
             slot_a = TimeSlot(field_id=field_a.id, name='Ca sáng A', start_time=time(8), end_time=time(10), price=Decimal('500000'), is_active=True)
+            slot_a_later = TimeSlot(field_id=field_a.id, name='Ca trưa A', start_time=time(12), end_time=time(14), price=Decimal('600000'), is_active=True)
             slot_b = TimeSlot(field_id=field_b.id, name='Ca sáng B', start_time=time(8), end_time=time(10), price=Decimal('500000'), is_active=True)
-            db.add_all([slot_a, slot_b]); db.commit()
+            db.add_all([slot_a, slot_a_later, slot_b]); db.commit()
             self.owner_a_id, self.customer_id = owner_a.id, customer.id
-            self.field_a_id, self.field_b_id, self.slot_a_id = field_a.id, field_b.id, slot_a.id
+            self.field_a_id, self.field_b_id = field_a.id, field_b.id
+            self.slot_a_id, self.slot_a_later_id = slot_a.id, slot_a_later.id
 
         def override_db():
             with self.Session() as db:
@@ -121,15 +124,35 @@ class MaintenanceWorkflowTests(unittest.TestCase):
     def test_cancel_reopens_availability(self):
         item = self.create_maintenance()
         unavailable = self.client.get(f'/availability?date={self.day}&field_id={self.field_a_id}').json()
-        self.assertEqual(unavailable, [])
+        self.assertEqual([slot['id'] for slot in unavailable[0]['available_slots']], [self.slot_a_later_id])
         cancelled = self.client.patch(f"/maintenance/{item['id']}/cancel", headers=self.owner_a)
         self.assertEqual(cancelled.json()['status'], 'CANCELLED')
         reopened = self.client.get(f'/availability?date={self.day}&field_id={self.field_a_id}').json()
-        self.assertEqual([slot['id'] for slot in reopened[0]['available_slots']], [self.slot_a_id])
+        self.assertEqual([slot['id'] for slot in reopened[0]['available_slots']], [self.slot_a_id, self.slot_a_later_id])
+
+    def test_maintenance_in_gap_does_not_mark_non_consecutive_booking_affected(self):
+        booking = self.client.post('/bookings', headers=self.customer, json={
+            'field_id': self.field_a_id,
+            'time_slot_id': self.slot_a_id,
+            'time_slot_ids': [self.slot_a_id, self.slot_a_later_id],
+            'booking_date': self.day.isoformat(),
+            'note': None,
+        })
+        self.assertEqual(booking.status_code, 201, booking.text)
+        maintenance = self.create_maintenance(starts_at=self.at(10), ends_at=self.at(12))
+        self.assertEqual(maintenance['affected_bookings'], [])
 
     def test_ai_does_not_suggest_maintenance_slot(self):
         self.create_maintenance()
-        response = self.client.post('/ai/assistant', json={'message': f'Tìm sân bóng đá lúc 8 giờ ngày {self.day.isoformat()}'})
+        class Provider:
+            def generate_json(self, **kwargs):
+                available = kwargs['system_data']['available_slots']
+                return {'status': 'OK', 'recommendations': [
+                    {'court_id': item['court_id'], 'slot_id': item['slot_id'], 'reason': 'Slot đã được backend kiểm tra.'}
+                    for item in available[:3]
+                ]}
+        with patch('app.services.ai_feature_service.StructuredAIProvider', return_value=Provider()):
+            response = self.client.post('/ai/assistant', json={'message': f'Tìm sân bóng đá lúc 8 giờ ngày {self.day.isoformat()}'})
         self.assertEqual(response.status_code, 200, response.text)
         suggestions = response.json()['suggestions']
         self.assertFalse(any(item['field_id'] == self.field_a_id and item['time_slot_id'] == self.slot_a_id for item in suggestions))

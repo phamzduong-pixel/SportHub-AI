@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 from ..core.config import settings
 from ..models.user import User
 from ..repositories.ai_repository import AIRepository
+from ..schemas.ai import SlotRecommendationRequest
+from .ai_feature_service import AIFeatureService
+from .inventory_service import InventoryService
 from .ai_domain_policy import NO_DATA_REPLY, OUT_OF_SCOPE_REPLY, ScopeClassification
 from .ai_intent_router import AssistantIntent, IntentRoute, IntentRouter
 
@@ -39,10 +42,12 @@ def plain(value: str) -> str:
 @dataclass
 class SearchCriteria:
     sport_type: str | None = None
+    court_type: str | None = None
     booking_date: date | None = None
     start_minute: int | None = None
     end_minute: int | None = None
     duration_minutes: int | None = None
+    time_ranges: list[tuple[int, int]] = field(default_factory=list)
     location: str | None = None
     max_price: float | None = None
     people: int | None = None
@@ -74,12 +79,14 @@ class AIAssistantService:
         self._conversation_context = router_context
         route = self.intent_router.route(message, router_context, today=datetime.now(self.tz).date())
         self._active_route = route
+        effective_context = {} if route.context_reset else router_context
+        self._conversation_context = effective_context
         logger.info('Assistant intent=%s confidence=%.2f', route.intent.value, route.confidence)
 
         if route.intent == AssistantIntent.OUT_OF_SCOPE:
             return self._response(
                 OUT_OF_SCOPE_REPLY, SearchCriteria(), [], needs_clarification=False,
-                classification=ScopeClassification.OUT_OF_SCOPE,
+                classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
             )
         if route.intent == AssistantIntent.GREETING:
             return self._response(
@@ -90,7 +97,10 @@ class AIAssistantService:
             return self._response(
                 'Bạn muốn hỏi về sân, lịch trống, booking hay thanh toán nào trong SportHub AI?',
                 SearchCriteria(), [], needs_clarification=True, classification=ScopeClassification.UNCLEAR,
+                status='NEED_MORE_DATA',
             )
+        if route.intent == AssistantIntent.PARTNER_APPLICATION_SUPPORT:
+            return self._answer_partner_application(query)
         information_intents = {
             AssistantIntent.GET_BOOKING: 'booking_status',
             AssistantIntent.PAYMENT_SUPPORT: 'payment',
@@ -101,10 +111,22 @@ class AIAssistantService:
             return self._answer_information(query, information_intents[route.intent])
         if route.intent in (AssistantIntent.CANCEL_BOOKING, AssistantIntent.RESCHEDULE_BOOKING):
             return self._answer_booking_action(query, route.intent)
+        if route.intent == AssistantIntent.OCCUPANCY_INSIGHT:
+            return self._answer_occupancy_insight(query)
+        if route.intent == AssistantIntent.GET_PRODUCTS:
+            return self._answer_products(query, context_field_id, effective_context)
 
         criteria = self._extract(query, context_field_id)
-        self._merge_context(criteria, context or {})
-        self._resolve_result_reference(criteria, query, context or {})
+        fresh_end_minute = criteria.end_minute
+        self._merge_context(criteria, effective_context)
+        if route.entities.start_time and not route.entities.end_time and fresh_end_minute is None:
+            criteria.end_minute = None
+        self._resolve_result_reference(criteria, query, effective_context)
+        if self._is_venue_count_query(query):
+            return self._answer_venue_count(criteria)
+        if 're hon' in query and effective_context.get('reference_price') is not None:
+            criteria.max_price = max(0, float(effective_context['reference_price']) - 0.01)
+            criteria.prefer_cheap = True
         if criteria.requested_field_id and self._active_route and not self._active_route.entities.venue_name:
             referenced_court = self.repository.field_context(criteria.requested_field_id)
             if referenced_court:
@@ -115,40 +137,79 @@ class AIAssistantService:
             return self._answer_venue_detail(criteria)
         logger.info('Search criteria: %s', self._understood(criteria))
 
+        venue_search_intents = {
+            AssistantIntent.SEARCH_VENUE, AssistantIntent.RECOMMEND_VENUE,
+            AssistantIntent.FOLLOW_UP, AssistantIntent.CHECK_AVAILABILITY, AssistantIntent.RECOMMEND_SLOT,
+        }
+        location_first_request = bool(criteria.location) or (
+            criteria.booking_date is None
+            and criteria.start_minute is None
+            and any(term in query for term in ('co san', 'san nao', 'toi muon san', 'muon san'))
+        )
+        if route.intent in venue_search_intents and location_first_request:
+            venue_response = self._venue_search_response(criteria)
+            if venue_response is not None:
+                return venue_response
+
         if criteria.invalid_date:
-            return self._response('Ngày bạn nhập không hợp lệ hoặc đã qua. Vui lòng chọn một ngày từ hôm nay trở đi.', criteria, [], needs_clarification=True)
+            return self._response('Ngày bạn nhập không hợp lệ hoặc đã qua. Vui lòng chọn một ngày từ hôm nay trở đi.', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['date'])
         if criteria.invalid_time:
-            return self._response('Khung giờ không hợp lệ. Giờ kết thúc phải sau giờ bắt đầu.', criteria, [], needs_clarification=True)
+            return self._response('Khung giờ không hợp lệ. Giờ kết thúc phải sau giờ bắt đầu.', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['end_time'])
         if not criteria.sport_type:
-            return self._response('Bạn muốn tìm sân cho môn thể thao nào?', criteria, [], needs_clarification=True)
+            return self._response('Bạn muốn tìm sân cho môn thể thao nào?', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['sport_type'])
         if not criteria.booking_date:
-            return self._response(f'Bạn muốn chơi {criteria.sport_type} vào ngày nào?', criteria, [], needs_clarification=True)
+            return self._response(f'Bạn muốn chơi {criteria.sport_type} vào ngày nào?', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['date'])
         if criteria.near_me and not criteria.location:
-            return self._response('Bạn muốn tìm sân gần khu vực nào?', criteria, [], needs_clarification=True, classification=ScopeClassification.UNCLEAR)
+            return self._response('Bạn muốn tìm sân gần khu vực nào?', criteria, [], needs_clarification=True, classification=ScopeClassification.UNCLEAR, status='NEED_MORE_DATA', missing_fields=['location'])
 
-        inventory = self.repository.available_candidates(criteria.sport_type, criteria.booking_date, None)
-        if criteria.people is not None:
-            inventory = [(court, slot) for court, slot in inventory if court.capacity >= criteria.people]
-        now = datetime.now(self.tz)
-        if criteria.booking_date == now.date():
-            current = now.time().replace(tzinfo=None)
-            inventory = [(court, slot) for court, slot in inventory if slot.start_time > current]
-
-        if not inventory:
-            label = criteria.booking_date.strftime('%d/%m/%Y')
-            return self._response(f'Hiện tôi chưa tìm thấy sân {criteria.sport_type} phù hợp ngày {label} trong dữ liệu SportHub AI.', criteria, [])
-
-        exact = [pair for pair in inventory if self._matches(pair, criteria)]
-        logger.info('Backend search completed: %d available, %d exact', len(inventory), len(exact))
-        strategy = 'exact' if exact else 'nearest_alternative'
-        ranked = sorted(exact or inventory, key=lambda pair: self._rank(pair, criteria, exact=bool(exact)))[:5]
-        suggestions = [self._suggestion(pair, criteria, strategy) for pair in ranked]
-        reply = self._reply(criteria, suggestions, exact=bool(exact))
+        ranked_result = AIFeatureService(self.repository.db).recommend_slots(SlotRecommendationRequest(
+            sport_type=criteria.sport_type, booking_date=criteria.booking_date,
+            court_type=criteria.court_type,
+            court_id=criteria.requested_field_id, slot_id=criteria.requested_time_slot_id,
+            start_time=time(criteria.start_minute // 60, criteria.start_minute % 60) if criteria.start_minute is not None else None,
+            end_time=time(criteria.end_minute // 60, criteria.end_minute % 60) if criteria.end_minute is not None and criteria.end_minute < 1440 else None,
+            time_ranges=[
+                (time(start // 60, start % 60), time(end // 60, end % 60))
+                for start, end in criteria.time_ranges
+            ],
+            duration_minutes=criteria.duration_minutes,
+            max_price=criteria.max_price, location=criteria.location,
+            allow_alternatives=criteria.allow_alternatives,
+        ))
+        if ranked_result['status'] != 'OK':
+            return self._response(
+                ranked_result['message'], criteria, [], status=ranked_result['status'],
+                missing_fields=ranked_result.get('missing_fields', []),
+                needs_clarification=ranked_result['status'] == 'NEED_MORE_DATA',
+            )
+        suggestions = []
+        for item in ranked_result['recommendations'][:3]:
+            start_label = item['start_time'].strftime('%H:%M')
+            end_label = item['end_time'].strftime('%H:%M')
+            alternative = criteria.start_minute is not None and start_label != self._format_minutes(criteria.start_minute)
+            suggestions.append({
+                'facility_id': item.get('facility_id'),
+                'field_id': item['court_id'], 'facility_name': item['facility_name'],
+                'court_name': item['court_name'], 'field_name': item['court_name'],
+                'sport_type': item['sport_type'], 'court_type': item.get('court_type'), 'location': item['location'],
+                'image_url': item.get('image_url'), 'time_slot_id': item['slot_id'],
+                'time_slot_ids': item.get('slot_ids', [item['slot_id']]),
+                'selected_slots': item.get('selected_slots', []),
+                'slot_name': item['slot_name'], 'start_time': start_label, 'end_time': end_label,
+                'price': item['price'], 'duration_minutes': item.get('duration_minutes', 0),
+                'rating': item['rating'], 'distance_km': item.get('distance_km'),
+                'booking_date': item['booking_date'], 'reason': item['reason'],
+                'availability_status': 'available', 'is_nearest_alternative': alternative,
+                'alternative_type': 'nearest_time' if alternative else None,
+            })
+        reply = ranked_result['message']
         if route.intent == AssistantIntent.CREATE_BOOKING:
             reply += ' Hãy mở phương án phù hợp, kiểm tra lại thông tin rồi tự xác nhận đặt sân.'
         response = self._response(reply, criteria, suggestions)
         response['understood']['result_field_ids'] = [item['field_id'] for item in suggestions]
         response['understood']['result_time_slot_ids'] = [item['time_slot_id'] for item in suggestions]
+        response['understood']['result_prices'] = [item['price'] for item in suggestions]
+        response['understood']['reference_price'] = suggestions[0]['price'] if suggestions else None
         return response
 
     def _answer_venue_detail(self, criteria: SearchCriteria):
@@ -173,6 +234,211 @@ class AIAssistantService:
         if self._active_route:
             self._active_route.entities.venue_name = court.name
         return self._response(reply, criteria, [])
+
+    def _answer_products(self, query: str, context_field_id: int | None, context: dict[str, Any]):
+        field_id = context_field_id or context.get('field_id')
+        if not field_id:
+            result_ids = context.get('result_field_ids') or []
+            if len(result_ids) == 1:
+                field_id = result_ids[0]
+        criteria = SearchCriteria(requested_field_id=int(field_id)) if field_id else SearchCriteria()
+        if not field_id:
+            return self._response(
+                'Bạn muốn xem sản phẩm và dịch vụ của sân/cơ sở nào trong SportHub AI?',
+                criteria, [], needs_clarification=True, status='NEED_MORE_DATA',
+                missing_fields=['field_id'],
+            )
+        field = self.repository.field_context(int(field_id))
+        if field is None or field.facility_id is None:
+            return self._response(NO_DATA_REPLY, criteria, [])
+        products = InventoryService(self.repository.db).public_available(field.facility_id, field.sport_type)
+        if not products:
+            return self._response(
+                f'Hiện {field.facility.name if field.facility else field.name} chưa có sản phẩm hoặc dịch vụ khả dụng cho môn {field.sport_type}.',
+                criteria, [], status='NO_RESULT',
+            )
+        lines = []
+        for product in products[:10]:
+            price = f'{float(product["price"]):,.0f}đ'.replace(',', '.')
+            availability = (
+                f'còn {product["available_quantity"]} {product["unit"]}'
+                if product['track_inventory'] else 'đang cung cấp'
+            )
+            lines.append(f'{product["name"]}: {price}/{product["unit"]}, {availability}')
+        facility_name = field.facility.name if field.facility else field.name
+        return self._response(
+            f'Sản phẩm/dịch vụ khả dụng tại {facility_name} cho môn {field.sport_type}: ' + '; '.join(lines) + '.',
+            criteria, [], status='SUCCESS',
+        )
+
+    def _venue_search_response(self, criteria: SearchCriteria):
+        if not criteria.location:
+            if criteria.sport_type:
+                return self._response(
+                    f'Bạn muốn tìm sân {criteria.sport_type} ở khu vực nào?', criteria, [],
+                    needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location'],
+                )
+            return self._response(
+                'Bạn muốn tìm sân ở khu vực nào hoặc cho môn thể thao nào?', criteria, [],
+                needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location', 'sport_type'],
+            )
+        fields = self.repository.search_venues(
+            location=criteria.location, sport_type=criteria.sport_type,
+            court_type=criteria.court_type, max_price=criteria.max_price, limit=6,
+        )
+        if not fields:
+            label = criteria.location
+            sport = f' cho môn {criteria.sport_type}' if criteria.sport_type else ''
+            return self._response(
+                f'Hiện tại mình chưa tìm thấy cơ sở SportHub{sport} phù hợp ở {label} trong dữ liệu hệ thống.',
+                criteria, [], venue_results=[], status='NO_RESULT',
+            )
+        results = [self._venue_result(field) for field in fields]
+        if not criteria.sport_type:
+            response = self._response(
+                f'Mình tìm thấy {len(results)} sân/cơ sở thực tế ở {criteria.location}. Bạn muốn chơi môn nào để mình lọc chính xác hơn?',
+                criteria, [], venue_results=results, needs_clarification=True,
+                status='NEED_MORE_DATA', missing_fields=['sport_type'],
+            )
+            return self._with_venue_context(response, results)
+        if not criteria.booking_date:
+            response = self._response(
+                f'Mình tìm thấy {len(results)} sân {criteria.sport_type} ở {criteria.location}. Bạn muốn đặt vào ngày nào?',
+                criteria, [], venue_results=results, needs_clarification=True,
+                status='NEED_MORE_DATA', missing_fields=['date'],
+            )
+            return self._with_venue_context(response, results)
+        return None
+
+    def _answer_venue_count(self, criteria: SearchCriteria):
+        count = self.repository.count_venues(
+            location=criteria.location, sport_type=criteria.sport_type,
+        )
+        sport = f' {criteria.sport_type}' if criteria.sport_type else ''
+        location = f' ở {criteria.location}' if criteria.location else ''
+        if count == 0:
+            reply = (
+                f'Hiện tại SportHub chưa có cơ sở{sport} phù hợp{location} '
+                'trong dữ liệu hệ thống.'
+            )
+            status = 'NO_RESULT'
+        else:
+            reply = (
+                f'Hiện tại SportHub có {count} cơ sở{sport} phù hợp{location} '
+                'trong dữ liệu hệ thống.'
+            )
+            status = 'OK'
+        response = self._response(reply, criteria, [], venue_results=[], status=status)
+        response['understood']['venue_count'] = count
+        return response
+
+    @staticmethod
+    def _is_venue_count_query(query: str) -> bool:
+        return any(term in query for term in ('bao nhieu co so', 'co bao nhieu co so', 'so luong co so'))
+
+    @staticmethod
+    def _with_venue_context(response, results):
+        response['understood']['result_field_ids'] = [item['field_id'] for item in results]
+        response['understood']['result_prices'] = [item['base_price'] for item in results]
+        response['understood']['reference_price'] = results[0]['base_price'] if results else None
+        return response
+
+    @staticmethod
+    def _venue_result(field):
+        facility = field.facility
+        return {
+            'facility_id': field.facility_id,
+            'field_id': field.id,
+            'facility_name': facility.name if facility else field.name,
+            'court_name': field.name,
+            'sport_type': field.sport_type,
+            'court_type': f'Sức chứa {field.capacity} người',
+            'location': facility.location if facility else field.location,
+            'base_price': float(field.base_price),
+            'rating': float(field.rating or 0),
+            'image_url': field.image_url,
+        }
+
+    def _answer_occupancy_insight(self, query: str):
+        criteria = SearchCriteria()
+        if not self.current_user:
+            return self._response(
+                'Bạn cần đăng nhập tài khoản OWNER để xem phân tích công suất.', criteria, [],
+                needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['owner_session'],
+            )
+        if self.current_user.role != 'OWNER':
+            return self._response('Phân tích công suất chỉ dành cho OWNER của cơ sở.', criteria, [])
+        today = datetime.now(self.tz).date()
+        date_from = date_to = None
+        if 'tuan nay' in query:
+            date_from = today - timedelta(days=today.weekday())
+            date_to = date_from + timedelta(days=6)
+        elif 'thang nay' in query:
+            date_from = today.replace(day=1)
+            next_month = (date_from.replace(day=28) + timedelta(days=4)).replace(day=1)
+            date_to = next_month - timedelta(days=1)
+        report = AIFeatureService(self.repository.db).occupancy_summary(
+            self.current_user, date_from, date_to, None,
+        )
+        promotions = ' '.join(report['promotion_suggestions'][:2])
+        reply = f'Gợi ý AI: {report["summary"]}'
+        if promotions:
+            reply += f' Đề xuất tham khảo: {promotions}'
+        reply += ' Tôi không tự thay đổi giá hoặc tạo chương trình khuyến mại.'
+        return self._response(reply, criteria, [])
+
+    def _answer_partner_application(self, query: str):
+        criteria = SearchCriteria()
+        process = (
+            'Quy trình gồm: mở hồ sơ đối tác, nhập thông tin người đại diện (họ tên, điện thoại, email), '
+            'thông tin cơ sở dự kiến (tên, địa chỉ/khu vực, mô tả), xác nhận thông tin rồi gửi để SYSTEM_ADMIN xét duyệt. '
+            'Bước xin quyền OWNER này chưa yêu cầu giấy phép hoặc ảnh cơ sở; các tài liệu xác minh thuộc bước đăng ký cơ sở sau khi được duyệt.'
+        )
+        if not self.current_user:
+            return self._response(
+                process + ' Bạn cần đăng nhập để tôi kiểm tra trạng thái hồ sơ thuộc tài khoản của bạn.',
+                criteria, [], partner_application_status=None,
+                action={'label': 'Đăng ký trở thành chủ sân', 'route': '/owner-application', 'kind': 'link'},
+            )
+        if self.current_user.role == 'SYSTEM_ADMIN':
+            return self._response(
+                'Chức năng này hướng dẫn CUSTOMER đăng ký trở thành OWNER. SYSTEM_ADMIN là người xem xét và quyết định APPROVED hoặc REJECTED; tôi không tự duyệt hồ sơ.',
+                criteria, [],
+            )
+
+        application = self.repository.latest_owner_application(self.current_user.id)
+        raw_status = application.status if application else None
+        if raw_status == 'PENDING':
+            status = 'PENDING'
+            reply = 'Hồ sơ của bạn đang chờ SYSTEM_ADMIN xét duyệt. Bạn có thể mở hồ sơ để xem lại thông tin đã gửi; AI không thể tự duyệt hoặc thay đổi trạng thái.'
+            action = {'label': 'Xem hồ sơ', 'route': '/owner-application/status', 'kind': 'link'}
+        elif raw_status == 'APPROVED' or (application is None and self.current_user.role == 'OWNER'):
+            status = 'APPROVED'
+            reply = 'Hồ sơ của bạn đã được SYSTEM_ADMIN phê duyệt và tài khoản hiện có thể truy cập khu vực quản lý OWNER.'
+            action = {'label': 'Đi tới khu vực quản lý', 'route': '/management/dashboard', 'kind': 'link'}
+        elif raw_status == 'REJECTED':
+            status = 'REJECTED'
+            reason = (application.rejection_reason or application.admin_note or '').strip()
+            reason_text = f' Lý do được SYSTEM_ADMIN ghi nhận: {reason}' if reason else ' SYSTEM_ADMIN chưa ghi lý do cụ thể trong hồ sơ.'
+            reply = 'Hồ sơ của bạn đã bị từ chối.' + reason_text + ' Bạn có thể cập nhật thông tin và gửi lại để được xem xét.'
+            action = {'label': 'Cập nhật và gửi lại hồ sơ', 'route': '/owner-application', 'kind': 'link'}
+        else:
+            status = 'NONE'
+            if raw_status == 'DRAFT':
+                state_text = 'Bạn có bản nháp chưa gửi xét duyệt.'
+            elif raw_status == 'WITHDRAWN':
+                state_text = 'Hồ sơ trước đó đã được rút và hiện không có hồ sơ đang chờ xét duyệt.'
+            else:
+                state_text = 'Bạn chưa có hồ sơ đăng ký OWNER.'
+            reply = f'{state_text} {process}'
+            action = {'label': 'Đăng ký trở thành chủ sân', 'route': '/owner-application', 'kind': 'link'}
+
+        response = self._response(
+            reply, criteria, [], partner_application_status=status, action=action,
+        )
+        response['understood']['partner_application_status'] = status
+        response['understood']['partner_application_id'] = application.id if application else None
+        return response
 
     def _answer_booking_action(self, query: str, intent: AssistantIntent):
         criteria = SearchCriteria()
@@ -271,10 +537,15 @@ class AIAssistantService:
         if not booking:
             return self._response(NO_DATA_REPLY, criteria, [], intent=intent)
         if intent == 'booking_status':
+            booking_slots = booking.booking_slots or []
+            schedule = ', '.join(
+                f'{slot.start_time_snapshot:%H:%M}–{slot.end_time_snapshot:%H:%M}'
+                for slot in booking_slots
+            ) or f'{booking.start_time_snapshot:%H:%M}–{booking.end_time_snapshot:%H:%M}'
             reply = (
                 f'Booking {booking.booking_code} tại {booking.field.name} đang ở trạng thái {booking.status}; '
                 f'trạng thái thanh toán là {booking.payment_status}. Ngày chơi {booking.booking_date:%d/%m/%Y}, '
-                f'{booking.start_time_snapshot:%H:%M}–{booking.end_time_snapshot:%H:%M}.'
+                f'các khung giờ: {schedule}.'
             )
         elif intent == 'policy':
             refund = booking.cancellation_refund_percent
@@ -322,6 +593,9 @@ class AIAssistantService:
         time_query = re.sub(r'\b20\d{2}-\d{1,2}-\d{1,2}\b', ' ', query)
         time_query = re.sub(r'\b\d{1,2}[/-]\d{1,2}(?:[/-]20\d{2})?\b', ' ', time_query)
         start, end = self._time_range(time_query)
+        time_ranges = self._time_ranges(time_query)
+        if len(time_ranges) > 1:
+            start, end = time_ranges[0]
         duration = self._duration(time_query)
         if duration and start is not None and end is None:
             end = min(24 * 60, start + duration)
@@ -329,17 +603,19 @@ class AIAssistantService:
         requested = context_field_id if context_field_id and ('san nay' in query or 'co so nay' in query) else self._field_by_name(query)
         return SearchCriteria(
             sport_type=next((value for key, value in SPORT_ALIASES.items() if key in query), None),
+            court_type=self._active_route.entities.court_type if self._active_route else None,
             booking_date=booking_date,
             start_minute=start,
             end_minute=end,
             duration_minutes=duration or (end - start if start is not None and end is not None else None),
-            location=self._location(query),
+            time_ranges=time_ranges,
+            location=self._active_route.entities.location if self._active_route else None,
             max_price=self._price(query),
             people=self._people(query),
             special_requirements=[value for key, value in SPECIAL_REQUIREMENTS.items() if key in query],
             requested_field_id=requested,
             allow_alternatives=any(term in query for term in ('khong co thi', 'gio khac', 'san khac', 'gan nhat')),
-            prefer_cheap=any(term in query for term in ('re mot chut', 'gia re', 're nhat', 'tiet kiem')),
+            prefer_cheap=any(term in query for term in ('re mot chut', 'gia re', 're nhat', 're hon', 'tiet kiem')),
             near_me=any(term in query for term in ('gan day', 'gan toi', 'quanh day')),
             invalid_date=invalid_date,
             invalid_time=start is not None and end is not None and end <= start,
@@ -349,6 +625,7 @@ class AIAssistantService:
     def _merge_context(criteria: SearchCriteria, context: dict[str, Any]):
         values = {
             'sport_type': context.get('sport_type'),
+            'court_type': context.get('court_type'),
             'location': context.get('location'),
             'max_price': context.get('max_price'),
             'people': context.get('people'),
@@ -370,125 +647,38 @@ class AIAssistantService:
                 except (TypeError, ValueError):
                     pass
 
-    def _matches(self, pair, criteria: SearchCriteria) -> bool:
-        court, slot = pair
-        amenities = plain(' '.join(court.amenities or []))
-        return (
-            (not criteria.requested_field_id or court.id == criteria.requested_field_id)
-            and (not criteria.requested_time_slot_id or slot.id == criteria.requested_time_slot_id)
-            and (not criteria.location or plain(criteria.location) in plain(court.location))
-            and (criteria.max_price is None or float(slot.price) <= criteria.max_price)
-            and (criteria.start_minute is None or self._minutes(slot.start_time) == criteria.start_minute)
-            and (criteria.end_minute is None or self._minutes(slot.end_time) >= criteria.end_minute)
-            and (criteria.people is None or court.capacity >= criteria.people)
-            and all(plain(item) in amenities for item in criteria.special_requirements)
-        )
-
-    def _rank(self, pair, criteria: SearchCriteria, *, exact: bool) -> tuple:
-        court, slot = pair
-        location_match = not criteria.location or plain(criteria.location) in plain(court.location)
-        same_court = bool(criteria.requested_field_id and court.id == criteria.requested_field_id)
-        time_gap = abs(self._minutes(slot.start_time) - criteria.start_minute) if criteria.start_minute is not None else 0
-        budget_gap = max(0.0, float(slot.price) - criteria.max_price) if criteria.max_price is not None else 0.0
-        amenity_hits = sum(plain(item) in plain(' '.join(court.amenities or [])) for item in criteria.special_requirements)
-        if exact:
-            fallback_priority = 0
-        elif criteria.requested_field_id and same_court:
-            fallback_priority = 1
-        elif location_match and criteria.start_minute is not None and time_gap == 0:
-            fallback_priority = 2
-        elif location_match:
-            fallback_priority = 3
-        elif criteria.start_minute is not None and time_gap <= 120:
-            fallback_priority = 4
-        else:
-            fallback_priority = 5
-        distance = court.distance_km if court.distance_km is not None else 999.0
-        cheap = float(slot.price) if criteria.prefer_cheap else budget_gap
-        return (fallback_priority, time_gap, 0 if location_match else 1, cheap, distance, -float(court.rating), -amenity_hits)
-
-    def _suggestion(self, pair, criteria: SearchCriteria, strategy: str) -> dict[str, Any]:
-        court, slot = pair
-        exact = strategy == 'exact'
-        time_gap = abs(self._minutes(slot.start_time) - criteria.start_minute) if criteria.start_minute is not None else 0
-        location_match = not criteria.location or plain(criteria.location) in plain(court.location)
-        if exact:
-            alternative_type = None
-            reason = 'Khớp yêu cầu và còn trống theo dữ liệu booking hiện tại.'
-        elif criteria.requested_field_id and court.id == criteria.requested_field_id:
-            alternative_type, reason = 'nearest_time', 'Cùng sân, khung giờ còn trống gần nhất.'
-        elif location_match and time_gap == 0:
-            alternative_type, reason = 'other_court', 'Sân khác trong cùng khu vực, đúng khung giờ.'
-        elif location_match:
-            alternative_type, reason = 'expanded_time', 'Cùng khu vực, khung giờ còn trống gần nhất.'
-        elif criteria.max_price is not None and float(slot.price) > criteria.max_price:
-            alternative_type, reason = 'nearest_budget', 'Phương án còn trống có giá gần ngân sách nhất.'
-        else:
-            alternative_type, reason = 'other_area', 'Cơ sở khác có sân phù hợp còn trống.'
-        return {
-            'field_id': court.id,
-            # Current schema stores a court and its venue-facing information in Field.
-            'facility_name': court.facility.name if court.facility else court.name,
-            'court_name': court.name,
-            'field_name': court.name,
-            'sport_type': court.sport_type,
-            'location': court.location,
-            'image_url': court.image_url,
-            'time_slot_id': slot.id,
-            'slot_name': slot.name,
-            'start_time': slot.start_time.strftime('%H:%M'),
-            'end_time': slot.end_time.strftime('%H:%M'),
-            'price': float(slot.price),
-            'rating': float(court.rating),
-            'distance_km': court.distance_km,
-            'booking_date': criteria.booking_date,
-            'reason': reason,
-            'availability_status': 'available',
-            'is_nearest_alternative': not exact,
-            'alternative_type': alternative_type,
-        }
-
-    def _reply(self, criteria: SearchCriteria, suggestions: list[dict[str, Any]], *, exact: bool) -> str:
-        if not suggestions:
-            return 'Không tìm thấy lịch trống phù hợp từ dữ liệu hiện tại.'
-        first = suggestions[0]
-        date_label = criteria.booking_date.strftime('%d/%m/%Y') if criteria.booking_date else ''
-        price = f"{first['price']:,.0f}".replace(',', '.')
-        if exact:
-            return (
-                f"Có {len(suggestions)} lựa chọn phù hợp ngày {date_label}. Tốt nhất là {first['court_name']} – "
-                f"{price}đ, còn trống {first['start_time']}–{first['end_time']}, rating {first['rating']:.1f}/5."
-            )
-        requested = self._format_minutes(criteria.start_minute)
-        prefix = f'Hiện không còn sân khớp hoàn toàn{f" lúc {requested}" if requested else ""}. '
-        times = ', '.join(item['start_time'] for item in suggestions[:3])
-        return prefix + f'Mình tìm thấy {len(suggestions)} phương án gần nhất còn trống lúc {times}.'
-
     def _response(
         self, reply: str, criteria: SearchCriteria, suggestions: list[dict[str, Any]], *,
         intent='search_booking', needs_clarification=False,
         classification=ScopeClassification.IN_SCOPE,
+        status='OK', missing_fields: list[str] | None = None,
+        venue_results: list[dict[str, Any]] | None = None,
+        partner_application_status: str | None = None,
+        action: dict[str, str] | None = None,
     ):
         route = self._active_route
         entities = route.to_dict()['entities'] if route else {
-            'sport_type': None, 'venue_name': None, 'location': None, 'date': None,
-            'start_time': None, 'end_time': None, 'price_max': None,
+            'sport_type': None, 'court_type': None, 'venue_name': None, 'location': None, 'date': None,
+            'start_time': None, 'end_time': None, 'preferred_time': None, 'max_price': None, 'price_max': None,
             'number_of_players': None, 'booking_code': None,
         }
         criteria_entities = {
             'sport_type': criteria.sport_type,
+            'court_type': criteria.court_type,
             'location': criteria.location,
             'date': criteria.booking_date.isoformat() if criteria.booking_date else None,
             'start_time': self._format_minutes(criteria.start_minute),
             'end_time': self._format_minutes(criteria.end_minute),
+            'max_price': criteria.max_price,
             'price_max': criteria.max_price,
             'number_of_players': criteria.people,
         }
         entities.update({key: value for key, value in criteria_entities.items() if value is not None})
         understood = self._understood(criteria)
         for key in (
-            'sport_type', 'booking_date', 'start_time', 'end_time', 'location', 'field_id',
+            'sport_type', 'court_type', 'booking_date', 'start_time', 'end_time', 'location', 'field_id',
             'time_slot_id', 'max_price', 'people', 'result_field_ids', 'result_time_slot_ids',
+            'result_prices', 'reference_price',
         ):
             if understood.get(key) is None and self._conversation_context.get(key) is not None:
                 understood[key] = self._conversation_context[key]
@@ -497,21 +687,32 @@ class AIAssistantService:
             'reply': reply,
             'understood': understood,
             'suggestions': suggestions,
+            'venue_results': venue_results or [],
             'intent': route.intent.value if route else intent,
             'confidence': route.confidence if route else 1.0,
             'entities': entities,
             'needs_clarification': needs_clarification,
             'source': 'live_backend',
             'classification': classification.value,
+            'status': status,
+            'missing_fields': missing_fields or [],
+            'context_reset': bool(route.context_reset) if route else False,
+            'partner_application_status': partner_application_status,
+            'action': action,
         }
 
     def _understood(self, criteria: SearchCriteria):
         return {
             'sport_type': criteria.sport_type,
+            'court_type': criteria.court_type,
             'booking_date': criteria.booking_date.isoformat() if criteria.booking_date else None,
             'start_time': self._format_minutes(criteria.start_minute),
             'end_time': self._format_minutes(criteria.end_minute),
             'duration_minutes': criteria.duration_minutes,
+            'time_ranges': [
+                {'start_time': self._format_minutes(start), 'end_time': self._format_minutes(end)}
+                for start, end in criteria.time_ranges
+            ],
             'location': criteria.location,
             'field_id': criteria.requested_field_id,
             'time_slot_id': criteria.requested_time_slot_id,
@@ -586,6 +787,21 @@ class AIAssistantService:
         return None, None
 
     @staticmethod
+    def _time_ranges(query: str):
+        matches = list(re.finditer(
+            r'\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:-|–|den|toi)\s*([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:h|gio)?\b',
+            query,
+        ))
+        ranges = [
+            (int(item[1]) * 60 + int(item[2] or 0), int(item[3]) * 60 + int(item[4] or 0))
+            for item in matches
+        ]
+        evening = bool(re.search(r'\b(?:buoi toi|toi nay|toi mai)\b', query))
+        if len(ranges) == 1 and evening and ranges[0][0] < 12 * 60 and ranges[0][1] <= 12 * 60:
+            ranges = [(ranges[0][0] + 12 * 60, ranges[0][1] + 12 * 60)]
+        return [(start, end) for start, end in ranges if end > start]
+
+    @staticmethod
     def _duration(query: str):
         match = re.search(r'\b(?:choi|trong)\s*(\d+(?:[.,]\d+)?)\s*(?:tieng|gio)\b', query)
         if not match:
@@ -593,18 +809,9 @@ class AIAssistantService:
         return round(float(match[1].replace(',', '.')) * 60)
 
     @staticmethod
-    def _location(query: str):
-        match = re.search(r'(quan\s+\d+|binh thanh|go vap|tan binh|cau giay|tay ho|thu duc|tp\.?hcm|ho chi minh|ha noi|da nang)', query)
-        return match[1] if match else None
-
-    @staticmethod
     def _people(query: str):
         match = re.search(r'\b(\d{1,3})\s*(?:nguoi|thanh vien)\b', query)
         return int(match[1]) if match else None
-
-    @staticmethod
-    def _minutes(value: time):
-        return value.hour * 60 + value.minute
 
     @staticmethod
     def _format_minutes(value):

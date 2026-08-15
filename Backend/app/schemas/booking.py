@@ -2,20 +2,58 @@ import re
 from datetime import date, datetime, time
 from math import ceil
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..models.field import BookingStatus
 from .field import FieldResponse
 from .time_slot import TimeSlotResponse
 from .user import RequestModel
 
+
+class BookingProductSelection(RequestModel):
+    product_id: int = Field(gt=0)
+    quantity: int = Field(gt=0, le=1000)
+
+
+class BookingProductQuantityUpdate(RequestModel):
+    quantity: int = Field(gt=0, le=1000)
+
+
+class BookingProductSnapshot(BaseModel):
+    item_id: int | None = None
+    product_id: int
+    name: str
+    product_type: str
+    unit: str
+    quantity: int
+    unit_price: float
+    subtotal: float
+    inventory_status: str | None = None
+    source: str = 'CUSTOMER_BOOKING'
+    added_by: int | None = None
+    added_by_name: str | None = None
+    added_at: datetime | None = None
+
 class BookingCreate(RequestModel):
     field_id: int = Field(gt=0)
-    time_slot_id: int = Field(gt=0)
+    time_slot_id: int | None = Field(default=None, gt=0)
+    time_slot_ids: list[int] | None = Field(default=None, min_length=1, max_length=24)
     booking_date: date
     note: str | None = Field(default=None, max_length=1000)
     customer_id: int | None = Field(default=None, gt=0)
     customer_email: str | None = Field(default=None, max_length=255)
+    product_items: list[BookingProductSelection] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode='after')
+    def normalize_slots(self):
+        ids = self.time_slot_ids or ([self.time_slot_id] if self.time_slot_id else [])
+        if not ids or len(ids) != len(set(ids)) or any(slot_id <= 0 for slot_id in ids):
+            raise ValueError('Danh sách khung giờ không hợp lệ')
+        self.time_slot_ids, self.time_slot_id = ids, ids[0]
+        product_ids = [item.product_id for item in self.product_items]
+        if len(product_ids) != len(set(product_ids)):
+            raise ValueError('Danh sách sản phẩm bị trùng')
+        return self
 
     @field_validator('note', 'customer_email')
     @classmethod
@@ -33,9 +71,18 @@ class BookingCreate(RequestModel):
 
 class BookingUpdate(RequestModel):
     field_id: int = Field(gt=0)
-    time_slot_id: int = Field(gt=0)
+    time_slot_id: int | None = Field(default=None, gt=0)
+    time_slot_ids: list[int] | None = Field(default=None, min_length=1, max_length=24)
     booking_date: date
     note: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode='after')
+    def normalize_slots(self):
+        ids = self.time_slot_ids or ([self.time_slot_id] if self.time_slot_id else [])
+        if not ids or len(ids) != len(set(ids)):
+            raise ValueError('Danh sách khung giờ không hợp lệ')
+        self.time_slot_ids, self.time_slot_id = ids, ids[0]
+        return self
 
 class BookingActionNote(RequestModel):
     note: str | None = Field(default=None, max_length=1000)
@@ -65,13 +112,30 @@ class BookingCancellationQuote(BaseModel):
 
 class BookingRescheduleRequest(RequestModel):
     field_id: int = Field(gt=0)
-    time_slot_id: int = Field(gt=0)
+    time_slot_id: int | None = Field(default=None, gt=0)
+    time_slot_ids: list[int] | None = Field(default=None, min_length=1, max_length=24)
     booking_date: date
+
+    @model_validator(mode='after')
+    def normalize_slots(self):
+        ids = self.time_slot_ids or ([self.time_slot_id] if self.time_slot_id else [])
+        if not ids or len(ids) != len(set(ids)):
+            raise ValueError('Danh sách khung giờ không hợp lệ')
+        self.time_slot_ids, self.time_slot_id = ids, ids[0]
+        return self
+
+class BookingSlotSnapshot(BaseModel):
+    time_slot_id: int
+    name: str
+    start_time: time
+    end_time: time
+    price: float
 
 class BookingRescheduleQuote(BaseModel):
     booking_id: int
     field_id: int
     time_slot_id: int
+    time_slot_ids: list[int] = []
     booking_date: date
     old_total_amount: float
     new_total_amount: float
@@ -91,6 +155,11 @@ class BookingInvoiceResponse(BaseModel):
     booking_date: date
     start_time: time
     end_time: time
+    duration_minutes: int
+    selected_slots: list[BookingSlotSnapshot] = []
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     total_amount: float
     deposit_amount: float
     remaining_payment_amount: float
@@ -118,11 +187,16 @@ class BookingResponse(BaseModel):
     field_capacity: int
     location: str
     time_slot_id: int
+    time_slot_ids: list[int] = []
+    selected_slots: list[BookingSlotSnapshot] = []
     time_slot_name: str
     booking_date: date
     start_time_snapshot: time
     end_time_snapshot: time
     price_snapshot: float
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     total_amount: float
     deposit_type: str
     deposit_value: float
@@ -161,11 +235,17 @@ class BookingQuote(BaseModel):
     field_type: str
     location: str
     time_slot_id: int
+    time_slot_ids: list[int] = []
+    selected_slots: list[BookingSlotSnapshot] = []
     time_slot_name: str
     booking_date: date
     start_time: time
     end_time: time
+    duration_minutes: int
     price: float
+    court_amount: float
+    service_amount: float
+    product_items: list[BookingProductSnapshot] = []
     total_amount: float
     deposit_amount: float
     remaining_amount: float

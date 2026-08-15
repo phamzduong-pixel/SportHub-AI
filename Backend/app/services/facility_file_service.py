@@ -1,5 +1,6 @@
 from pathlib import Path
 from uuid import uuid4
+from hashlib import sha256
 
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -7,7 +8,11 @@ from fastapi.responses import FileResponse
 from ..core.config import settings
 
 IMAGE_MIME = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
-DOCUMENT_MIME = {**IMAGE_MIME, 'application/pdf': '.pdf'}
+DOCUMENT_MIME = {'image/jpeg': '.jpg', 'image/png': '.png', 'application/pdf': '.pdf'}
+MIME_EXTENSIONS = {
+    'image/jpeg': {'.jpg', '.jpeg'}, 'image/png': {'.png'},
+    'image/webp': {'.webp'}, 'application/pdf': {'.pdf'},
+}
 
 
 def detected_mime(content: bytes) -> str | None:
@@ -29,7 +34,8 @@ async def store_facility_file(upload: UploadFile, facility_id: int, private: boo
     if len(content) > limit:
         raise HTTPException(status_code=413, detail='Tệp vượt quá dung lượng cho phép')
     actual = detected_mime(content)
-    if actual not in allowed or (upload.content_type or '').lower() != actual:
+    original_suffix = Path(upload.filename or '').suffix.lower()
+    if actual not in allowed or (upload.content_type or '').lower() != actual or original_suffix not in MIME_EXTENSIONS.get(actual, set()):
         raise HTTPException(status_code=415, detail='Định dạng tệp không hợp lệ')
     root = (settings.FACILITY_PRIVATE_DIR if private else settings.FACILITY_IMAGE_DIR).resolve()
     folder = (root / str(facility_id)).resolve()
@@ -40,7 +46,13 @@ async def store_facility_file(upload: UploadFile, facility_id: int, private: boo
     file_name = uuid4().hex + allowed[actual]
     target = (folder / file_name).resolve()
     target.write_bytes(content)
-    return {'file_path': str(Path(str(facility_id)) / file_name), 'original_name': Path(upload.filename or 'file').name[:255], 'mime_type': actual, 'file_size': len(content)}
+    return {
+        'file_path': str(Path(str(facility_id)) / file_name),
+        'original_name': Path(upload.filename or 'file').name[:255],
+        'mime_type': actual,
+        'file_size': len(content),
+        **({'file_sha256': sha256(content).hexdigest()} if private else {}),
+    }
 
 
 def remove_facility_file(path_value: str | None, private: bool):
@@ -58,7 +70,10 @@ def facility_file_response(path_value: str, mime: str, private: bool):
     if root not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail='Không tìm thấy tệp')
     cache = 'private, no-store' if private else 'public, max-age=86400'
-    return FileResponse(target, media_type=mime, headers={'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline'})
+    headers = {'Cache-Control': cache, 'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline'}
+    if private:
+        headers['Content-Security-Policy'] = 'sandbox'
+    return FileResponse(target, media_type=mime, headers=headers)
 def facility_image_response(path_value: str, mime: str, public_cache: bool):
     root = settings.FACILITY_IMAGE_DIR.resolve()
     target = (root / path_value).resolve()

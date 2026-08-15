@@ -85,6 +85,9 @@ class RevenueAnalyticsSummary(BaseModel):
     completed_revenue: float
     refunded_amount: float
     net_revenue: float
+    court_revenue: float
+    service_revenue: float
+    total_revenue: float
     completed_bookings: int
     cancelled_bookings: int
     previous_net_revenue: float
@@ -111,6 +114,8 @@ class RevenueTransactionItem(BaseModel):
     field_name: str
     sport_type: str
     booking_date: date
+    court_amount: float
+    service_amount: float
     total_amount: float
     collected_amount: float
     refunded_amount: float
@@ -118,6 +123,15 @@ class RevenueTransactionItem(BaseModel):
     outstanding_amount: float
     status: str
     last_paid_at: datetime | None
+
+
+class ProductUsageItem(BaseModel):
+    product_id: int
+    name: str
+    product_type: str
+    quantity: int
+    booking_count: int
+    revenue: float
 
 
 class RevenueAnalyticsReport(BaseModel):
@@ -128,4 +142,5 @@ class RevenueAnalyticsReport(BaseModel):
     by_field: list[RevenueBreakdownItem]
     by_sport: list[RevenueBreakdownItem]
     by_time_slot: list[RevenueBreakdownItem]
+    popular_products: list[ProductUsageItem]
     transactions: list[RevenueTransactionItem]

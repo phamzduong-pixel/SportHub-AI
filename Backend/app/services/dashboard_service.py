@@ -69,7 +69,8 @@ class DashboardService:
         for field in self.repository.fields(field_id):
             stats = booking_stats.get(('field', field.id), {})
             capacity = slot_counts.get(field.id, 0) * days
-            used = stats.get('confirmed', 0) + stats.get('completed', 0)
+            slot_stats = booking_stats.get(('field_slots', field.id), {})
+            used = slot_stats.get('confirmed', 0) + slot_stats.get('completed', 0)
             items.append({
                 'field_id': field.id, 'field_name': field.name, 'sport_type': field.sport_type, 'status': field.status,
                 'booking_count': sum(stats.values()), 'confirmed_count': stats.get('confirmed', 0),
@@ -124,6 +125,11 @@ class DashboardService:
             by_field=self._breakdown(rows, lambda row: str(row['field_id']), lambda key, source=rows: next(row['field_name'] for row in source if str(row['field_id']) == key)),
             by_sport=self._breakdown(rows, lambda row: row['sport_type'], lambda key: key),
             by_time_slot=self._breakdown(rows, lambda row: row['start_time_snapshot'].strftime('%H:%M'), lambda key: key),
+            popular_products=[{
+                'product_id': row['product_id'], 'name': row['name'],
+                'product_type': row['product_type'], 'quantity': int(row['quantity']),
+                'booking_count': int(row['booking_count']), 'revenue': float(row['revenue']),
+            } for row in self.repository.popular_products(start, end, field_id)],
             transactions=[self._transaction(row) for row in rows],
         )
 
@@ -132,10 +138,13 @@ class DashboardService:
         valid_statuses = {'pending_payment', 'pending_confirmation', 'confirmed', 'in_progress', 'completed', 'no_show'}
         cancelled_statuses = {'cancelled', 'cancelled_by_customer', 'cancelled_by_owner', 'expired', 'failed', 'rejected'}
         booking_value = collected = deposits = held = refunded = completed_revenue = outstanding = Decimal('0')
+        court_revenue = service_revenue = Decimal('0')
         completed_count = cancelled_count = 0
         for row in rows:
             total = Decimal(row['total_amount'] or 0); paid = Decimal(row['collected'] or 0); refund = DashboardService._refund_value(row)
             net = max(paid - refund, Decimal('0'))
+            court_net, service_net = DashboardService._revenue_parts(row, paid, refund)
+            court_revenue += court_net; service_revenue += service_net
             if row['status'] in valid_statuses:
                 booking_value += total
                 outstanding += max(total - paid, Decimal('0'))
@@ -151,6 +160,8 @@ class DashboardService:
             'deposit_amount': float(deposits), 'held_deposit_amount': float(held),
             'outstanding_amount': float(outstanding), 'completed_revenue': float(completed_revenue),
             'refunded_amount': float(refunded), 'net_revenue': float(max(collected - refunded, Decimal('0'))),
+            'court_revenue': float(court_revenue), 'service_revenue': float(service_revenue),
+            'total_revenue': float(court_revenue + service_revenue),
             'completed_bookings': completed_count, 'cancelled_bookings': cancelled_count,
         }
 
@@ -172,11 +183,25 @@ class DashboardService:
         return {
             'booking_id': row['id'], 'booking_code': row['booking_code'], 'customer_name': row['customer_name'],
             'facility_name': row['facility_name'] or 'Chưa gán cơ sở', 'field_name': row['field_name'], 'sport_type': row['sport_type'],
-            'booking_date': row['booking_date'], 'total_amount': float(total), 'collected_amount': float(collected),
+            'booking_date': row['booking_date'], 'court_amount': float(row['court_amount'] or 0),
+            'service_amount': float(row['service_amount'] or 0),
+            'total_amount': float(total), 'collected_amount': float(collected),
             'refunded_amount': float(refunded), 'net_revenue': float(max(collected - refunded, Decimal('0'))),
             'outstanding_amount': float(max(total - collected, Decimal('0'))) if active else 0,
             'status': row['status'], 'last_paid_at': row['last_paid_at'],
         }
+
+    @staticmethod
+    def _revenue_parts(row, collected: Decimal, refunded: Decimal):
+        court = Decimal(row['court_amount'] or 0)
+        service = Decimal(row['service_amount'] or 0)
+        if court == 0 and service == 0:
+            court = Decimal(row['total_amount'] or 0)
+        court_collected = min(collected, court)
+        service_collected = min(max(collected - court_collected, Decimal('0')), service)
+        court_refund = min(refunded, court_collected)
+        service_refund = min(max(refunded - court_refund, Decimal('0')), service_collected)
+        return max(court_collected - court_refund, Decimal('0')), max(service_collected - service_refund, Decimal('0'))
 
     @staticmethod
     def _refund_value(row):
@@ -191,12 +216,25 @@ class DashboardService:
 
     def _performance_maps(self, start: date, end: date, field_id: int | None):
         booking_stats: dict[tuple[str, int], dict[str, int]] = {}
-        for row_field_id, slot_id, status, count in self.repository.booking_performance(start, end, field_id):
-            for key in (('field', row_field_id), ('slot', slot_id)):
-                booking_stats.setdefault(key, {})[status] = int(count)
+        for row_field_id, status, count in self.repository.field_booking_performance(start, end, field_id):
+            booking_stats.setdefault(('field', row_field_id), {})[status] = int(count)
+        slot_rows = [
+            *self.repository.slot_booking_performance(start, end, field_id),
+            *self.repository.legacy_slot_booking_performance(start, end, field_id),
+        ]
+        for row_field_id, slot_id, status, count in slot_rows:
+            booking_stats.setdefault(('slot', slot_id), {})[status] = int(count)
+            field_slot_stats = booking_stats.setdefault(('field_slots', row_field_id), {})
+            field_slot_stats[status] = field_slot_stats.get(status, 0) + int(count)
         revenue_stats: dict[tuple[str, int], Decimal] = {}
-        for row_field_id, slot_id, amount in self.repository.revenue_performance(*self._date_times(start, end), field_id):
-            revenue_stats[('field', row_field_id)] = revenue_stats.get(('field', row_field_id), Decimal('0')) + Decimal(amount)
+        period = self._date_times(start, end)
+        for row_field_id, amount in self.repository.field_revenue_performance(*period, field_id):
+            revenue_stats[('field', row_field_id)] = Decimal(amount)
+        slot_revenue_rows = [
+            *self.repository.slot_revenue_performance(*period, field_id),
+            *self.repository.legacy_slot_revenue_performance(*period, field_id),
+        ]
+        for slot_id, amount in slot_revenue_rows:
             revenue_stats[('slot', slot_id)] = revenue_stats.get(('slot', slot_id), Decimal('0')) + Decimal(amount)
         return booking_stats, revenue_stats
 

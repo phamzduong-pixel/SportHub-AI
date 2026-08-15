@@ -9,9 +9,11 @@ from ...models.user import User
 from ...repositories.booking_repository import BookingRepository
 from ...schemas.booking import (
     AvailabilityField, BookingActionNote, BookingCancellationQuote, BookingCancellationRequest,
-    BookingCreate, BookingInvoiceResponse, BookingListResponse, BookingQuote,
+    BookingCreate, BookingInvoiceResponse, BookingListResponse, BookingProductQuantityUpdate,
+    BookingProductSelection, BookingQuote,
     BookingRescheduleQuote, BookingRescheduleRequest, BookingResponse, BookingUpdate,
 )
+from ...schemas.product import ProductResponse
 from ...services.booking_service import BookingService
 from ..dependencies import get_current_user, require_owner
 
@@ -44,10 +46,29 @@ def create_booking(
 
 @router.get('/bookings/quote', response_model=BookingQuote)
 def booking_quote(
-    field_id: int = Query(gt=0), time_slot_id: int = Query(gt=0),
+    field_id: int = Query(gt=0), time_slot_id: int | None = Query(default=None, gt=0),
+    time_slot_ids: list[int] | None = Query(default=None),
+    product_id: list[int] | None = Query(default=None),
+    product_quantity: list[int] | None = Query(default=None),
     booking_date: date = Query(alias='date'), service: BookingService = Depends(get_service),
 ):
-    return service.quote(field_id=field_id, time_slot_id=time_slot_id, booking_date=booking_date)
+    selected = time_slot_ids or ([time_slot_id] if time_slot_id else [])
+    if not selected:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail='Cần chọn ít nhất một khung giờ')
+    product_ids = product_id or []
+    quantities = product_quantity or []
+    if len(product_ids) != len(quantities):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail='Danh sách sản phẩm và số lượng không hợp lệ')
+    product_items = [
+        BookingProductSelection(product_id=item_id, quantity=quantity)
+        for item_id, quantity in zip(product_ids, quantities)
+    ]
+    return service.quote(
+        field_id=field_id, time_slot_ids=selected, booking_date=booking_date,
+        product_items=product_items,
+    )
 
 @router.get('/bookings/my', response_model=BookingListResponse)
 def my_bookings(
@@ -90,6 +111,35 @@ def get_booking(
     service: BookingService = Depends(get_service),
 ):
     return service.get_for_user(booking_id, current_user)
+
+@router.get('/bookings/{booking_id}/product-options', response_model=list[ProductResponse])
+def booking_product_options(
+    booking_id: int,
+    current_user: User = Depends(require_owner),
+    service: BookingService = Depends(get_service),
+):
+    return service.during_usage_product_options(booking_id, current_user)
+
+@router.post('/bookings/{booking_id}/products', response_model=BookingResponse, status_code=201)
+def add_booking_product(
+    booking_id: int, payload: BookingProductSelection,
+    current_user: User = Depends(require_owner), service: BookingService = Depends(get_service),
+):
+    return service.add_during_usage_product(booking_id, payload, current_user)
+
+@router.patch('/bookings/{booking_id}/products/{item_id}', response_model=BookingResponse)
+def update_booking_product(
+    booking_id: int, item_id: int, payload: BookingProductQuantityUpdate,
+    current_user: User = Depends(require_owner), service: BookingService = Depends(get_service),
+):
+    return service.update_during_usage_product(booking_id, item_id, payload, current_user)
+
+@router.delete('/bookings/{booking_id}/products/{item_id}', response_model=BookingResponse)
+def delete_booking_product(
+    booking_id: int, item_id: int,
+    current_user: User = Depends(require_owner), service: BookingService = Depends(get_service),
+):
+    return service.delete_during_usage_product(booking_id, item_id, current_user)
 
 @router.put('/bookings/{booking_id}', response_model=BookingResponse)
 def update_booking(

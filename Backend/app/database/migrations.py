@@ -60,6 +60,9 @@ def migrate_user_profile_columns(engine):
     if 'avatar_url' not in columns:
         with engine.begin() as connection:
             connection.execute(text('ALTER TABLE users ADD COLUMN avatar_url VARCHAR(500) NULL'))
+    if 'session_version' not in columns:
+        with engine.begin() as connection:
+            connection.execute(text('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0'))
 
 
 def migrate_system_roles(engine):
@@ -306,6 +309,40 @@ def migrate_refund_workflow_schema(engine):
         ))
 
 
+def migrate_cancelled_booking_balances(engine):
+    """Clear stale payable balances left on terminal cancelled bookings."""
+    inspector = inspect(engine)
+    if 'bookings' not in inspector.get_table_names():
+        return
+    columns = {column['name'] for column in inspector.get_columns('bookings')}
+    if 'status' not in columns or 'remaining_amount' not in columns:
+        return
+    cancelled_statuses = "('cancelled','cancelled_by_customer','cancelled_by_owner','rejected')"
+    with engine.begin() as connection:
+        connection.execute(text(
+            'UPDATE bookings SET remaining_amount=0 '
+            f'WHERE status IN {cancelled_statuses} AND COALESCE(remaining_amount,0)<>0'
+        ))
+        if 'additional_payment_required' in columns:
+            connection.execute(text(
+                'UPDATE bookings SET additional_payment_required=0 '
+                f'WHERE status IN {cancelled_statuses} AND COALESCE(additional_payment_required,0)<>0'
+            ))
+
+
+def migrate_booking_slots(engine):
+    inspector = inspect(engine)
+    if not {'bookings', 'booking_slots'}.issubset(inspector.get_table_names()):
+        return
+    with engine.begin() as connection:
+        connection.execute(text(
+            'INSERT INTO booking_slots (booking_id,time_slot_id,position,name_snapshot,start_time_snapshot,end_time_snapshot,price_snapshot) '
+            'SELECT b.id,b.time_slot_id,0,COALESCE(t.name,\'Slot\'),b.start_time_snapshot,b.end_time_snapshot,b.price_snapshot '
+            'FROM bookings b LEFT JOIN time_slots t ON t.id=b.time_slot_id '
+            'WHERE NOT EXISTS (SELECT 1 FROM booking_slots bs WHERE bs.booking_id=b.id)'
+        ))
+
+
 def migrate_partner_application_schema(engine):
     """Simplify OWNER requests while archiving legacy document metadata."""
     inspector = inspect(engine)
@@ -474,4 +511,91 @@ def migrate_facility_approval_schema(engine):
             "approved_at=COALESCE(approved_at, created_at, CURRENT_TIMESTAMP) "
             "WHERE status IS NULL OR status='' OR legacy_field_id IS NOT NULL"
         ))
+        connection.execute(text('''UPDATE facilities SET status='PENDING_APPROVAL' WHERE status='PENDING_REVIEW' '''))
         connection.execute(text('CREATE INDEX IF NOT EXISTS ix_facilities_status ON facilities (status)'))
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as connection:
+        if 'facility_documents' in tables and 'facility_verification_documents' not in tables:
+            connection.execute(text('ALTER TABLE facility_documents RENAME TO facility_verification_documents'))
+
+    inspector = inspect(engine)
+    if 'facility_verification_documents' in inspector.get_table_names():
+        document_columns = {column['name'] for column in inspector.get_columns('facility_verification_documents')}
+        with engine.begin() as connection:
+            if 'file_sha256' not in document_columns:
+                connection.execute(text('ALTER TABLE facility_verification_documents ADD COLUMN file_sha256 VARCHAR(64) NULL'))
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_facility_verification_documents_file_sha256 ON facility_verification_documents (file_sha256)'))
+
+
+def migrate_product_inventory_schema(engine):
+    """Add inventory columns to product tables created by the previous module version."""
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if 'facility_products' in tables:
+        columns = {column['name'] for column in inspector.get_columns('facility_products')}
+        definitions = {
+            'stock_quantity': 'INTEGER NOT NULL DEFAULT 0',
+            'reserved_quantity': 'INTEGER NOT NULL DEFAULT 0',
+            'track_inventory': 'BOOLEAN NOT NULL DEFAULT TRUE',
+        }
+        with engine.begin() as connection:
+            for name, ddl in definitions.items():
+                if name not in columns:
+                    connection.execute(text(f'ALTER TABLE facility_products ADD COLUMN {name} {ddl}'))
+            connection.execute(text(
+                "UPDATE facility_products SET "
+                "stock_quantity=CASE WHEN COALESCE(stock_quantity,0)<0 THEN 0 ELSE COALESCE(stock_quantity,0) END, "
+                "reserved_quantity=CASE WHEN COALESCE(reserved_quantity,0)<0 THEN 0 ELSE COALESCE(reserved_quantity,0) END"
+            ))
+            connection.execute(text(
+                "UPDATE facility_products SET reserved_quantity=stock_quantity "
+                "WHERE reserved_quantity > stock_quantity"
+            ))
+            connection.execute(text(
+                "UPDATE facility_products SET track_inventory=FALSE "
+                "WHERE product_type='SERVICE' AND stock_quantity=0 AND reserved_quantity=0"
+            ))
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_facility_products_track_inventory ON facility_products (track_inventory)'))
+    if 'booking_product_items' in tables:
+        columns = {column['name'] for column in inspector.get_columns('booking_product_items')}
+        with engine.begin() as connection:
+            if 'inventory_status' not in columns:
+                connection.execute(text(
+                    "ALTER TABLE booking_product_items ADD COLUMN inventory_status VARCHAR(20) NOT NULL DEFAULT 'UNTRACKED'"
+                ))
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_booking_product_items_inventory_status ON booking_product_items (inventory_status)'))
+            if 'source' not in columns:
+                connection.execute(text(
+                    "ALTER TABLE booking_product_items ADD COLUMN source VARCHAR(32) NOT NULL DEFAULT 'CUSTOMER_BOOKING'"
+                ))
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_booking_product_items_source ON booking_product_items (source)'))
+            if 'added_by' not in columns:
+                connection.execute(text('ALTER TABLE booking_product_items ADD COLUMN added_by INTEGER NULL REFERENCES users(id)'))
+            connection.execute(text('CREATE INDEX IF NOT EXISTS ix_booking_product_items_added_by ON booking_product_items (added_by)'))
+
+    inspector = inspect(engine)
+    if 'bookings' in inspector.get_table_names():
+        columns = {column['name'] for column in inspector.get_columns('bookings')}
+        with engine.begin() as connection:
+            if 'court_amount' not in columns:
+                connection.execute(text('ALTER TABLE bookings ADD COLUMN court_amount NUMERIC(12,2) NOT NULL DEFAULT 0'))
+            if 'service_amount' not in columns:
+                connection.execute(text('ALTER TABLE bookings ADD COLUMN service_amount NUMERIC(12,2) NOT NULL DEFAULT 0'))
+            connection.execute(text(
+                'UPDATE bookings SET court_amount=total_amount, service_amount=0 '
+                'WHERE court_amount=0 AND service_amount=0'
+            ))
+    inspector = inspect(engine)
+    if 'invoices' in inspector.get_table_names():
+        columns = {column['name'] for column in inspector.get_columns('invoices')}
+        with engine.begin() as connection:
+            if 'court_amount' not in columns:
+                connection.execute(text('ALTER TABLE invoices ADD COLUMN court_amount NUMERIC(12,2) NOT NULL DEFAULT 0'))
+            if 'service_amount' not in columns:
+                connection.execute(text('ALTER TABLE invoices ADD COLUMN service_amount NUMERIC(12,2) NOT NULL DEFAULT 0'))
+            connection.execute(text(
+                'UPDATE invoices SET court_amount=total_amount, service_amount=0 '
+                'WHERE court_amount=0 AND service_amount=0'
+            ))

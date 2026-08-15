@@ -22,7 +22,7 @@ class OwnerIsolationTests(unittest.TestCase):
             with self.Session() as db: yield db
         app.dependency_overrides[get_db]=override_db; self.client=TestClient(app)
     def tearDown(self): self.client.close(); app.dependency_overrides.clear(); Base.metadata.drop_all(self.engine)
-    def headers(self,user_id): return {'Authorization':f"Bearer {create_access_token({'sub':str(user_id),'role':'OWNER'})}"}
+    def headers(self,user_id): return {'Authorization':f"Bearer {create_access_token({'sub':str(user_id),'role':'OWNER','sv':0})}"}
     def test_owner_a_cannot_access_owner_b_data(self):
         a=self.headers(self.a); b=self.headers(self.b); self.assertEqual([x['name'] for x in self.client.get('/fields?page_size=100',headers=a).json()['items']],['Court A']); self.assertEqual(self.client.get(f'/fields/{self.fb}',headers=a).status_code,404); self.assertEqual(self.client.get('/bookings',headers=a).json()['total'],0); self.assertEqual(self.client.get('/bookings',headers=b).json()['total'],1)
 

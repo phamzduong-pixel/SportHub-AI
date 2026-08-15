@@ -17,6 +17,7 @@ from ..dependencies import require_system_admin
 from .auth import application_response, user_response
 from .facilities import response as facility_response
 from ...services.audit_service import record_audit
+from ...services.notification_service import NotificationService
 
 router = APIRouter(prefix='/admin', tags=['system-admin'])
 
@@ -34,7 +35,7 @@ def summary(_: User = Depends(require_system_admin), db: Session = Depends(get_d
         'active_facilities': count(Facility, Facility.is_active.is_(True)),
         'fields': count(Field), 'bookings': count(Booking),
         'pending_applications': count(OwnerApplication, OwnerApplication.status == OwnerApplicationStatus.PENDING.value),
-        'pending_facilities': count(Facility, Facility.status == FacilityStatus.PENDING_REVIEW.value),
+        'pending_facilities': count(Facility, Facility.status == FacilityStatus.PENDING_APPROVAL.value),
     }
 
 
@@ -158,6 +159,9 @@ def _review_application(item: OwnerApplication, action: str, note: str | None, a
     record_audit(db, admin, 'owner_application', item.id, f'partner_application_{action.lower()}', {
         'from_status': old_status, 'to_status': target, 'customer_id': item.customer_id, 'admin_note': item.admin_note,
     })
+    NotificationService(db).partner_result(
+        item.customer_id, item.id, action == 'APPROVE', item.rejection_reason,
+    )
     db.commit(); db.refresh(item)
     return application_response(item)
 
@@ -181,7 +185,7 @@ def decide_owner_application(application_id: int, payload: OwnerApplicationDecis
 
 @router.get('/facility-applications')
 def list_facility_applications(
-    status: str | None = Query(default=None, pattern='^(DRAFT|PENDING_REVIEW|APPROVED|REJECTED|SUSPENDED)$'),
+    status: str | None = Query(default=None, pattern='^(DRAFT|PENDING_APPROVAL|APPROVED|REJECTED|SUSPENDED)$'),
     search: str | None = Query(default=None, max_length=120),
     _: User = Depends(require_system_admin), db: Session = Depends(get_db),
 ):
@@ -222,13 +226,15 @@ def review_facility_application(
         raise HTTPException(status_code=404, detail='Không tìm thấy hồ sơ cơ sở')
     action = payload.action
     allowed = {
-        'APPROVE': {FacilityStatus.PENDING_REVIEW.value},
-        'REJECT': {FacilityStatus.PENDING_REVIEW.value},
+        'APPROVE': {FacilityStatus.PENDING_APPROVAL.value},
+        'REJECT': {FacilityStatus.PENDING_APPROVAL.value},
         'SUSPEND': {FacilityStatus.APPROVED.value},
         'RESTORE': {FacilityStatus.SUSPENDED.value},
     }
     if item.status not in allowed[action]:
         raise HTTPException(status_code=409, detail='Trạng thái cơ sở không cho phép thao tác này')
+    if action == 'APPROVE' and (not item.documents or any(not document.document_number for document in item.documents)):
+        raise HTTPException(status_code=422, detail='Hồ sơ chưa có giấy tờ xác minh hợp lệ')
     old = item.status
     now = datetime.now(timezone.utc)
     if action == 'APPROVE':
@@ -246,6 +252,8 @@ def review_facility_application(
     item.reviewed_at = now
     db.add(FacilityReviewEvent(facility_id=item.id, actor_id=admin.id, action=action, from_status=old, to_status=item.status, note=payload.reason))
     record_audit(db, admin, 'facility', item.id, 'facility_' + action.lower(), {'from_status': old, 'to_status': item.status, 'reason': payload.reason})
+    if action in {'APPROVE', 'REJECT'}:
+        NotificationService(db).facility_result(item.owner_id, item.id, item.name, action == 'APPROVE', payload.reason)
     db.commit(); db.refresh(item)
     return facility_response(db, item)
 
@@ -279,6 +287,8 @@ def update_facility_status(facility_id: int, payload: AdminStatusUpdate, _: User
     facility = db.get(Facility, facility_id)
     if facility is None:
         raise HTTPException(status_code=404, detail='Không tìm thấy cơ sở')
+    if payload.is_active and facility.status != FacilityStatus.APPROVED.value:
+        raise HTTPException(status_code=409, detail='Cơ sở chỉ được kích hoạt sau khi phê duyệt')
     facility.is_active = payload.is_active
     db.commit()
     return {'id': facility.id, 'is_active': facility.is_active, 'message': 'Đã cập nhật trạng thái cơ sở'}

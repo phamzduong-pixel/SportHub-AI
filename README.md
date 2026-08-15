@@ -1,8 +1,8 @@
 # SportHub AI
 
-SportHub AI là nền tảng tìm kiếm, đặt sân và quản lý vận hành cơ sở thể thao với đúng 3 vai trò: `CUSTOMER`, `OWNER`, `SYSTEM_ADMIN`. OWNER vừa là chủ sân vừa trực tiếp vận hành cơ sở; hệ thống không sử dụng MANAGER hay permission theo nhân viên phụ.
+SportHub AI là nền tảng tìm kiếm, đặt sân và quản lý vận hành cơ sở thể thao với đúng 3 vai trò: `CUSTOMER`, `OWNER`, `SYSTEM_ADMIN`. OWNER vừa là chủ sân vừa trực tiếp vận hành cơ sở; hệ thống không có vai trò nhân viên phụ.
 
-> Frontend hiện dùng mock data và mô phỏng authentication/thanh toán/AI. Không sử dụng dữ liệu này cho môi trường production.
+Authentication, hồ sơ đối tác, booking, availability, payment, maintenance, avatar và khu vực quản trị hệ thống đã kết nối FastAPI/database thật. Một số màn hình phụ hoặc dữ liệu trình diễn cũ vẫn có thể còn mock và cần được thay thế có kiểm soát trước production.
 
 ## Công nghệ
 
@@ -112,15 +112,13 @@ Các route tiếng Việt cũ như `/dang-nhap`, `/dang-ky`, `/tai-khoan/*` và 
 
 ## Tài khoản demo
 
-Tất cả tài khoản dùng mật khẩu `123456`.
+Mật khẩu demo không được ghi cố định trong repository. Tài khoản `SYSTEM_ADMIN` phải được tạo bằng script an toàn hoặc biến môi trường và hệ thống không cung cấp API đăng ký/nâng quyền admin công khai.
 
 | Vai trò | Email | Điều hướng sau đăng nhập |
 |---|---|---|
 | CUSTOMER | `customer@sporthub.vn` | `/customer/dashboard` |
 | OWNER | `owner@sporthub.vn` | `/management/dashboard` |
-| SYSTEM_ADMIN | cấu hình qua `SYSTEM_ADMIN_EMAIL` | `/system-admin` |
-
-Trong Management topbar có bộ chuyển tài khoản demo để kiểm tra việc sidebar và action tự ẩn theo quyền.
+| SYSTEM_ADMIN | cấu hình qua `SYSTEM_ADMIN_EMAIL` hoặc script khởi tạo | `/system-admin` |
 
 ## Các phần đang dùng mock data
 
@@ -152,6 +150,10 @@ Authentication, profile, booking, payment và dữ liệu quản trị được 
 - Notification: email, SMS, push notification và quản lý template.
 
 ## Cập nhật gần nhất
+
+Chi tiết bàn giao mới nhất ngày 13/08/2026: [docs/SECTION_HANDOFF_2026-08-13_FACILITY_AI_UI.md](docs/SECTION_HANDOFF_2026-08-13_FACILITY_AI_UI.md).
+
+Bàn giao Platform/Deploy ngày 11/08/2026 được giữ tại [docs/SECTION_HANDOFF_2026-08-11_PLATFORM_DEPLOY.md](docs/SECTION_HANDOFF_2026-08-11_PLATFORM_DEPLOY.md) như tài liệu lịch sử.
 
 Phần đăng ký tài khoản, xác minh đối tác và tổ chức frontend đã hoàn thành các nội dung sau:
 
@@ -230,6 +232,7 @@ Lưu ý dữ liệu: schema hiện tại dùng `Field` làm thực thể sân/c�
 
 ## Tài liệu
 
+- [Bàn giao AI hỗ trợ CUSTOMER đăng ký OWNER — 14/08/2026](docs/SECTION_HANDOFF_2026-08-14_AI_PARTNER_SUPPORT.md)
 - [Báo cáo tiến độ phiên 10/08/2026](docs/SESSION_PROGRESS_2026-08-10.md)
 - [Frontend](Frontend/README.md)
 - [Backend](Backend/README.md)

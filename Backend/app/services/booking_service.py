@@ -9,72 +9,37 @@ from sqlalchemy.exc import IntegrityError
 from ..core.config import settings
 from ..core.datetime_utils import as_utc
 from ..core.ownership import management_owner_id, owns_field
-from ..models.field import Booking, BookingStatus, Field
+from ..models.field import Booking, BookingSlot, BookingStatus, Field
 from ..models.invoice import Invoice
 from ..models.payment import EscrowStatus, Payment, PaymentStatus, PaymentType
+from ..models.product import BookingProductItem
 from ..models.refund import BookingActivity, RefundRequest, RefundStatus
 from ..models.time_slot import TimeSlot
 from ..models.user import User
 from ..repositories.booking_repository import BookingRepository
-from ..schemas.booking import BookingQuote, BookingResponse
-from ..schemas.time_slot import TimeSlotResponse
+from ..schemas.booking import BookingInvoiceResponse, BookingQuote, BookingResponse
 from .audit_service import record_audit
+from .availability_service import AvailabilityService
+from .notification_service import NotificationService
+from .inventory_service import InventoryService
 
 class BookingService:
-    CONFLICT_MESSAGE = 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.'
+    CONFLICT_MESSAGE = 'Một hoặc nhiều khung giờ vừa được người khác đặt. Danh sách giờ trống đã được cập nhật.'
     HOLD_DURATION = timedelta(minutes=15)
     REFUND_DEADLINE = timedelta(days=3)
     def __init__(self, repository: BookingRepository):
         self.repository = repository
         self.timezone = ZoneInfo(settings.TIMEZONE)
+        self.availability_service = AvailabilityService(repository)
+        self.notifications = NotificationService(repository.db)
+        self.inventory = InventoryService(repository.db)
 
     def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, start_time=None, max_price: float | None = None, sort_by: str = 'relevance'):
-        self.repository.release_expired_holds()
-        now = datetime.now(self.timezone)
-        if booking_date < now.date():
-            raise HTTPException(status_code=422, detail='Không thể tìm lịch trống trong quá khứ')
-        result = self.repository.availability(booking_date=booking_date, field_id=field_id, search=search, sport_type=sport_type, location=location)
-        if not result:
-            return []
-        fields, slots, bookings, blocks, maintenances = result
-        response = []
-        for field in fields:
-            available = []
-            for slot in slots:
-                if slot.field_id != field.id:
-                    continue
-                if booking_date == now.date() and slot.start_time <= now.time().replace(tzinfo=None):
-                    continue
-                if start_time is not None and slot.start_time < start_time:
-                    continue
-                effective_price = slot.weekend_price if booking_date.weekday() >= 5 else slot.weekday_price
-                effective_price = effective_price if effective_price is not None else slot.price
-                if max_price is not None and Decimal(effective_price) > Decimal(str(max_price)):
-                    continue
-                occupied = any(
-                    booking.field_id == field.id
-                    and booking.start_time_snapshot < slot.end_time
-                    and booking.end_time_snapshot > slot.start_time
-                    for booking in bookings
-                )
-                blocked = any(block.field_id == field.id and block.start_time < slot.end_time and block.end_time > slot.start_time for block in blocks)
-                maintained = any(
-                    maintenance.field_id == field.id
-                    and as_utc(maintenance.starts_at) < datetime.combine(booking_date, slot.end_time, tzinfo=self.timezone).astimezone(timezone.utc)
-                    and as_utc(maintenance.ends_at) > datetime.combine(booking_date, slot.start_time, tzinfo=self.timezone).astimezone(timezone.utc)
-                    for maintenance in maintenances
-                )
-                if not occupied and not blocked and not maintained:
-                    available.append(TimeSlotResponse.model_validate(slot).model_copy(
-                        update={'price': float(effective_price)},
-                    ))
-            if available:
-                response.append({'field': field, 'available_slots': available})
-        if sort_by == 'price':
-            response.sort(key=lambda item: min(float(slot.weekend_price if booking_date.weekday() >= 5 and slot.weekend_price is not None else slot.weekday_price if booking_date.weekday() < 5 and slot.weekday_price is not None else slot.price) for slot in item['available_slots']))
-        elif sort_by == 'rating':
-            response.sort(key=lambda item: (-float(item['field'].rating or 0), -int(item['field'].review_count or 0)))
-        return response
+        return self.availability_service.list(
+            booking_date=booking_date, field_id=field_id, search=search,
+            sport_type=sport_type, location=location, start_time=start_time,
+            max_price=max_price, sort_by=sort_by,
+        )
 
     def create(self, payload, current_user: User) -> BookingResponse:
         owner_operator = self._can_manage(current_user)
@@ -96,46 +61,170 @@ class BookingService:
         else:
             raise HTTPException(status_code=403, detail='Bạn không có quyền tạo lịch đặt')
         values = self._schedule_values(
-            payload.field_id, payload.time_slot_id, payload.booking_date,
+            payload.field_id, payload.time_slot_ids, payload.booking_date,
             owner_user=current_user if owner_operator and not acting_as_customer else None,
         )
+        slot_details = values.pop('_slot_details')
+        field = self.repository.db.get(Field, payload.field_id)
+        product_snapshots, service_amount = self.inventory.validate_selections(
+            field, payload.product_items, lock=True,
+        )
+        self._apply_service_amount(values, service_amount)
         booking = Booking(
             booking_code=self._booking_code(), customer_id=customer.id,
             note=payload.note, status=BookingStatus.PENDING_PAYMENT.value,
             hold_expires_at=datetime.now(timezone.utc) + self.HOLD_DURATION, **values,
         )
+        self._replace_booking_slots(booking, slot_details)
+        booking.product_items = [BookingProductItem(
+            product_id=item['product_id'], product_name_snapshot=item['name'],
+            product_type_snapshot=item['product_type'], unit_snapshot=item['unit'],
+            unit_price_snapshot=item['unit_price'], quantity=item['quantity'], line_total=item['subtotal'],
+            source='CUSTOMER_BOOKING', added_by=current_user.id,
+        ) for item in product_snapshots]
         try:
-            created = self.repository.create(booking)
+            created = self.repository.create(booking, commit=False)
+            for item in created.product_items:
+                self.inventory.reserve(item, actor_id=current_user.id)
+            self._add_activity(created.id, current_user, 'booking_created', None, BookingStatus.PENDING_PAYMENT.value, {
+                'booking_code': created.booking_code, 'hold_expires_at': created.hold_expires_at.isoformat() if created.hold_expires_at else None,
+                'court_amount': float(created.court_amount), 'service_amount': float(created.service_amount),
+            })
+            self.repository.db.commit()
         except IntegrityError:
             self.repository.db.rollback()
             raise HTTPException(status_code=409, detail=self.CONFLICT_MESSAGE)
-        self._add_activity(created.id, current_user, 'booking_created', None, BookingStatus.PENDING_PAYMENT.value, {
-            'booking_code': created.booking_code, 'hold_expires_at': created.hold_expires_at.isoformat() if created.hold_expires_at else None,
-        })
-        self.repository.db.commit()
+        except HTTPException:
+            self.repository.db.rollback()
+            raise
+        except Exception:
+            self.repository.db.rollback()
+            raise
         return self.response(self.repository.get(created.id))
 
-    def quote(self, *, field_id: int, time_slot_id: int, booking_date: date) -> BookingQuote:
-        values = self._schedule_values(field_id, time_slot_id, booking_date)
+    def quote(self, *, field_id: int, time_slot_ids: list[int], booking_date: date, product_items=None) -> BookingQuote:
+        values = self._schedule_values(field_id, time_slot_ids, booking_date)
         field = self.repository.lock_field(field_id)
-        slot = self.repository.db.get(TimeSlot, time_slot_id)
+        details = values['_slot_details']
+        product_snapshots, service_amount = self.inventory.validate_selections(
+            field, product_items or [], lock=False,
+        )
+        self._apply_service_amount(values, service_amount)
         total_amount = Decimal(values['total_amount'])
         deposit_amount = Decimal(values['deposit_amount'])
         remaining_after_deposit = max(total_amount - deposit_amount, Decimal('0')).quantize(Decimal('0.01'))
         return BookingQuote(
             venue_id=field.facility_id,
             venue_name=field.facility.name if field.facility else field.name,
-            field_id=field_id, time_slot_id=time_slot_id, booking_date=booking_date,
+            field_id=field_id, time_slot_id=details[0]['time_slot_id'], time_slot_ids=[item['time_slot_id'] for item in details], booking_date=booking_date,
             field_name=field.name, sport_type=field.sport_type,
             field_type=f'Sân {field.capacity}', location=field.location,
-            time_slot_name=slot.name, start_time=values['start_time_snapshot'],
+            time_slot_name='; '.join(item['name_snapshot'] for item in details), start_time=values['start_time_snapshot'],
             end_time=values['end_time_snapshot'], price=float(values['price_snapshot']),
+            duration_minutes=sum((datetime.combine(date.min, item['end_time_snapshot']) - datetime.combine(date.min, item['start_time_snapshot'])).seconds // 60 for item in details),
+            selected_slots=[{'time_slot_id': item['time_slot_id'], 'name': item['name_snapshot'], 'start_time': item['start_time_snapshot'], 'end_time': item['end_time_snapshot'], 'price': item['price_snapshot']} for item in details],
+            court_amount=float(values['court_amount']), service_amount=float(values['service_amount']),
+            product_items=product_snapshots,
             total_amount=float(total_amount), deposit_amount=float(deposit_amount),
             remaining_amount=float(remaining_after_deposit), deposit_type=values['deposit_type'],
             deposit_value=float(values['deposit_value']), hold_minutes=int(self.HOLD_DURATION.total_seconds() / 60),
             free_cancellation_minutes=values['free_cancellation_minutes'],
             cancellation_policy_summary=self._policy_summary(values['free_cancellation_minutes']),
         )
+
+    def add_during_usage_product(self, booking_id: int, payload, user: User) -> BookingResponse:
+        booking = self._booking_or_404(booking_id, lock=True)
+        self._require_owned_booking(booking, user)
+        if booking.status not in (BookingStatus.CONFIRMED.value, BookingStatus.IN_PROGRESS.value):
+            raise HTTPException(status_code=409, detail='Chỉ được thêm dịch vụ khi booking đã xác nhận hoặc đang diễn ra')
+        snapshots, _ = self.inventory.validate_selections(booking.field, [payload], lock=True)
+        snapshot = snapshots[0]
+        item = BookingProductItem(
+            booking=booking, product_id=snapshot['product_id'],
+            product_name_snapshot=snapshot['name'], product_type_snapshot=snapshot['product_type'],
+            unit_snapshot=snapshot['unit'], unit_price_snapshot=snapshot['unit_price'],
+            quantity=snapshot['quantity'], line_total=snapshot['subtotal'],
+            source='OWNER_DURING_USAGE', added_by=user.id,
+        )
+        try:
+            self.repository.db.add(item); self.repository.db.flush()
+            self.inventory.reserve(item, actor_id=user.id)
+            before = self._amount_snapshot(booking)
+            self._recalculate_product_amounts(booking)
+            after = self._amount_snapshot(booking)
+            self._add_activity(booking.id, user, 'owner_added_booking_product', booking.status, booking.status, {
+                'item_id': item.id, 'product_id': item.product_id, 'product_name': item.product_name_snapshot,
+                'quantity': item.quantity, 'unit_price': float(item.unit_price_snapshot),
+                'subtotal': float(item.line_total), 'source': item.source,
+                'amounts_before': before, 'amounts_after': after,
+            })
+            self.repository.db.commit()
+        except HTTPException:
+            self.repository.db.rollback(); raise
+        except Exception:
+            self.repository.db.rollback(); raise
+        return self.response(self.repository.get(booking.id))
+
+    def during_usage_product_options(self, booking_id: int, user: User):
+        booking = self._booking_or_404(booking_id)
+        self._require_owned_booking(booking, user)
+        if booking.status not in (BookingStatus.CONFIRMED.value, BookingStatus.IN_PROGRESS.value):
+            raise HTTPException(status_code=409, detail='Booking hiện không ở trạng thái có thể thêm dịch vụ')
+        return self.inventory.owner_booking_options(booking, user)
+
+    def update_during_usage_product(self, booking_id: int, item_id: int, payload, user: User) -> BookingResponse:
+        booking = self._booking_or_404(booking_id, lock=True)
+        self._require_owned_booking(booking, user)
+        if booking.status != BookingStatus.IN_PROGRESS.value:
+            raise HTTPException(status_code=409, detail='Chỉ được điều chỉnh phát sinh khi booking đang diễn ra')
+        item = self._owner_added_item(booking, item_id)
+        before = self._amount_snapshot(booking)
+        old_quantity = int(item.quantity)
+        try:
+            self.inventory.release(item, actor_id=user.id)
+            item.quantity = payload.quantity
+            item.line_total = Decimal(item.unit_price_snapshot) * payload.quantity
+            self.inventory.reserve(item, actor_id=user.id)
+            self._recalculate_product_amounts(booking)
+            after = self._amount_snapshot(booking)
+            self._add_activity(booking.id, user, 'owner_updated_booking_product', booking.status, booking.status, {
+                'item_id': item.id, 'product_id': item.product_id, 'product_name': item.product_name_snapshot,
+                'quantity_before': old_quantity, 'quantity_after': item.quantity,
+                'unit_price': float(item.unit_price_snapshot), 'subtotal_after': float(item.line_total),
+                'amounts_before': before, 'amounts_after': after,
+            })
+            self.repository.db.commit()
+        except HTTPException:
+            self.repository.db.rollback(); raise
+        except Exception:
+            self.repository.db.rollback(); raise
+        return self.response(self.repository.get(booking.id))
+
+    def delete_during_usage_product(self, booking_id: int, item_id: int, user: User) -> BookingResponse:
+        booking = self._booking_or_404(booking_id, lock=True)
+        self._require_owned_booking(booking, user)
+        if booking.status != BookingStatus.IN_PROGRESS.value:
+            raise HTTPException(status_code=409, detail='Chỉ được xóa phát sinh khi booking đang diễn ra')
+        item = self._owner_added_item(booking, item_id)
+        before = self._amount_snapshot(booking)
+        details = {
+            'item_id': item.id, 'product_id': item.product_id, 'product_name': item.product_name_snapshot,
+            'quantity': item.quantity, 'unit_price': float(item.unit_price_snapshot),
+            'subtotal': float(item.line_total),
+        }
+        try:
+            self.inventory.release(item, actor_id=user.id)
+            booking.product_items.remove(item)
+            self.repository.db.flush()
+            self._recalculate_product_amounts(booking)
+            details.update({'amounts_before': before, 'amounts_after': self._amount_snapshot(booking)})
+            self._add_activity(booking.id, user, 'owner_deleted_booking_product', booking.status, booking.status, details)
+            self.repository.db.commit()
+        except HTTPException:
+            self.repository.db.rollback(); raise
+        except Exception:
+            self.repository.db.rollback(); raise
+        return self.response(self.repository.get(booking.id))
 
     def list_my(self, user: User, **filters):
         self.repository.release_expired_holds()
@@ -166,7 +255,23 @@ class BookingService:
             booking = self._booking_or_404(booking_id)
         if booking.invoice is None:
             raise HTTPException(status_code=404, detail='Booking chưa hoàn thành hoặc chưa có hóa đơn')
-        return booking.invoice
+        invoice = booking.invoice
+        detail = self.response(booking)
+        return BookingInvoiceResponse.model_validate({
+            'invoice_number': invoice.invoice_number, 'booking_id': invoice.booking_id,
+            'booking_code': invoice.booking_code, 'customer_name': invoice.customer_name,
+            'customer_email': invoice.customer_email, 'facility_name': invoice.facility_name,
+            'field_name': invoice.field_name, 'booking_date': invoice.booking_date,
+            'start_time': invoice.start_time, 'end_time': invoice.end_time,
+            'duration_minutes': detail.duration_minutes, 'selected_slots': detail.selected_slots,
+            'court_amount': invoice.court_amount, 'service_amount': invoice.service_amount,
+            'product_items': detail.product_items,
+            'total_amount': invoice.total_amount, 'deposit_amount': invoice.deposit_amount,
+            'remaining_payment_amount': invoice.remaining_payment_amount,
+            'refund_amount': invoice.refund_amount, 'net_received_amount': invoice.net_received_amount,
+            'payment_methods': invoice.payment_methods, 'paid_at': invoice.paid_at,
+            'issued_at': invoice.issued_at,
+        })
 
     def update(self, booking_id: int, payload, user: User) -> BookingResponse:
         booking = self._booking_or_404(booking_id)
@@ -176,12 +281,15 @@ class BookingService:
         if self.repository.committed_payment_amount(booking.id) > 0:
             raise HTTPException(status_code=409, detail='Không thể đổi lịch sau khi đã phát sinh giao dịch thanh toán')
         values = self._schedule_values(
-            payload.field_id, payload.time_slot_id, payload.booking_date,
+            payload.field_id, payload.time_slot_ids, payload.booking_date,
             exclude_id=booking.id, owner_user=user,
         )
+        self._apply_service_amount(values, booking.service_amount or 0)
+        slot_details = values.pop('_slot_details')
         if self.repository.committed_payment_amount(booking.id) > values['total_amount']:
             raise HTTPException(status_code=409, detail='Không thể đổi sang khung giờ có giá thấp hơn tổng giao dịch đã thanh toán hoặc đang chờ')
         values['note'] = payload.note
+        self._replace_booking_slots(booking, slot_details)
         try:
             return self.response(self.repository.update(booking, values))
         except IntegrityError:
@@ -238,6 +346,8 @@ class BookingService:
                 'cancelled_by': user.id, 'refund_status': 'not_required', 'remaining_amount': Decimal(0),
             })
             self._add_activity(booking.id, user, 'owner_cancelled_booking', old_status, BookingStatus.CANCELLED_BY_OWNER.value, {'reason': normalized_reason, 'refund_amount': 0})
+            self.notifications.booking_event(booking, 'BOOKING_CANCELLED')
+            self._release_product_inventory(booking, user.id)
             self.repository.db.commit()
             return self.response(self.repository.get(booking.id))
         if user.role not in ('CUSTOMER', 'OWNER') or booking.customer_id != user.id:
@@ -307,6 +417,11 @@ class BookingService:
             'free_cancellation_minutes': quote['free_cancellation_minutes'],
             'is_late_cancellation': quote['is_late_cancellation'],
         })
+        self.notifications.booking_event(booking, 'BOOKING_CANCELLED')
+        self.notifications.notify_owner_for_booking(booking, 'CUSTOMER_CANCELLED_BOOKING')
+        if refund > 0:
+            self.notifications.booking_event(booking, 'PAYMENT_REFUNDED')
+        self._release_product_inventory(booking, user.id)
         try:
             self.repository.db.commit()
         except IntegrityError:
@@ -384,6 +499,10 @@ class BookingService:
         self._add_activity(booking.id, user, action, old_status, BookingStatus.CANCELLED_BY_OWNER.value, {
             'reason': reason, 'refund_amount': float(refund_amount), 'refund_due_at': (now + self.REFUND_DEADLINE).isoformat(),
         })
+        self.notifications.booking_event(
+            booking, 'BOOKING_REJECTED' if action == 'owner_rejected_booking' else 'BOOKING_CANCELLED',
+        )
+        self._release_product_inventory(booking, user.id)
         try:
             self.repository.db.commit()
         except IntegrityError:
@@ -402,17 +521,21 @@ class BookingService:
         booking = self._booking_or_404(booking_id)
         self._authorize_reschedule(booking, user)
         values = self._schedule_values(
-            payload.field_id, payload.time_slot_id, payload.booking_date,
+            payload.field_id, payload.time_slot_ids, payload.booking_date,
             exclude_id=booking.id, owner_user=user if user.role == 'OWNER' else None,
         )
+        self._apply_service_amount(values, booking.service_amount or 0)
         if (booking.facility_id or booking.field_id) != (values['facility_id'] or values['field_id']):
             raise HTTPException(status_code=409, detail='Chỉ được đổi sang sân khác trong cùng cơ sở')
+        target_field = self.repository.db.get(Field, payload.field_id)
+        self.inventory.validate_reschedule(target_field, booking.product_items)
         old_total, new_total = Decimal(booking.total_amount), Decimal(values['total_amount'])
         difference = new_total - old_total
         paid = Decimal(booking.paid_amount or 0)
         additional = max(difference, Decimal(values['deposit_amount']) - paid, Decimal(0))
         return {
             'booking_id': booking.id, 'field_id': payload.field_id, 'time_slot_id': payload.time_slot_id,
+            'time_slot_ids': payload.time_slot_ids,
             'booking_date': payload.booking_date, 'old_total_amount': float(old_total),
             'new_total_amount': float(new_total), 'price_difference': float(difference),
             'additional_payment_required': float(additional), 'credit_amount': float(max(-difference, Decimal(0))),
@@ -420,6 +543,7 @@ class BookingService:
 
     def reschedule(self, booking_id: int, payload, user: User) -> BookingResponse:
         quote, values = self.reschedule_quote(booking_id, payload, user)
+        slot_details = values.pop('_slot_details')
         booking = self._booking_or_404(booking_id, lock=True)
         self._authorize_reschedule(booking, user)
         old_schedule = {
@@ -447,6 +571,7 @@ class BookingService:
                 payment.status = PaymentStatus.FAILED.value
                 payment.payment_status = PaymentStatus.FAILED.value
                 payment.failed_reason = 'Lịch đặt đã được đổi; cần tạo giao dịch theo giá mới'
+        self._replace_booking_slots(booking, slot_details)
         self._add_activity(booking.id, user, 'booking_rescheduled', booking.status, status, {
             'old_schedule': old_schedule,
             'new_schedule': {
@@ -459,6 +584,9 @@ class BookingService:
             'additional_payment_required': quote['additional_payment_required'],
             'credit_amount': quote['credit_amount'],
         })
+        self.notifications.booking_event(booking, 'BOOKING_RESCHEDULED')
+        if user.id == booking.customer_id:
+            self.notifications.notify_owner_for_booking(booking, 'CUSTOMER_RESCHEDULED_BOOKING')
         try:
             self.repository.flush_update(booking, values)
             self.repository.db.commit()
@@ -503,12 +631,13 @@ class BookingService:
         self._add_activity(booking.id, user, 'booking_completed_funds_released', old_status, BookingStatus.COMPLETED.value, {
             'released_amount': float(booking.paid_amount or 0), 'escrow_status': EscrowStatus.RELEASED.value,
         })
+        self._complete_product_inventory(booking, user.id)
         self.repository.db.commit()
         booking = self.repository.get(booking.id)
         self._ensure_invoice(booking, user)
         return self.response(self.repository.get(booking.id))
 
-    def _schedule_values(self, field_id: int, time_slot_id: int, booking_date: date, exclude_id: int | None = None, owner_user: User | None = None):
+    def _schedule_values(self, field_id: int, time_slot_ids: list[int], booking_date: date, exclude_id: int | None = None, owner_user: User | None = None):
         self.repository.release_expired_holds()
         self.repository.begin_booking_write_lock()
         field = self.repository.lock_field(field_id)
@@ -516,40 +645,74 @@ class BookingService:
             raise HTTPException(status_code=409, detail='Sân không tồn tại hoặc đang ngừng hoạt động')
         if owner_user is not None and not owns_field(owner_user, field, self.repository.db):
             raise HTTPException(status_code=404, detail='Không tìm thấy sân')
-        slot = self.repository.db.get(TimeSlot, time_slot_id)
-        if slot is None or slot.field_id != field_id or not slot.is_active:
+        slots = [self.repository.db.get(TimeSlot, slot_id) for slot_id in time_slot_ids]
+        if any(slot is None or slot.field_id != field_id or not slot.is_active for slot in slots):
             raise HTTPException(status_code=409, detail='Khung giờ không tồn tại, đã khóa hoặc không thuộc sân đã chọn')
-        scheduled_at = datetime.combine(booking_date, slot.start_time, tzinfo=self.timezone)
+        slots.sort(key=lambda item: (item.start_time, item.end_time, item.id))
+        start_time, end_time = slots[0].start_time, slots[-1].end_time
+        scheduled_at = datetime.combine(booking_date, start_time, tzinfo=self.timezone)
         if scheduled_at <= datetime.now(self.timezone):
             raise HTTPException(status_code=409, detail='Không thể đặt thời gian trong quá khứ')
         conflict = self.repository.find_conflict(
             field_id=field_id, booking_date=booking_date,
-            start_time=slot.start_time, end_time=slot.end_time, exclude_id=exclude_id,
+            ranges=[(slot.start_time, slot.end_time) for slot in slots], exclude_id=exclude_id,
         )
         if conflict:
             raise HTTPException(status_code=409, detail=self.CONFLICT_MESSAGE)
-        if self.repository.find_block(field_id=field_id, booking_date=booking_date, start_time=slot.start_time, end_time=slot.end_time):
+        if any(self.repository.find_block(field_id=field_id, booking_date=booking_date, start_time=slot.start_time, end_time=slot.end_time) for slot in slots):
             raise HTTPException(status_code=409, detail='Sân đã bị khóa hoặc bảo trì trong khoảng thời gian này')
-        if self.repository.find_maintenance(field_id=field_id, booking_date=booking_date, start_time=slot.start_time, end_time=slot.end_time):
+        if any(self.repository.find_maintenance(field_id=field_id, booking_date=booking_date, start_time=slot.start_time, end_time=slot.end_time) for slot in slots):
             raise HTTPException(status_code=409, detail='Khung giờ đang bảo trì và không khả dụng')
-        special_price = slot.weekend_price if booking_date.weekday() >= 5 else slot.weekday_price
-        price = Decimal(special_price if special_price is not None else slot.price)
+        prices = []
+        slot_details = []
+        for position, slot in enumerate(slots):
+            special_price = slot.weekend_price if booking_date.weekday() >= 5 else slot.weekday_price
+            price = Decimal(special_price if special_price is not None else slot.price)
+            prices.append(price)
+            slot_details.append({
+                'time_slot_id': slot.id, 'position': position, 'name_snapshot': slot.name,
+                'start_time_snapshot': slot.start_time, 'end_time_snapshot': slot.end_time,
+                'price_snapshot': price,
+            })
+        total = sum(prices, Decimal('0'))
         deposit_value = Decimal(field.deposit_value or 0)
-        deposit = price * deposit_value / Decimal(100) if field.deposit_type == 'percentage' else deposit_value
-        deposit = min(price, deposit).quantize(Decimal('0.01'))
+        deposit = total * deposit_value / Decimal(100) if field.deposit_type == 'percentage' else deposit_value
+        deposit = min(total, deposit).quantize(Decimal('0.01'))
         return {
             'facility_id': field.facility_id,
             'facility_name_snapshot': field.facility.name if field.facility else field.name,
-            'field_id': field_id, 'time_slot_id': time_slot_id, 'booking_date': booking_date,
-            'start_time_snapshot': slot.start_time, 'end_time_snapshot': slot.end_time,
-            'price_snapshot': price, 'total_amount': price,
+            'field_id': field_id, 'time_slot_id': slots[0].id, 'booking_date': booking_date,
+            'start_time_snapshot': start_time, 'end_time_snapshot': end_time,
+            'price_snapshot': prices[0], 'court_amount': total, 'service_amount': Decimal('0'), 'total_amount': total,
             'deposit_type': field.deposit_type, 'deposit_value': deposit_value,
             'deposit_amount': deposit, 'paid_amount': Decimal('0'),
-            'remaining_amount': price, 'payment_status': 'unpaid',
+            'remaining_amount': total, 'payment_status': 'unpaid',
             'cancellation_policy': field.cancellation_policy,
             'cancellation_refund_percent': field.cancellation_refund_percent,
             'free_cancellation_minutes': int(field.facility.free_cancellation_minutes if field.facility else 360),
+            '_slot_details': slot_details,
         }
+
+    @staticmethod
+    def _apply_service_amount(values: dict, service_amount):
+        court_amount = Decimal(values.get('court_amount', values['total_amount']))
+        service_amount = Decimal(service_amount or 0)
+        total = court_amount + service_amount
+        # The deposit policy belongs to the court schedule. Add-ons are paid in
+        # the remaining payment and must never increase the initial deposit.
+        deposit = min(court_amount, Decimal(values['deposit_amount'] or 0)).quantize(Decimal('0.01'))
+        values.update({
+            'court_amount': court_amount, 'service_amount': service_amount, 'total_amount': total,
+            'deposit_amount': deposit, 'remaining_amount': total,
+        })
+
+    def _replace_booking_slots(self, booking: Booking, slot_details: list[dict]):
+        # Delete old snapshots before inserting positions 0..n again. Without
+        # this flush, databases can insert the new rows before deleting the old
+        # ones and violate uq_booking_slot_position during reschedule.
+        booking.booking_slots.clear()
+        self.repository.db.flush()
+        booking.booking_slots.extend(BookingSlot(**item) for item in slot_details)
 
     def _transition(self, booking_id: int, allowed: set[str], status: str, note: str | None, user: User):
         booking = self._booking_or_404(booking_id)
@@ -565,9 +728,55 @@ class BookingService:
                     payment.escrow_status = EscrowStatus.RELEASED.value
                     released += Decimal(payment.amount)
             details.update({'released_amount': float(released), 'escrow_status': EscrowStatus.RELEASED.value})
+            self._release_product_inventory(booking, user.id)
         self._add_activity(booking.id, user, f'booking_{status}', old_status, status, details)
+        if status == BookingStatus.CONFIRMED.value:
+            self.notifications.booking_event(booking, 'BOOKING_CONFIRMED')
         self.repository.db.commit()
         return self.response(self.repository.get(booking.id))
+
+    def _release_product_inventory(self, booking: Booking, actor_id: int | None):
+        for item in booking.product_items:
+            self.inventory.release(item, actor_id=actor_id)
+
+    @staticmethod
+    def _owner_added_item(booking: Booking, item_id: int):
+        item = next((value for value in booking.product_items if value.id == item_id), None)
+        if item is None or item.source != 'OWNER_DURING_USAGE':
+            raise HTTPException(status_code=404, detail='Không tìm thấy khoản phát sinh của booking')
+        return item
+
+    @staticmethod
+    def _amount_snapshot(booking: Booking):
+        return {
+            'court_amount': float(booking.court_amount or 0),
+            'service_amount': float(booking.service_amount or 0),
+            'total_amount': float(booking.total_amount or 0),
+            'paid_amount': float(booking.paid_amount or 0),
+            'remaining_amount': float(booking.remaining_amount or 0),
+        }
+
+    @staticmethod
+    def _recalculate_product_amounts(booking: Booking):
+        court = Decimal(booking.court_amount or 0)
+        if court == 0 and Decimal(booking.service_amount or 0) == 0:
+            court = Decimal(booking.total_amount or 0)
+        service = sum((Decimal(item.line_total or 0) for item in booking.product_items), Decimal('0'))
+        total = court + service
+        paid = Decimal(booking.paid_amount or 0)
+        booking.court_amount = court
+        booking.service_amount = service
+        booking.total_amount = total
+        booking.remaining_amount = max(total - paid, Decimal('0'))
+        booking.credit_amount = max(paid - total, Decimal('0'))
+        booking.payment_status = 'paid' if paid >= total else 'partial' if paid > 0 else 'unpaid'
+
+    def _complete_product_inventory(self, booking: Booking, actor_id: int | None):
+        for item in booking.product_items:
+            if item.product_type_snapshot == 'RENT':
+                self.inventory.release(item, actor_id=actor_id, returned=True)
+            else:
+                self.inventory.fulfill(item, actor_id=actor_id)
 
     def _booking_or_404(self, booking_id: int, lock: bool = False) -> Booking:
         booking = self.repository.get(booking_id, lock=lock)
@@ -610,6 +819,7 @@ class BookingService:
             facility_name=booking.facility_name_snapshot or booking.field.name,
             field_name=booking.field.name, booking_date=booking.booking_date,
             start_time=booking.start_time_snapshot, end_time=booking.end_time_snapshot,
+            court_amount=booking.court_amount, service_amount=booking.service_amount,
             total_amount=booking.total_amount, deposit_amount=deposit_paid,
             remaining_payment_amount=remaining_paid, refund_amount=refund,
             net_received_amount=max(total_received - refund, Decimal(0)),
@@ -656,22 +866,48 @@ class BookingService:
             BookingStatus.CANCELLED_BY_OWNER.value, BookingStatus.CANCELLED_BY_CUSTOMER.value,
             BookingStatus.CANCELLED.value,
         ) else max(total - paid, Decimal(0))
-        duration = (datetime.combine(date.min, booking.end_time_snapshot) - datetime.combine(date.min, booking.start_time_snapshot)).seconds // 60
+        slot_snapshots = booking.booking_slots or []
+        selected_slots = [{
+            'time_slot_id': item.time_slot_id, 'name': item.name_snapshot,
+            'start_time': item.start_time_snapshot, 'end_time': item.end_time_snapshot,
+            'price': item.price_snapshot,
+        } for item in slot_snapshots] or [{
+            'time_slot_id': booking.time_slot_id, 'name': booking.time_slot.name,
+            'start_time': booking.start_time_snapshot, 'end_time': booking.end_time_snapshot,
+            'price': booking.price_snapshot,
+        }]
+        duration = sum(
+            (datetime.combine(date.min, item['end_time']) - datetime.combine(date.min, item['start_time'])).seconds // 60
+            for item in selected_slots
+        )
+        product_items = [{
+            'item_id': item.id, 'product_id': item.product_id, 'name': item.product_name_snapshot,
+            'product_type': item.product_type_snapshot, 'unit': item.unit_snapshot,
+            'quantity': item.quantity, 'unit_price': item.unit_price_snapshot,
+            'subtotal': item.line_total, 'inventory_status': item.inventory_status,
+            'source': item.source, 'added_by': item.added_by,
+            'added_by_name': item.added_by_user.full_name if item.added_by_user else None,
+            'added_at': item.created_at,
+        } for item in booking.product_items]
         return BookingResponse.model_validate({
             'id': booking.id, 'booking_code': booking.booking_code,
             'customer_id': booking.customer_id, 'customer_name': booking.customer.full_name,
             'customer_email': booking.customer.email, 'customer_phone': booking.customer.phone,
             'facility_id': booking.facility_id,
             'facility_name': booking.facility_name_snapshot or (booking.facility.name if booking.facility else booking.field.name),
-            'facility_hotline': (booking.facility.contact_phone or '0901 234 567') if booking.facility else '0901 234 567',
+            'facility_hotline': booking.facility.contact_phone if booking.facility else None,
             'field_id': booking.field_id,
             'field_name': booking.field.name, 'sport_type': booking.field.sport_type,
             'field_capacity': booking.field.capacity,
             'location': booking.field.location, 'time_slot_id': booking.time_slot_id,
-            'time_slot_name': booking.time_slot.name, 'booking_date': booking.booking_date,
+            'time_slot_ids': [item['time_slot_id'] for item in selected_slots],
+            'selected_slots': selected_slots,
+            'time_slot_name': '; '.join(item['name'] for item in selected_slots), 'booking_date': booking.booking_date,
             'start_time_snapshot': booking.start_time_snapshot,
             'end_time_snapshot': booking.end_time_snapshot,
-            'price_snapshot': booking.price_snapshot, 'total_amount': total,
+            'price_snapshot': booking.price_snapshot,
+            'court_amount': booking.court_amount, 'service_amount': booking.service_amount,
+            'product_items': product_items, 'total_amount': total,
             'deposit_type': booking.deposit_type, 'deposit_value': booking.deposit_value,
             'deposit_amount': deposit, 'paid_amount': paid,
             'additional_paid_amount': max(paid - deposit, Decimal(0)),

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -11,7 +11,9 @@ from app.core.config import settings
 from app.core.security import get_password_hash
 from app.database.base import Base
 from app.database.session import get_db
+from app.database.migrations import migrate_facility_approval_schema
 from app.main import app
+from app.models.facility import FacilityDocument, FacilityImage
 from app.models.user import User, UserRole
 
 
@@ -65,7 +67,7 @@ class FacilityApprovalTests(unittest.TestCase):
         facility_id = created.json()['id']
         image = self.client.post('/facilities/' + str(facility_id) + '/images', headers=self.owner, data={'category': 'COVER'}, files={'image': ('cover.jpg', JPEG, 'image/jpeg')})
         self.assertEqual(image.status_code, 200, image.text)
-        document = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'BUSINESS_LICENSE', 'document_name': 'Giay phep kinh doanh'}, files={'document': ('license.pdf', PDF, 'application/pdf')})
+        document = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'BUSINESS_REGISTRATION', 'document_name': 'Giay phep kinh doanh', 'document_number': 'GPKD-001'}, files={'document': ('license.pdf', PDF, 'application/pdf')})
         self.assertEqual(document.status_code, 200, document.text)
         return facility_id
 
@@ -74,13 +76,17 @@ class FacilityApprovalTests(unittest.TestCase):
         facility_id = self.create_complete()
         self.assertEqual(self.client.get('/fields', headers=self.customer).json()['total'], 0)
         submitted = self.client.post('/facilities/' + str(facility_id) + '/submit', headers=self.owner)
-        self.assertEqual(submitted.status_code, 200, submitted.text); self.assertEqual(submitted.json()['status'], 'PENDING_REVIEW')
+        self.assertEqual(submitted.status_code, 200, submitted.text); self.assertEqual(submitted.json()['status'], 'PENDING_APPROVAL')
+        admin_notifications = self.client.get('/notifications', headers=self.admin).json()['items']
+        self.assertIn('FACILITY_APPLICATION_SUBMITTED', [item['type'] for item in admin_notifications])
         self.assertEqual(self.client.put('/facilities/' + str(facility_id), headers=self.owner, json=self.payload()).status_code, 409)
         self.assertEqual(self.client.patch('/admin/facility-applications/' + str(facility_id) + '/review', headers=self.owner, json={'action': 'APPROVE'}).status_code, 403)
         detail = self.client.get('/admin/facility-applications/' + str(facility_id), headers=self.admin)
         self.assertEqual(detail.status_code, 200, detail.text); self.assertEqual(len(detail.json()['documents']), 1)
         approved = self.client.patch('/admin/facility-applications/' + str(facility_id) + '/review', headers=self.admin, json={'action': 'APPROVE'})
         self.assertEqual(approved.status_code, 200, approved.text); self.assertEqual(approved.json()['status'], 'APPROVED')
+        owner_notifications = self.client.get('/notifications', headers=self.owner).json()['items']
+        self.assertIn('FACILITY_APPROVED', [item['type'] for item in owner_notifications])
         field = self.client.post('/fields', headers=self.owner, json={'facility_id': facility_id, 'name': 'Court 1', 'sport_type': 'Cầu lông', 'description': 'Court', 'location': 'ignored', 'capacity': 4, 'base_price': 200000, 'status': 'available', 'amenities': []})
         self.assertEqual(field.status_code, 201, field.text)
         self.assertEqual(self.client.get('/fields', headers=self.customer).json()['total'], 1)
@@ -88,8 +94,12 @@ class FacilityApprovalTests(unittest.TestCase):
     def test_reject_reason_resubmit_isolation_and_private_files(self):
         facility_id = self.create_complete()
         self.client.post('/facilities/' + str(facility_id) + '/submit', headers=self.owner)
+        self.assertEqual(self.client.patch('/admin/facility-applications/' + str(facility_id) + '/review', headers=self.admin, json={'action': 'REJECT'}).status_code, 422)
         rejected = self.client.patch('/admin/facility-applications/' + str(facility_id) + '/review', headers=self.admin, json={'action': 'REJECT', 'reason': 'Can bo sung thong tin bien hieu'})
         self.assertEqual(rejected.json()['status'], 'REJECTED')
+        notification = self.client.get('/notifications', headers=self.owner).json()['items'][0]
+        self.assertEqual(notification['type'], 'FACILITY_REJECTED')
+        self.assertIn('Can bo sung thong tin bien hieu', notification['message'])
         own = self.client.get('/facilities/' + str(facility_id), headers=self.owner)
         self.assertEqual(own.json()['rejection_reason'], 'Can bo sung thong tin bien hieu')
         self.assertEqual(self.client.get('/facilities/' + str(facility_id), headers=self.other).status_code, 404)
@@ -97,7 +107,7 @@ class FacilityApprovalTests(unittest.TestCase):
         self.assertEqual(self.client.get('/facilities/' + str(facility_id) + '/documents/' + str(document_id) + '/content', headers=self.customer).status_code, 404)
         updated_payload = self.payload('SportHub Center Updated')
         self.assertEqual(self.client.put('/facilities/' + str(facility_id), headers=self.owner, json=updated_payload).status_code, 200)
-        self.assertEqual(self.client.post('/facilities/' + str(facility_id) + '/submit', headers=self.owner).json()['status'], 'PENDING_REVIEW')
+        self.assertEqual(self.client.post('/facilities/' + str(facility_id) + '/submit', headers=self.owner).json()['status'], 'PENDING_APPROVAL')
 
     def test_pending_and_suspended_facilities_cannot_receive_booking_or_ai_visibility(self):
         facility_id = self.create_complete()
@@ -110,6 +120,77 @@ class FacilityApprovalTests(unittest.TestCase):
         self.assertEqual(suspended.json()['status'], 'SUSPENDED')
         self.assertEqual(self.client.get('/public/courts/' + str(field['id'])).status_code, 404)
         self.assertEqual(self.client.get('/fields', headers=self.customer).json()['total'], 0)
+
+    def test_document_validation_duplicate_and_dangerous_filename(self):
+        facility_id = self.create_complete()
+        metadata = {'document_type': 'BUSINESS_REGISTRATION', 'document_name': 'Dang ky kinh doanh', 'document_number': 'GPKD-001'}
+        duplicate = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data=metadata, files={'document': ('copy.pdf', PDF, 'application/pdf')})
+        self.assertEqual(duplicate.status_code, 409, duplicate.text)
+        executable_name = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data=metadata, files={'document': ('danger.exe', PDF, 'application/pdf')})
+        self.assertEqual(executable_name.status_code, 415, executable_name.text)
+        missing_number = self.client.post('/facilities/' + str(facility_id) + '/documents', headers=self.owner, data={'document_type': 'OTHER', 'document_name': 'Bo sung'}, files={'document': ('other.pdf', PDF, 'application/pdf')})
+        self.assertEqual(missing_number.status_code, 422, missing_number.text)
+
+    def test_owner_can_delete_only_own_draft_and_files_are_cleaned(self):
+        facility_id = self.create_complete()
+        with self.Session() as db:
+            image_path = settings.FACILITY_IMAGE_DIR / db.query(FacilityImage).filter_by(facility_id=facility_id).one().file_path
+            document_path = settings.FACILITY_PRIVATE_DIR / db.query(FacilityDocument).filter_by(facility_id=facility_id).one().file_path
+        self.assertTrue(image_path.is_file()); self.assertTrue(document_path.is_file())
+
+        endpoint = '/facilities/' + str(facility_id) + '/draft'
+        self.assertEqual(self.client.delete(endpoint, headers=self.other).status_code, 404)
+        self.assertEqual(self.client.delete(endpoint, headers=self.customer).status_code, 403)
+        self.assertEqual(self.client.delete(endpoint, headers=self.admin).status_code, 403)
+        self.assertEqual(self.client.delete(endpoint, headers=self.owner).status_code, 204)
+        self.assertEqual(self.client.get('/facilities/' + str(facility_id), headers=self.owner).status_code, 404)
+        self.assertFalse(image_path.exists()); self.assertFalse(document_path.exists())
+
+    def test_submitted_approved_and_rejected_facilities_cannot_use_delete_draft_api(self):
+        pending_id = self.create_complete()
+        self.client.post('/facilities/' + str(pending_id) + '/submit', headers=self.owner)
+        endpoint = '/facilities/' + str(pending_id) + '/draft'
+        self.assertEqual(self.client.delete(endpoint, headers=self.owner).status_code, 409)
+        self.client.patch('/admin/facility-applications/' + str(pending_id) + '/review', headers=self.admin, json={'action': 'APPROVE'})
+        self.assertEqual(self.client.delete(endpoint, headers=self.owner).status_code, 409)
+
+        rejected_id = self.create_complete()
+        self.client.post('/facilities/' + str(rejected_id) + '/submit', headers=self.owner)
+        self.client.patch('/admin/facility-applications/' + str(rejected_id) + '/review', headers=self.admin, json={'action': 'REJECT', 'reason': 'Can bo sung giay to'})
+        self.assertEqual(self.client.delete('/facilities/' + str(rejected_id) + '/draft', headers=self.owner).status_code, 409)
+
+    def test_partial_draft_is_updated_in_place_without_duplicates(self):
+        partial = {'name': '', 'location': '', 'description': 'Dang nhap thong tin', 'sports': [], 'amenities': [], 'image_urls': []}
+        created = self.client.post('/facilities', headers=self.owner, json=partial)
+        self.assertEqual(created.status_code, 201, created.text)
+        self.assertEqual(created.json()['status'], 'DRAFT')
+        facility_id = created.json()['id']
+
+        first = {**partial, 'name': 'Ban nhap SportHub'}
+        second = {**first, 'location': '123 Dia chi dang hoan thien'}
+        self.assertEqual(self.client.put('/facilities/' + str(facility_id), headers=self.owner, json=first).status_code, 200)
+        updated = self.client.put('/facilities/' + str(facility_id), headers=self.owner, json=second)
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()['location'], second['location'])
+        drafts = [item for item in self.client.get('/facilities', headers=self.owner).json() if item['status'] == 'DRAFT']
+        self.assertEqual([item['id'] for item in drafts], [facility_id])
+
+    def test_legacy_facility_approval_migration_preserves_documents(self):
+        engine = create_engine('sqlite://', poolclass=StaticPool)
+        with engine.begin() as connection:
+            connection.execute(text('CREATE TABLE facilities (id INTEGER PRIMARY KEY, status VARCHAR(24), is_active BOOLEAN, approved_at DATETIME, created_at DATETIME, legacy_field_id INTEGER)'))
+            connection.execute(text("INSERT INTO facilities VALUES (1, 'PENDING_REVIEW', 0, NULL, CURRENT_TIMESTAMP, NULL)"))
+            connection.execute(text('CREATE TABLE facility_documents (id INTEGER PRIMARY KEY, facility_id INTEGER, file_path VARCHAR(500))'))
+            connection.execute(text("INSERT INTO facility_documents VALUES (1, 1, '1/license.pdf')"))
+        migrate_facility_approval_schema(engine)
+        inspector = inspect(engine)
+        self.assertIn('facility_verification_documents', inspector.get_table_names())
+        self.assertNotIn('facility_documents', inspector.get_table_names())
+        self.assertIn('file_sha256', {column['name'] for column in inspector.get_columns('facility_verification_documents')})
+        with engine.connect() as connection:
+            self.assertEqual(connection.scalar(text('SELECT status FROM facilities WHERE id=1')), 'PENDING_APPROVAL')
+            self.assertEqual(connection.scalar(text('SELECT COUNT(*) FROM facility_verification_documents')), 1)
+        engine.dispose()
 
 
 if __name__ == '__main__':

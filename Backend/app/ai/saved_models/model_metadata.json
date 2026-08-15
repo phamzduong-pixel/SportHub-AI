@@ -1,0 +1,17 @@
+{
+  "model_name": "Random Forest",
+  "model_type": "RandomForestClassifier",
+  "model_version": "demand-rf-v1",
+  "sklearn_version": "1.9.0",
+  "trained_at": "2026-08-05T17:21:51.553609+00:00",
+  "feature_names": [
+    "sport_type",
+    "day_of_week",
+    "start_hour",
+    "price",
+    "month",
+    "is_weekend",
+    "previous_booking_count",
+    "field_capacity"
+  ]
+}

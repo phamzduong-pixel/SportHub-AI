@@ -4,11 +4,12 @@ from decimal import Decimal
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from ..models.field import Booking, Field
+from ..models.field import Booking, BookingSlot, Field
 from ..models.facility import Facility
 from ..models.time_slot import TimeSlot
 from ..models.user import User
 from ..models.payment import Payment
+from ..models.product import BookingProductItem
 from ..models.refund import BookingActivity
 from ..models.operations import FieldBlock
 from ..models.maintenance import FieldMaintenance
@@ -16,13 +17,13 @@ from ..core.config import settings
 from zoneinfo import ZoneInfo
 
 BLOCKING_STATUSES = ('pending_confirmation', 'confirmed', 'in_progress')
-CONFLICT_MESSAGE = 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.'
+CONFLICT_MESSAGE = 'Một hoặc nhiều khung giờ vừa được người khác đặt. Danh sách giờ trống đã được cập nhật.'
 
 class BookingRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None):
+    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, owner_id: int | None = None, include_legacy_unowned: bool = False):
         field_filters = [
             Field.status == 'available',
             or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
@@ -35,13 +36,15 @@ class BookingRepository:
             field_filters.append(func.lower(Field.sport_type) == sport_type.strip().lower())
         if location:
             field_filters.append(Field.location.ilike(f'%{location.strip()}%'))
+        if owner_id is not None:
+            field_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
         fields = list(self.db.scalars(select(Field).where(*field_filters).order_by(Field.name)).all())
         if not fields:
             return []
         field_ids = [field.id for field in fields]
         slots = list(self.db.scalars(select(TimeSlot).where(TimeSlot.field_id.in_(field_ids), TimeSlot.is_active.is_(True)).order_by(TimeSlot.start_time)).all())
         now = datetime.now(timezone.utc)
-        bookings = list(self.db.scalars(select(Booking).where(
+        bookings = list(self.db.scalars(select(Booking).options(selectinload(Booking.booking_slots)).where(
             Booking.field_id.in_(field_ids), Booking.booking_date == booking_date,
             or_(
                 Booking.status.in_(BLOCKING_STATUSES),
@@ -59,21 +62,27 @@ class BookingRepository:
         )).all())
         return fields, slots, bookings, blocks, maintenances
 
-    def find_conflict(self, *, field_id: int, booking_date: date, start_time: time, end_time: time, exclude_id: int | None = None) -> Booking | None:
+    def find_conflict(self, *, field_id: int, booking_date: date, ranges: list[tuple[time, time]], exclude_id: int | None = None) -> Booking | None:
         now = datetime.now(timezone.utc)
-        query = select(Booking).where(
+        query = select(Booking).options(selectinload(Booking.booking_slots)).where(
             Booking.field_id == field_id,
             Booking.booking_date == booking_date,
             or_(
                 Booking.status.in_(BLOCKING_STATUSES),
                 and_(Booking.status == 'pending_payment', Booking.hold_expires_at > now),
             ),
-            Booking.start_time_snapshot < end_time,
-            Booking.end_time_snapshot > start_time,
         ).with_for_update()
         if exclude_id:
             query = query.where(Booking.id != exclude_id)
-        return self.db.scalar(query.limit(1))
+        for booking in self.db.scalars(query).unique().all():
+            occupied = [
+                (item.start_time_snapshot, item.end_time_snapshot)
+                for item in booking.booking_slots
+            ] or [(booking.start_time_snapshot, booking.end_time_snapshot)]
+            if any(start < occupied_end and end > occupied_start
+                   for start, end in ranges for occupied_start, occupied_end in occupied):
+                return booking
+        return None
 
     def find_block(self, *, field_id: int, booking_date: date, start_time: time, end_time: time) -> FieldBlock | None:
         return self.db.scalar(select(FieldBlock).where(
@@ -111,20 +120,28 @@ class BookingRepository:
             self.db.execute(text('BEGIN IMMEDIATE'))
 
     def release_expired_holds(self) -> int:
-        expired_ids = select(Booking.id).where(
+        expired = list(self.db.scalars(select(Booking).where(
             Booking.status == 'pending_payment',
             Booking.hold_expires_at <= datetime.now(timezone.utc),
-        )
+        )).all())
+        if not expired:
+            # End the read transaction so SQLite can acquire BEGIN IMMEDIATE
+            # for the authoritative availability check that follows.
+            self.db.commit()
+            return 0
+        expired_ids = [booking.id for booking in expired]
         self.db.execute(update(Payment).where(
             Payment.booking_id.in_(expired_ids), Payment.status == 'pending',
         ).values(status='failed', payment_status='failed').execution_options(synchronize_session=False))
-        statement = update(Booking).where(
-            Booking.status == 'pending_payment',
-            Booking.hold_expires_at <= datetime.now(timezone.utc),
-        ).values(status='expired', hold_expires_at=None).execution_options(synchronize_session=False)
-        result = self.db.execute(statement)
+        from ..services.inventory_service import InventoryService
+        inventory = InventoryService(self.db)
+        for booking in expired:
+            for item in booking.product_items:
+                inventory.release(item)
+            booking.status = 'expired'
+            booking.hold_expires_at = None
         self.db.commit()
-        return int(result.rowcount or 0)
+        return len(expired)
 
     def get(self, booking_id: int, lock: bool = False) -> Booking | None:
         query = self._details_query().where(Booking.id == booking_id)
@@ -165,10 +182,13 @@ class BookingRepository:
         ).unique().all())
         return items, total
 
-    def create(self, booking: Booking) -> Booking:
+    def create(self, booking: Booking, *, commit: bool = True) -> Booking:
         self.db.add(booking)
-        self.db.commit()
-        return self.get(booking.id)
+        if commit:
+            self.db.commit()
+            return self.get(booking.id)
+        self.db.flush()
+        return booking
 
     def update(self, booking: Booking, data: dict) -> Booking:
         for key, value in data.items():
@@ -203,6 +223,8 @@ class BookingRepository:
             joinedload(Booking.customer), joinedload(Booking.field).joinedload(Field.facility),
             joinedload(Booking.facility), joinedload(Booking.time_slot),
             joinedload(Booking.invoice), selectinload(Booking.payments),
+            selectinload(Booking.booking_slots),
+            selectinload(Booking.product_items).selectinload(BookingProductItem.added_by_user),
             joinedload(Booking.review),
             selectinload(Booking.activities).joinedload(BookingActivity.actor),
         )

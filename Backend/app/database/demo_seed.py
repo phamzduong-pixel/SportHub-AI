@@ -9,12 +9,60 @@ from ..models.facility import Facility, default_cancellation_rules
 from ..models.field import Booking, Field
 from ..models.invoice import Invoice
 from ..models.payment import EscrowStatus, Payment, PaymentStatus, PaymentType
+from ..models.product import FacilityProduct, ProductCatalogItem, ProductSport, ProductStatus
 from ..models.review import Review
 from ..models.time_slot import TimeSlot
 from ..models.user import User, UserFavoriteField, UserRole
 
 DEMO_BOOKING_CODES = ('DEMO-COMPLETED', 'DEMO-CONFIRMED', 'DEMO-PENDING')
 ACTIVE_BOOKING_STATUSES = ('pending_payment', 'pending_confirmation', 'confirmed', 'in_progress')
+
+DEFAULT_PRODUCT_CATALOG = (
+    # Bóng đá và Futsal dùng chung nhóm gợi ý này.
+    ('football-ball-rental', 'Bóng đá', 'Thuê bóng', 'RENT', 'quả', True),
+    ('football-bib', 'Bóng đá', 'Áo bib', 'RENT', 'áo', True),
+    ('football-goalkeeper-gloves', 'Bóng đá', 'Găng tay thủ môn', 'RENT', 'đôi', True),
+    ('football-shoes', 'Bóng đá', 'Thuê giày', 'RENT', 'đôi', True),
+    ('football-water', 'Bóng đá', 'Nước suối', 'SELL', 'chai', True),
+    ('football-sport-drink', 'Bóng đá', 'Nước thể thao', 'SELL', 'chai', True),
+    ('football-towel', 'Bóng đá', 'Khăn', 'SELL', 'khăn', True),
+    ('football-referee', 'Bóng đá', 'Trọng tài', 'SERVICE', 'trận', False),
+    ('badminton-racket', 'Cầu lông', 'Thuê vợt', 'RENT', 'cây', True),
+    ('badminton-shuttlecock', 'Cầu lông', 'Cầu lông', 'SELL', 'quả', True),
+    ('badminton-shoes', 'Cầu lông', 'Thuê giày', 'RENT', 'đôi', True),
+    ('badminton-grip', 'Cầu lông', 'Quấn cán', 'SERVICE', 'lần', False),
+    ('badminton-water', 'Cầu lông', 'Nước suối', 'SELL', 'chai', True),
+    ('badminton-sport-drink', 'Cầu lông', 'Nước thể thao', 'SELL', 'chai', True),
+    ('badminton-towel', 'Cầu lông', 'Khăn', 'SELL', 'khăn', True),
+    ('badminton-coach', 'Cầu lông', 'Huấn luyện viên', 'SERVICE', 'giờ', False),
+    ('pickleball-paddle', 'Pickleball', 'Thuê paddle', 'RENT', 'cây', True),
+    ('pickleball-ball', 'Pickleball', 'Bóng pickleball', 'SELL', 'quả', True),
+    ('pickleball-grip', 'Pickleball', 'Quấn cán', 'SERVICE', 'lần', False),
+    ('pickleball-water', 'Pickleball', 'Nước suối', 'SELL', 'chai', True),
+    ('pickleball-sport-drink', 'Pickleball', 'Nước thể thao', 'SELL', 'chai', True),
+    ('pickleball-towel', 'Pickleball', 'Khăn', 'SELL', 'khăn', True),
+    ('pickleball-coach', 'Pickleball', 'Huấn luyện viên', 'SERVICE', 'giờ', False),
+    ('tennis-racket', 'Tennis', 'Thuê vợt', 'RENT', 'cây', True),
+    ('tennis-ball', 'Tennis', 'Bóng tennis', 'SELL', 'ống', True),
+    ('tennis-ball-machine', 'Tennis', 'Máy bắn bóng', 'RENT', 'máy', True),
+    ('tennis-shoes', 'Tennis', 'Thuê giày', 'RENT', 'đôi', True),
+    ('tennis-grip', 'Tennis', 'Quấn cán', 'SERVICE', 'lần', False),
+    ('tennis-water', 'Tennis', 'Nước suối', 'SELL', 'chai', True),
+    ('tennis-towel', 'Tennis', 'Khăn', 'SELL', 'khăn', True),
+    ('tennis-coach', 'Tennis', 'Huấn luyện viên', 'SERVICE', 'giờ', False),
+    ('basketball-ball', 'Bóng rổ', 'Thuê bóng', 'RENT', 'quả', True),
+    ('basketball-bib', 'Bóng rổ', 'Áo bib', 'RENT', 'áo', True),
+    ('basketball-water', 'Bóng rổ', 'Nước suối', 'SELL', 'chai', True),
+    ('basketball-towel', 'Bóng rổ', 'Khăn', 'SELL', 'khăn', True),
+    ('volleyball-ball', 'Bóng chuyền', 'Thuê bóng', 'RENT', 'quả', True),
+    ('volleyball-knee-pads', 'Bóng chuyền', 'Băng bảo vệ đầu gối', 'SELL', 'đôi', True),
+    ('volleyball-water', 'Bóng chuyền', 'Nước suối', 'SELL', 'chai', True),
+    ('volleyball-towel', 'Bóng chuyền', 'Khăn', 'SELL', 'khăn', True),
+    ('table-tennis-racket', 'Bóng bàn', 'Thuê vợt', 'RENT', 'cây', True),
+    ('table-tennis-ball', 'Bóng bàn', 'Bóng bàn', 'SELL', 'quả', True),
+    ('table-tennis-water', 'Bóng bàn', 'Nước suối', 'SELL', 'chai', True),
+    ('table-tennis-towel', 'Bóng bàn', 'Khăn', 'SELL', 'khăn', True),
+)
 
 DEMO_VENUES = (
     {
@@ -86,13 +134,49 @@ DEMO_VENUES = (
 )
 
 
+# Per-facility demo products: (sport_name, name, product_type, unit, price, stock_quantity, track_inventory)
+# sport_name=None means 'Dùng chung' – will be linked to all sports of the facility.
+DEMO_FACILITY_PRODUCTS = {
+    'Sân bóng đá Trung Tâm': [
+        ('Bóng đá', 'Thuê bóng', 'RENT', 'quả', 50000, 5, True),
+        ('Bóng đá', 'Áo bib', 'RENT', 'áo', 10000, 20, True),
+        ('Bóng đá', 'Găng tay thủ môn', 'RENT', 'đôi', 20000, 4, True),
+        ('Bóng đá', 'Thuê giày', 'RENT', 'đôi', 30000, 10, True),
+        ('Bóng đá', 'Trọng tài', 'SERVICE', 'trận', 200000, 0, False),
+        ('Bóng đá', 'Nước uống', 'SELL', 'chai', 15000, 50, True),
+        ('Bóng đá', 'Khăn thể thao', 'SELL', 'khăn', 20000, 40, True),
+    ],
+    'Sân cầu lông Riverside': [
+        ('Cầu lông', 'Thuê vợt', 'RENT', 'cây', 30000, 8, True),
+        ('Cầu lông', 'Cầu lông', 'SELL', 'quả', 8000, 60, True),
+        ('Cầu lông', 'Thuê giày', 'RENT', 'đôi', 30000, 10, True),
+        ('Cầu lông', 'Quấn cán', 'SERVICE', 'lần', 20000, 0, False),
+        ('Cầu lông', 'Huấn luyện viên', 'SERVICE', 'giờ', 250000, 0, False),
+        ('Cầu lông', 'Nước uống', 'SELL', 'chai', 15000, 50, True),
+        ('Cầu lông', 'Khăn thể thao', 'SELL', 'khăn', 20000, 40, True),
+    ],
+    'Sân Pickleball Green Park': [
+        ('Pickleball', 'Thuê paddle', 'RENT', 'cây', 40000, 10, True),
+        ('Pickleball', 'Bóng pickleball', 'SELL', 'quả', 30000, 20, True),
+        ('Pickleball', 'Quấn cán', 'SERVICE', 'lần', 20000, 0, False),
+        ('Pickleball', 'Huấn luyện viên', 'SERVICE', 'giờ', 300000, 0, False),
+        ('Pickleball', 'Nước suối', 'SELL', 'chai', 15000, 30, True),
+        ('Pickleball', 'Nước thể thao', 'SELL', 'chai', 25000, 20, True),
+        ('Pickleball', 'Khăn thể thao', 'SELL', 'khăn', 20000, 15, True),
+    ],
+}
+
+
 def seed_demo_db(session):
-    if not settings.SEED_DEMO_DATA:
-        return
     try:
         _lock_postgresql_seed(session)
+        seed_product_catalog(session)
+        if not settings.SEED_DEMO_DATA:
+            session.commit()
+            return
         users = _seed_accounts(session)
         facilities, fields, slots = _seed_venues(session, users['owner'])
+        seed_facility_products(session, fields)
         bookings = _seed_bookings(session, users['customer'], facilities, fields, slots)
         _seed_payments(session, users['owner'], users['customer'], bookings)
         _seed_related_data(session, users['owner'], users['customer'], fields, bookings)
@@ -101,6 +185,79 @@ def seed_demo_db(session):
     except Exception:
         session.rollback()
         raise
+
+
+def seed_facility_products(session, fields: list):
+    """Idempotent: upsert demo FacilityProducts for each demo field."""
+    for field in fields:
+        definitions = DEMO_FACILITY_PRODUCTS.get(field.name)
+        if not definitions:
+            continue
+        field_sport = field.sport_type  # e.g. 'bóng đá'
+        # Normalise: title-case the first char to match catalog/product names.
+        facility_sports = [field_sport]
+        for sport_name, name, product_type, unit, price, stock_quantity, track_inventory in definitions:
+            # Determine which sports to link.
+            if sport_name is None:
+                # 'Dùng chung' – link to the field's sport.
+                sports = facility_sports
+            else:
+                sports = [sport_name]
+            existing = session.scalar(
+                select(FacilityProduct).where(
+                    FacilityProduct.facility_id == field.facility_id,
+                    FacilityProduct.name == name,
+                    FacilityProduct.product_type == product_type,
+                )
+            )
+            if existing is None:
+                product = FacilityProduct(
+                    facility_id=field.facility_id,
+                    name=name, product_type=product_type, unit=unit,
+                    price=Decimal(str(price)), stock_quantity=stock_quantity,
+                    reserved_quantity=0, track_inventory=track_inventory,
+                    status=ProductStatus.ACTIVE.value,
+                )
+                product.sport_links = [ProductSport(sport_name=s) for s in sports]
+                session.add(product)
+                session.flush()
+            else:
+                # Update existing product values to match seed definition
+                existing.unit = unit
+                existing.price = Decimal(str(price))
+                existing.stock_quantity = stock_quantity
+                existing.track_inventory = track_inventory
+                
+                # Ensure sports are linked even if product already existed.
+                existing_sport_names = {link.sport_name for link in existing.sport_links}
+                for s in sports:
+                    if s not in existing_sport_names:
+                        existing.sport_links.append(ProductSport(sport_name=s))
+                # Re-activate if archived.
+                if existing.status == ProductStatus.ARCHIVED.value:
+                    existing.status = ProductStatus.INACTIVE.value
+    session.flush()
+
+
+def seed_product_catalog(session):
+    """Upsert system reference catalog without assigning anything to a facility."""
+    existing = {
+        item.catalog_key: item
+        for item in session.scalars(select(ProductCatalogItem)).all()
+    }
+    for index, (key, sport, name, product_type, unit, track_inventory) in enumerate(DEFAULT_PRODUCT_CATALOG):
+        item = existing.get(key)
+        if item is None:
+            item = ProductCatalogItem(catalog_key=key)
+            session.add(item)
+        item.sport_name = sport
+        item.name = name
+        item.product_type = product_type
+        item.unit = unit
+        item.track_inventory = track_inventory
+        item.is_active = True
+        item.sort_order = index
+    session.flush()
 
 
 def _lock_postgresql_seed(session):

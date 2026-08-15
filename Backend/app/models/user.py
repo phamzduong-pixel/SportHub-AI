@@ -21,6 +21,7 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(20), nullable=False, default=UserRole.CUSTOMER.value, index=True)
     is_active = Column(Boolean, nullable=False, default=True)
+    session_version = Column(Integer, nullable=False, default=0, server_default='0')
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     bookings = relationship('Booking', back_populates='customer', passive_deletes=True, foreign_keys='Booking.customer_id')

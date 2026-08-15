@@ -2,6 +2,7 @@ import { AlertTriangle, ArrowLeft, Building2, CheckCircle2, Clock3, RotateCcw, S
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Input, LoadingSkeleton, Modal, useToast } from '@/components/common';
+import { useAuth } from '@/contexts/AuthContext';
 import { apiRequest } from '@/services/apiClient';
 
 type Status = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
@@ -30,8 +31,10 @@ export function PartnerApplicationPage() {
   const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false); const [withdrawReason, setWithdrawReason] = useState('');
   const { toast } = useToast();
+  const { refreshUser } = useAuth();
   const useApplication = (item: Application) => { setApplication(item); setForm({ representative: { ...blank.representative, ...item.representative } as Form['representative'], venue: { ...blank.venue, ...item.venue } as Form['venue'], legal_confirmed: item.status === 'REJECTED' ? false : item.legal_confirmed }); };
   useEffect(() => { apiRequest<Application>('/auth/owner-application').then(useApplication).catch(() => undefined).finally(() => setLoading(false)); }, []);
+  useEffect(() => { if (application?.status === 'APPROVED') void refreshUser(); }, [application?.status, refreshUser]);
 
   const saveOrSubmit = async (submitting: boolean) => {
     const next = clean(form); const nextErrors = validate(next, submitting); setForm(next); setErrors(nextErrors);

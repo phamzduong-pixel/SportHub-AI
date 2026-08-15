@@ -112,6 +112,31 @@ class BookingWorkflowTests(unittest.TestCase):
         booking = self.create()
         self.assertEqual(booking['price_snapshot'], expected_price)
 
+    def test_booking_from_ai_preserves_selected_slot(self):
+        selected = {
+            'field_id': self.field_id,
+            'time_slot_id': self.second_slot_id,
+            'booking_date': self.future_date.isoformat(),
+        }
+        response = self.client.post('/bookings', headers=self.customer1, json=selected)
+        self.assertEqual(response.status_code, 201, response.text)
+        booking = response.json()
+        self.assertEqual(booking['field_id'], selected['field_id'])
+        self.assertEqual(booking['time_slot_id'], selected['time_slot_id'])
+        self.assertEqual(booking['booking_date'], selected['booking_date'])
+        self.assertEqual(booking['start_time_snapshot'], '10:00:00')
+        self.assertEqual(booking['end_time_snapshot'], '12:00:00')
+
+    def test_booking_from_ai_rechecks_availability(self):
+        quote = self.client.get(
+            f'/bookings/quote?field_id={self.field_id}&time_slot_id={self.slot_id}&date={self.future_date}'
+        )
+        self.assertEqual(quote.status_code, 200, quote.text)
+        self.create()
+        response = self.client.post('/bookings', headers=self.customer2, json=self.payload())
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('vừa được người khác đặt', response.json()['detail'])
+
     def test_quote_remaining_amount_tracks_deposit_percentage_and_never_goes_negative(self):
         for percent, expected_deposit, expected_remaining in (
             (0, 0, 450000),
@@ -138,7 +163,7 @@ class BookingWorkflowTests(unittest.TestCase):
         first = self.create()
         response = self.client.post('/bookings', headers=self.customer2, json=self.payload())
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()['detail'], 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.')
+        self.assertEqual(response.json()['detail'], 'Một hoặc nhiều khung giờ vừa được người khác đặt. Danh sách giờ trống đã được cập nhật.')
         self.assertEqual(first['time_slot_id'], self.slot_id)
 
     def test_overlap_is_checked_by_snapshot_not_only_slot_id(self):
@@ -148,7 +173,7 @@ class BookingWorkflowTests(unittest.TestCase):
             db.add(overlap); db.commit(); overlap_id = overlap.id
         response = self.client.post('/bookings', headers=self.customer2, json=self.payload(time_slot_id=overlap_id))
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()['detail'], 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.')
+        self.assertEqual(response.json()['detail'], 'Một hoặc nhiều khung giờ vừa được người khác đặt. Danh sách giờ trống đã được cập nhật.')
 
     def test_exact_overlap_returns_required_conflict(self):
         created = self.create()
@@ -156,7 +181,7 @@ class BookingWorkflowTests(unittest.TestCase):
         self.assertIsNotNone(created['hold_expires_at'])
         response = self.client.post('/bookings', headers=self.customer2, json=self.payload())
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()['detail'], 'Khung giờ này vừa được người khác đặt. Vui lòng chọn thời gian khác.')
+        self.assertEqual(response.json()['detail'], 'Một hoặc nhiều khung giờ vừa được người khác đặt. Danh sách giờ trống đã được cập nhật.')
         operator_response = self.client.post('/bookings', headers=self.operator, json=self.payload(customer_email='customer2@test.local'))
         self.assertEqual(operator_response.status_code, 409)
 

@@ -3,9 +3,10 @@ from datetime import date, datetime
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..models.field import Booking, Field
+from ..models.field import Booking, BookingSlot, Field
 from ..models.facility import Facility
 from ..models.payment import Payment
+from ..models.product import BookingProductItem
 from ..models.time_slot import TimeSlot
 from ..models.user import User
 
@@ -66,6 +67,28 @@ class DashboardRepository:
             Booking.field_id, Booking.time_slot_id, Booking.status, func.count(Booking.id),
         ).where(*filters).group_by(Booking.field_id, Booking.time_slot_id, Booking.status)).all()
 
+    def slot_booking_performance(self, date_from: date, date_to: date, field_id: int | None):
+        filters = self._booking_filters(date_from, date_to, field_id)
+        return self.db.execute(select(
+            Booking.field_id, BookingSlot.time_slot_id, Booking.status, func.count(BookingSlot.id),
+        ).join(BookingSlot, BookingSlot.booking_id == Booking.id).where(
+            *filters,
+        ).group_by(Booking.field_id, BookingSlot.time_slot_id, Booking.status)).all()
+
+    def legacy_slot_booking_performance(self, date_from: date, date_to: date, field_id: int | None):
+        filters = self._booking_filters(date_from, date_to, field_id)
+        return self.db.execute(select(
+            Booking.field_id, Booking.time_slot_id, Booking.status, func.count(Booking.id),
+        ).where(
+            *filters, ~Booking.booking_slots.any(),
+        ).group_by(Booking.field_id, Booking.time_slot_id, Booking.status)).all()
+
+    def field_booking_performance(self, date_from: date, date_to: date, field_id: int | None):
+        filters = self._booking_filters(date_from, date_to, field_id)
+        return self.db.execute(select(
+            Booking.field_id, Booking.status, func.count(Booking.id),
+        ).where(*filters).group_by(Booking.field_id, Booking.status)).all()
+
     def revenue_performance(self, date_from: datetime, date_to: datetime, field_id: int | None):
         query = select(
             Booking.field_id, Booking.time_slot_id, func.coalesce(func.sum(Payment.amount), 0),
@@ -76,6 +99,48 @@ class DashboardRepository:
         if field_id:
             query = query.where(Booking.field_id == field_id)
         return self.db.execute(query.group_by(Booking.field_id, Booking.time_slot_id)).all()
+
+    def field_revenue_performance(self, date_from: datetime, date_to: datetime, field_id: int | None):
+        query = select(
+            Booking.field_id, func.coalesce(func.sum(Payment.amount), 0),
+        ).join(Payment, Payment.booking_id == Booking.id).where(
+            Payment.status == 'paid', Payment.payment_type != 'refund',
+            Payment.paid_at >= date_from, Payment.paid_at < date_to,
+            *self._booking_scope(),
+        )
+        if field_id:
+            query = query.where(Booking.field_id == field_id)
+        return self.db.execute(query.group_by(Booking.field_id)).all()
+
+    def slot_revenue_performance(self, date_from: datetime, date_to: datetime, field_id: int | None):
+        allocated = case(
+            (Booking.total_amount > 0, Payment.amount * BookingSlot.price_snapshot / Booking.total_amount),
+            else_=0,
+        )
+        query = select(
+            BookingSlot.time_slot_id, func.coalesce(func.sum(allocated), 0),
+        ).join(Booking, BookingSlot.booking_id == Booking.id).join(
+            Payment, Payment.booking_id == Booking.id,
+        ).where(
+            Payment.status == 'paid', Payment.payment_type != 'refund',
+            Payment.paid_at >= date_from, Payment.paid_at < date_to,
+            *self._booking_scope(),
+        )
+        if field_id:
+            query = query.where(Booking.field_id == field_id)
+        return self.db.execute(query.group_by(BookingSlot.time_slot_id)).all()
+
+    def legacy_slot_revenue_performance(self, date_from: datetime, date_to: datetime, field_id: int | None):
+        query = select(
+            Booking.time_slot_id, func.coalesce(func.sum(Payment.amount), 0),
+        ).join(Payment, Payment.booking_id == Booking.id).where(
+            Payment.status == 'paid', Payment.payment_type != 'refund',
+            Payment.paid_at >= date_from, Payment.paid_at < date_to,
+            ~Booking.booking_slots.any(), *self._booking_scope(),
+        )
+        if field_id:
+            query = query.where(Booking.field_id == field_id)
+        return self.db.execute(query.group_by(Booking.time_slot_id)).all()
 
     def active_slot_counts(self, field_id: int | None):
         query = select(TimeSlot.field_id, func.count(TimeSlot.id)).join(Field, TimeSlot.field_id == Field.id).where(TimeSlot.is_active.is_(True), *self._field_scope())
@@ -96,7 +161,8 @@ class DashboardRepository:
         ).group_by(Payment.booking_id).subquery()
         query = select(
             Booking.id, Booking.booking_code, Booking.booking_date, Booking.status,
-            Booking.total_amount, Booking.deposit_amount, Booking.start_time_snapshot,
+            Booking.court_amount, Booking.service_amount, Booking.total_amount,
+            Booking.deposit_amount, Booking.start_time_snapshot,
             Field.id.label('field_id'), Field.name.label('field_name'), Field.sport_type,
             Facility.id.label('facility_id'), Facility.name.label('facility_name'),
             User.full_name.label('customer_name'),
@@ -113,6 +179,26 @@ class DashboardRepository:
         if field_id:
             query = query.where(Booking.field_id == field_id)
         return self.db.execute(query.order_by(Booking.booking_date.desc(), Booking.id.desc())).mappings().all()
+
+    def popular_products(self, date_from: date, date_to: date, field_id: int | None = None):
+        query = select(
+            BookingProductItem.product_id,
+            func.max(BookingProductItem.product_name_snapshot).label('name'),
+            func.max(BookingProductItem.product_type_snapshot).label('product_type'),
+            func.coalesce(func.sum(BookingProductItem.quantity), 0).label('quantity'),
+            func.count(func.distinct(BookingProductItem.booking_id)).label('booking_count'),
+            func.coalesce(func.sum(BookingProductItem.line_total), 0).label('revenue'),
+        ).join(Booking, BookingProductItem.booking_id == Booking.id).join(
+            Field, Booking.field_id == Field.id,
+        ).where(
+            Booking.booking_date >= date_from, Booking.booking_date <= date_to,
+            Booking.status == 'completed', *self._field_scope(),
+        )
+        if field_id:
+            query = query.where(Booking.field_id == field_id)
+        return self.db.execute(query.group_by(BookingProductItem.product_id).order_by(
+            func.sum(BookingProductItem.quantity).desc(), func.sum(BookingProductItem.line_total).desc(),
+        )).mappings().all()
 
     def _booking_filters(self, date_from: date, date_to: date, field_id: int | None):
         filters = [Booking.booking_date >= date_from, Booking.booking_date <= date_to, *self._booking_scope()]

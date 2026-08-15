@@ -79,22 +79,8 @@ class CustomerRecommendationService:
 
     def _available_slots(self, field_id: int):
         target_day = datetime.now(ZoneInfo(settings.TIMEZONE)).date()
-        slots = list(self.db.scalars(select(TimeSlot).where(TimeSlot.field_id == field_id, TimeSlot.is_active.is_(True)).order_by(TimeSlot.start_time)).all())
-        bookings = list(self.db.scalars(select(Booking).where(
-            Booking.field_id == field_id, Booking.booking_date == target_day,
-            or_(
-                Booking.status.in_(('pending_confirmation', 'confirmed', 'in_progress')),
-                and_(Booking.status == 'pending_payment', Booking.hold_expires_at > datetime.now(timezone.utc)),
-            ),
-        )).all())
-        maintenance = list(self.db.scalars(select(FieldBlock).where(FieldBlock.field_id == field_id, FieldBlock.block_date == target_day)).all())
-        day_start, day_end = BookingRepository._day_bounds(target_day)
-        field_maintenance = list(self.db.scalars(select(FieldMaintenance).where(
-            FieldMaintenance.field_id == field_id, FieldMaintenance.status.in_(('SCHEDULED', 'IN_PROGRESS')),
-            FieldMaintenance.starts_at < day_end, FieldMaintenance.ends_at > day_start,
-        )).all())
-        return [slot for slot in slots if not any(booking.start_time_snapshot < slot.end_time and booking.end_time_snapshot > slot.start_time for booking in bookings)
-                and not any(item.start_time < slot.end_time and item.end_time > slot.start_time for item in maintenance)
-                and not any(as_utc(item.starts_at) < BookingRepository._slot_bounds(target_day, slot.start_time, slot.end_time)[1]
-                            and as_utc(item.ends_at) > BookingRepository._slot_bounds(target_day, slot.start_time, slot.end_time)[0]
-                            for item in field_maintenance)]
+        from .availability_service import AvailabilityService
+        result = AvailabilityService(BookingRepository(self.db)).list(
+            booking_date=target_day, field_id=field_id,
+        )
+        return result[0]['available_slots'] if result else []
