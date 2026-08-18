@@ -63,3 +63,17 @@ class AdminOwnerList(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class AdminUserCreate(RequestModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: str
+    phone: str = Field(min_length=10, max_length=10, pattern=r'^0[0-9]{9}$')
+    password: str = Field(min_length=8, max_length=72)
+    role: str = Field(pattern='^(CUSTOMER|OWNER)$')
+
+class AdminUserUpdate(RequestModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: str
+    phone: str = Field(min_length=10, max_length=10, pattern=r'^0[0-9]{9}$')
+    role: str = Field(pattern='^(CUSTOMER|OWNER)$')

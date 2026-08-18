@@ -9,7 +9,7 @@ from ...models.facility import Facility, FacilityReviewEvent, FacilityStatus
 from ...models.field import Booking, Field
 from ...models.owner_application import OwnerApplication, OwnerApplicationStatus
 from ...models.user import User, UserRole
-from ...schemas.admin import AdminFacilityList, AdminOwnerList, AdminStatusUpdate, AdminSummary, AdminUserList
+from ...schemas.admin import AdminFacilityList, AdminOwnerList, AdminStatusUpdate, AdminSummary, AdminUserList, AdminUserCreate, AdminUserUpdate
 from ...schemas.owner_application import OwnerApplicationDecision, OwnerApplicationResponse, OwnerApplicationReview
 from ...schemas.facility import FacilityReviewRequest
 from ...schemas.user import UserResponse
@@ -18,6 +18,7 @@ from .auth import application_response, user_response
 from .facilities import response as facility_response
 from ...services.audit_service import record_audit
 from ...services.notification_service import NotificationService
+from ...core.security import get_password_hash
 
 router = APIRouter(prefix='/admin', tags=['system-admin'])
 
@@ -88,6 +89,37 @@ def list_users(
     return {'items': [user_response(user) for user in users], 'total': total, 'page': page, 'page_size': page_size}
 
 
+@router.post('/users', response_model=UserResponse, status_code=201)
+def create_user(payload: AdminUserCreate, _: User = Depends(require_system_admin), db: Session = Depends(get_db)):
+    if db.scalar(select(User).where(or_(User.email == payload.email.lower(), User.phone == payload.phone))):
+        raise HTTPException(status_code=409, detail='Email hoặc số điện thoại đã tồn tại')
+    user = User(full_name=payload.full_name.strip(), email=payload.email.lower(), phone=payload.phone, hashed_password=get_password_hash(payload.password), role=payload.role)
+    db.add(user); db.commit(); db.refresh(user)
+    return user_response(user)
+
+@router.get('/users/{user_id}', response_model=UserResponse)
+def get_user(user_id: int, _: User = Depends(require_system_admin), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if user is None: raise HTTPException(status_code=404, detail='Không tìm thấy tài khoản')
+    return user_response(user)
+
+@router.put('/users/{user_id}', response_model=UserResponse)
+def update_user(user_id: int, payload: AdminUserUpdate, admin: User = Depends(require_system_admin), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if user is None: raise HTTPException(status_code=404, detail='Không tìm thấy tài khoản')
+    if user.id == admin.id and payload.role != user.role: raise HTTPException(status_code=409, detail='Không thể hạ quyền tài khoản đang đăng nhập')
+    if db.scalar(select(User).where(or_(User.email == payload.email.lower(), User.phone == payload.phone), User.id != user_id)): raise HTTPException(status_code=409, detail='Email hoặc số điện thoại đã tồn tại')
+    user.full_name=payload.full_name.strip(); user.email=payload.email.lower(); user.phone=payload.phone; user.role=payload.role; user.session_version=(user.session_version or 0)+1
+    db.commit(); db.refresh(user); return user_response(user)
+
+@router.delete('/users/{user_id}', response_model=UserResponse)
+def delete_user(user_id: int, admin: User = Depends(require_system_admin), db: Session = Depends(get_db)):
+    user = db.get(User, user_id)
+    if user is None: raise HTTPException(status_code=404, detail='Không tìm thấy tài khoản')
+    if user.id == admin.id: raise HTTPException(status_code=409, detail='Không thể tự xóa tài khoản đang đăng nhập')
+    user.is_active=False; user.session_version=(user.session_version or 0)+1
+    db.commit(); db.refresh(user); return user_response(user)
+
 @router.patch('/users/{user_id}/status', response_model=UserResponse)
 def update_user_status(user_id: int, payload: AdminStatusUpdate, admin: User = Depends(require_system_admin), db: Session = Depends(get_db)):
     user = db.get(User, user_id)
@@ -96,6 +128,7 @@ def update_user_status(user_id: int, payload: AdminStatusUpdate, admin: User = D
     if user.id == admin.id and not payload.is_active:
         raise HTTPException(status_code=409, detail='SYSTEM_ADMIN không thể tự khóa tài khoản đang đăng nhập')
     user.is_active = payload.is_active
+    user.session_version = (user.session_version or 0) + 1
     db.commit(); db.refresh(user)
     return user_response(user)
 
@@ -292,3 +325,7 @@ def update_facility_status(facility_id: int, payload: AdminStatusUpdate, _: User
     facility.is_active = payload.is_active
     db.commit()
     return {'id': facility.id, 'is_active': facility.is_active, 'message': 'Đã cập nhật trạng thái cơ sở'}
+
+
+
+
