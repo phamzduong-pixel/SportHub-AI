@@ -87,6 +87,9 @@ class BookingUpdate(RequestModel):
 class BookingActionNote(RequestModel):
     note: str | None = Field(default=None, max_length=1000)
 
+class BookingStartRequest(BookingActionNote):
+    confirm_early: bool = False
+
 class BookingCancellationRequest(RequestModel):
     reason: str | None = Field(default=None, min_length=3, max_length=1000)
     note: str | None = Field(default=None, max_length=1000)

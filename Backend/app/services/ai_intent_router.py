@@ -199,7 +199,7 @@ class IntentRouter:
             return AssistantIntent.FOLLOW_UP, 0.9
         if any(term in query for term in ('muon dat san', 'dat giup', 'dat san nay', 'xac nhan dat', 'tao booking')):
             return AssistantIntent.CREATE_BOOKING, 0.95
-        if 're hon' not in query and (any(term in query for term in ('con trong', 'lich trong', 'con san', 'con gio', 'khung gio nao', 'con 19h', 'co trong khong')) or (
+        if 're hon' not in query and (any(term in query for term in ('con trong', 'lich trong', 'con san', 'con gio', 'khung gio nao', 'con 19h', 'co trong khong', 'ngay nao trong', 'ngay trong')) or (
             follow_up and re.search(r'\bcon\s+\d{1,2}(?::\d{2})?\s*(?:h|gio)?\b', query)
         )):
             return AssistantIntent.CHECK_AVAILABILITY, 0.95
@@ -225,16 +225,11 @@ class IntentRouter:
             return AssistantIntent.SEARCH_VENUE, 0.94
         return None, 0.0
 
+
     @staticmethod
     def _is_greeting(query: str) -> bool:
         cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
         return cleaned in {'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'xin chao sporthub'}
-
-    @staticmethod
-    def _is_follow_up(query: str) -> bool:
-        return bool(re.search(r'\b(san|lua chon|ket qua)\s*(?:thu\s*)?(\d+|mot|hai|ba|tu|nam)\b', query)) or any(
-            term in query for term in ('san nay', 'cai nay', 'phuong an nay', 'gia bao nhieu', 'bao nhieu co so', 'con gio nao', 'con 19h', 'the con', 're hon', 'doi sang')
-        )
 
     @staticmethod
     def _has_continuation_detail(query: str) -> bool:
@@ -242,6 +237,17 @@ class IntentRouter:
             re.search(r'\b(?:hom nay|ngay mai|toi mai|mai|thu hai|thu ba|thu tu|thu nam|thu sau|thu bay|chu nhat)\b', query)
             or re.search(r'\b(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:h|gio)\b', query)
             or re.search(r'\b(?:duoi|toi da|khong qua)\s*[\d.,]+', query)
+            or re.search(r'\b(?:buoi sang|buoi chieu|buoi toi|sang som|gio toi)\b', query)
+        )
+
+    @staticmethod
+    def _is_follow_up(query: str) -> bool:
+        return bool(re.search(r'\b(san|lua chon|ket qua)\s*(?:thu\s*)?(\d+|mot|hai|ba|tu|nam)\b', query)) or any(
+            term in query for term in (
+                'san nay', 'cai nay', 'phuong an nay', 'gia bao nhieu', 'bao nhieu co so',
+                'con gio nao', 'con 19h', 'the con', 're hon', 'doi sang',
+                'thi sao', 'vay con', 'con khong', 'san khac', 'ngay khac', 'gio khac', 'khung khac', 'khac'
+            )
         )
 
     @staticmethod

@@ -10,7 +10,7 @@ from ...repositories.booking_repository import BookingRepository
 from ...schemas.booking import (
     AvailabilityField, BookingActionNote, BookingCancellationQuote, BookingCancellationRequest,
     BookingCreate, BookingInvoiceResponse, BookingListResponse, BookingProductQuantityUpdate,
-    BookingProductSelection, BookingQuote,
+    BookingProductSelection, BookingQuote, BookingStartRequest,
     BookingRescheduleQuote, BookingRescheduleRequest, BookingResponse, BookingUpdate,
 )
 from ...schemas.product import ProductResponse
@@ -201,11 +201,11 @@ def reschedule_booking(
 
 @router.patch('/bookings/{booking_id}/start', response_model=BookingResponse)
 def start_booking(
-    booking_id: int, payload: BookingActionNote = BookingActionNote(),
+    booking_id: int, payload: BookingStartRequest = BookingStartRequest(),
     current_user: User = Depends(require_owner),
     service: BookingService = Depends(get_service),
 ):
-    return service.start(booking_id, payload.note, current_user)
+    return service.start(booking_id, payload.note, payload.confirm_early, current_user)
 
 @router.patch('/bookings/{booking_id}/no-show', response_model=BookingResponse)
 def mark_no_show(

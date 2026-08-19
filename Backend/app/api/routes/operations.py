@@ -94,6 +94,20 @@ def create_complaint(payload: ComplaintCreate, user: User = Depends(get_current_
     return complaint_response(db.scalar(complaint_query().where(BookingComplaint.id == item.id)))
 
 
+
+@router.patch('/complaints/{complaint_id}/cancel', response_model=ComplaintResponse)
+def cancel_complaint(complaint_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    item = db.scalar(complaint_query().where(BookingComplaint.id == complaint_id))
+    if item is None or item.customer_id != user.id:
+        raise HTTPException(status_code=404, detail='Không tìm thấy khiếu nại')
+    if item.status != 'open':
+        raise HTTPException(status_code=409, detail='Chỉ có thể hủy khiếu nại đang chờ xử lý')
+    old = item.status; item.status = 'cancelled'
+    record_audit(db, user, 'booking_complaint', item.id, 'complaint_cancelled_by_customer', {'from': old, 'to': item.status})
+    db.commit()
+    return complaint_response(item)
+
+
 @router.get('/complaints/my', response_model=list[ComplaintResponse])
 def my_complaints(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return [complaint_response(item) for item in db.scalars(complaint_query().where(BookingComplaint.customer_id == user.id).order_by(BookingComplaint.created_at.desc())).unique().all()]

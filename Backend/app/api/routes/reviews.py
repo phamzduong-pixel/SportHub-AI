@@ -7,7 +7,7 @@ from ...database.session import get_db
 from ...models.field import Booking, Field
 from ...models.review import Review
 from ...models.user import User
-from ...schemas.review import ReviewCreate, ReviewReply, ReviewResponse, ReviewSummaryResponse
+from ...schemas.review import ReviewCreate, ReviewUpdate, ReviewReply, ReviewResponse, ReviewSummaryResponse
 from ..dependencies import get_current_user
 router = APIRouter(tags=['reviews'])
 def response(review: Review):
@@ -29,11 +29,38 @@ def create_review(payload: ReviewCreate, user: User = Depends(get_current_user),
         db.rollback()
         raise HTTPException(status_code=409, detail='Booking này đã được đánh giá')
     return response(db.scalar(query().where(Review.id == review.id)))
+@router.patch('/reviews/{review_id}', response_model=ReviewResponse)
+def update_review(review_id: int, payload: ReviewUpdate, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role not in ('CUSTOMER', 'OWNER'): raise HTTPException(status_code=403, detail='Chỉ khách hàng mới có thể chỉnh sửa đánh giá')
+    review = db.scalar(query().where(Review.id == review_id))
+    if review is None or review.customer_id != user.id: raise HTTPException(status_code=404, detail='Không tìm thấy đánh giá của bạn')
+    
+    review.rating = payload.rating
+    review.comment = payload.comment
+    db.commit()
+    refresh_rating(db, review.field_id)
+    db.commit()
+    return response(db.scalar(query().where(Review.id == review.id)))
+
 @router.get('/fields/{field_id}/reviews', response_model=ReviewSummaryResponse)
 def field_reviews(field_id: int, db: Session = Depends(get_db)):
     if db.get(Field, field_id) is None: raise HTTPException(status_code=404, detail='Không tìm thấy sân')
     items = list(db.scalars(query().where(Review.field_id == field_id).order_by(Review.created_at.desc())).all()); average = sum(item.rating for item in items) / len(items) if items else 0
     return {'field_id': field_id, 'average_rating': round(average, 1), 'total_reviews': len(items), 'items': [response(item) for item in items]}
+
+@router.get('/bookings/{booking_id}/review', response_model=ReviewResponse)
+def get_booking_review(booking_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    booking = db.get(Booking, booking_id)
+    if booking is None or booking.customer_id != user.id: raise HTTPException(status_code=404, detail='Không tìm thấy booking của bạn')
+    review = db.scalar(query().where(Review.booking_id == booking_id))
+    if review is None: raise HTTPException(status_code=404, detail='Đánh giá không tồn tại')
+    return response(review)
+
+@router.get('/customer/reviews', response_model=list[ReviewResponse])
+def customer_reviews(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if user.role not in ('CUSTOMER', 'OWNER'): raise HTTPException(status_code=403, detail='Chỉ khách hàng mới có thể xem')
+    return [response(item) for item in db.scalars(query().where(Review.customer_id == user.id).order_by(Review.created_at.desc())).all()]
+
 @router.get('/management/reviews', response_model=list[ReviewResponse])
 def management_reviews(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     if user.role != 'OWNER': raise HTTPException(status_code=403, detail='Chỉ OWNER được xem và phản hồi đánh giá')

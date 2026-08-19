@@ -18,20 +18,28 @@ let refreshPromise: Promise<boolean> | null = null;
 async function tryRefresh(): Promise<boolean> {
   const refreshToken = readRefreshToken(); if (!refreshToken) return false;
   const generation = authGeneration;
-  if (!refreshPromise) refreshPromise = fetch(buildApiUrl('/auth/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }) }).then(async (response) => {
-    if (!response.ok) return false;
-    const result = await response.json() as { access_token: string; refresh_token: string };
-    if (generation !== authGeneration || readRefreshToken() !== refreshToken) return false;
-    saveToken(result.access_token); saveRefreshToken(result.refresh_token); return true;
-  }).catch(() => false).finally(() => { refreshPromise = null; });
+  if (!refreshPromise) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 10_000);
+    refreshPromise = fetch(buildApiUrl('/auth/refresh'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refreshToken }), signal: controller.signal }).then(async (response) => {
+      clearTimeout(timeoutId);
+      if (!response.ok) return false;
+      const result = await response.json() as { access_token: string; refresh_token: string };
+      if (generation !== authGeneration || readRefreshToken() !== refreshToken) return false;
+      saveToken(result.access_token); saveRefreshToken(result.refresh_token); return true;
+    }).catch(() => { clearTimeout(timeoutId); return false; }).finally(() => { refreshPromise = null; });
+  }
   return refreshPromise;
 }
 
 export async function revokeSession(refreshToken: string): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 5_000);
   await fetch(buildApiUrl('/auth/logout'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh_token: refreshToken }),
-  }).catch(() => undefined);
+    signal: controller.signal
+  }).catch(() => undefined).finally(() => clearTimeout(timeoutId));
 }
 
 /**
@@ -111,7 +119,16 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
 
 export async function apiBlob(path: string): Promise<Blob> {
   const token = readToken();
-  const response = await fetch(buildApiUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 15_000);
+  let response;
+  try {
+    response = await fetch(buildApiUrl(path), { headers: token ? { Authorization: `Bearer ${token}` } : {}, signal: controller.signal });
+  } catch {
+    throw new ApiError('Yêu cầu tải tệp quá thời gian chờ hoặc mất mạng.', 408);
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { detail?: string } | null;
     throw new ApiError(payload?.detail || 'Không tải được tệp riêng tư.', response.status);

@@ -26,6 +26,24 @@ Swagger đầy đủ: `http://localhost:8000/docs`. Trừ đăng ký, đăng nh�
 | GET | `/admin/facilities` | SYSTEM_ADMIN |
 | PATCH | `/admin/facilities/{id}/status` | SYSTEM_ADMIN |
 
+## Cơ sở và xét duyệt cơ sở
+
+| Method | Path | Quyền |
+|---|---|---|
+| GET, POST | `/facilities` | OWNER, tự giới hạn theo JWT |
+| GET, PUT | `/facilities/{id}` | OWNER sở hữu cơ sở |
+| DELETE | `/facilities/{id}/draft` | OWNER sở hữu; chỉ trạng thái `DRAFT` |
+| POST | `/facilities/{id}/submit` | OWNER sở hữu; gửi sang `PENDING_APPROVAL` |
+| POST | `/facilities/{id}/cancel-review` | OWNER sở hữu; theo điều kiện workflow |
+| POST, DELETE | `/facilities/{id}/images`, `/facilities/{id}/images/{image_id}` | OWNER sở hữu |
+| POST, DELETE | `/facilities/{id}/documents`, `/facilities/{id}/documents/{document_id}` | OWNER sở hữu |
+| GET | `/facilities/{id}/documents/{document_id}/content` | OWNER sở hữu hoặc SYSTEM_ADMIN |
+| GET | `/admin/facility-applications` | SYSTEM_ADMIN xem hồ sơ chờ duyệt |
+| GET | `/admin/facility-applications/{id}` | SYSTEM_ADMIN xem hồ sơ và giấy tờ |
+| PATCH | `/admin/facility-applications/{id}/review` | SYSTEM_ADMIN approve/reject; reject bắt buộc lý do |
+
+Facility dùng trạng thái `DRAFT`, `PENDING_APPROVAL`, `APPROVED`, `REJECTED`, `SUSPENDED`. File xác minh là private; backend kiểm tra MIME, dung lượng, hash và quyền truy cập.
+
 ## Sân và khung giờ
 
 | Method | Path | Quyền |
@@ -56,6 +74,33 @@ Swagger đầy đủ: `http://localhost:8000/docs`. Trừ đăng ký, đăng nh�
 | PATCH | `/bookings/{id}/reject` | `bookings.manage` |
 | PATCH | `/bookings/{id}/cancel` | Chủ booking hoặc `bookings.manage` |
 | PATCH | `/bookings/{id}/complete` | `bookings.manage` |
+
+Booking hỗ trợ nhiều `time_slot_ids`; response lưu snapshot trong `booking_slots`. Các endpoint dịch vụ phát sinh:
+
+| Method | Path | Quyền |
+|---|---|---|
+| GET | `/bookings/{id}/product-options` | OWNER của booking |
+| POST | `/bookings/{id}/products` | OWNER của booking; thêm dịch vụ phát sinh |
+| PATCH | `/bookings/{id}/products/{item_id}` | OWNER của booking; sửa số lượng |
+| DELETE | `/bookings/{id}/products/{item_id}` | OWNER của booking; xóa khoản phát sinh khi trạng thái cho phép |
+
+## Dịch vụ, sản phẩm và tồn kho
+
+| Method | Path | Quyền |
+|---|---|---|
+| GET | `/facility-products/catalog?sport=...` | OWNER; catalog database theo môn và dùng chung |
+| POST | `/facility-products/from-catalog` | OWNER; import nhiều mục vào facility thuộc mình |
+| GET | `/facility-products/available` | Dữ liệu khả dụng theo facility/sport |
+| GET, POST | `/facility-products` | OWNER; danh sách/tạo trong tenant |
+| PUT | `/facility-products/{id}` | OWNER sở hữu |
+| PATCH | `/facility-products/{id}/status` | OWNER sở hữu; bật/tắt |
+| PATCH | `/facility-products/{id}/price` | OWNER sở hữu |
+| PATCH | `/facility-products/{id}/inventory` | OWNER sở hữu; điều chỉnh tồn kho |
+| GET | `/facility-products/{id}/inventory-history` | OWNER sở hữu |
+| DELETE | `/facility-products/{id}/sports?sport=...` | OWNER sở hữu; bỏ môn, archive nếu là môn cuối |
+| DELETE | `/facility-products/{id}` | OWNER sở hữu; soft delete/archive |
+
+Backend tự tính `available_quantity`, reserve/release inventory và snapshot BookingItem; không tin giá hoặc tổng tiền frontend gửi.
 
 ## Thanh toán
 
@@ -99,6 +144,15 @@ Trạng thái hoàn tiền: `refund_pending`, `refund_overdue`, `refunded`, `dis
 | GET | `/audit-logs` | `reports.view` và đúng OWNER |
 
 Availability hỗ trợ thêm `location`, `start_time`, `max_price` và `sort_by=relevance|price|rating`; lịch khóa/bảo trì được loại trực tiếp ở backend.
+
+## Thông báo
+
+| Method | Path | Quyền |
+|---|---|---|
+| GET | `/notifications` | Người dùng đăng nhập; chỉ thông báo của mình |
+| GET | `/notifications/unread-count` | Người dùng đăng nhập |
+| PATCH | `/notifications/read-all` | Người dùng đăng nhập |
+| PATCH | `/notifications/{id}/read` | Chủ thông báo |
 
 ## Phiên đăng nhập
 

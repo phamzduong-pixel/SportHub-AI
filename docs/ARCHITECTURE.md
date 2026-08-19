@@ -1,57 +1,139 @@
 # Kiến trúc SportHub AI
 
-```text
-Browser
-  │  JWT Bearer / JSON
-  ▼
-Vite JavaScript/JSX SPA
-  ├── Router + Guards
-  ├── AuthContext
-  ├── Feature pages/components
-  │   ├── auth shell + password UX
-  │   ├── field management summary/descriptions
-  │   └── booking/payment/dashboard/AI views
-  └── API clients
-        │
-        ▼
-FastAPI routers
-  ▼
-Services (business rules + permission-aware workflows)
-  ▼
-Repositories (queries + transactions)
-  ▼
-SQLAlchemy models ── SQLite / PostgreSQL-compatible schema
+> Cập nhật ngày 16/08/2026.
 
-AI routes
-  ▼
-DemandPredictionService
-  ├── cached joblib pipeline
-  ├── database context/history
-  └── rule-based recommendation ranking
+## Tổng quan
+
+```mermaid
+flowchart TD
+    UI[React 19 + TypeScript + Vite]
+    UI -->|JWT Bearer / JSON / multipart| API[FastAPI Routers]
+    API --> DEP[Auth, Role, Ownership Dependencies]
+    DEP --> SVC[Business Services]
+    SVC --> REP[Repositories và SQLAlchemy Queries]
+    REP --> DB[(SQLite local / PostgreSQL production)]
+    SVC --> FS[(Private File Storage)]
+    SVC --> AI[AI Intent, Recommendation, ML Pipeline]
 ```
 
-## Phân quyền
+## Frontend
 
-- Ba tác nhân nghiệp vụ chính: `CUSTOMER`, `OWNER`, `SYSTEM_ADMIN`.
-- CUSTOMER: xem sân hoạt động, tự đặt/hủy hợp lệ, xem và tạo thanh toán của mình.
-- OWNER: toàn quyền trên cơ sở, sân và dữ liệu thuộc tenant của chính mình.
-- SYSTEM_ADMIN: quản trị tài khoản/cơ sở và thống kê toàn nền tảng; không thuộc OWNER và không vận hành booking hằng ngày.
-Hệ thống không có MANAGER. OWNER trực tiếp thực hiện toàn bộ nghiệp vụ vận hành và mọi API đều kiểm tra `current_user.role == OWNER` cùng ownership của cơ sở/sân/booking.
+- React 19, TypeScript (`.ts`, `.tsx`), Vite và React Router.
+- Tailwind CSS và các component dùng chung trong `Frontend/src/components/common`.
+- `AuthContext`, `AuthGuard`, `RoleGuard` bảo vệ điều hướng; backend vẫn là nguồn quyết định quyền cuối cùng.
+- Service trong `Frontend/src/services` gọi API thật và gắn access token.
+- Các khu vực chính: public, CUSTOMER, OWNER management, SYSTEM_ADMIN, notification và AI assistant.
+- Module sản phẩm dùng `productService.ts`; cấu hình nhanh tại sân dùng `FieldServicesModal.tsx`.
 
-## Tính toàn vẹn dữ liệu
+## Backend
 
-- Mật khẩu chỉ lưu bcrypt hash.
-- JWT dùng secret môi trường; user và trạng thái tài khoản được đọc lại ở mỗi request.
-- Booking lưu snapshot giờ và giá.
-- Backend kiểm tra overlap trước khi tạo; partial unique index bảo vệ cùng slot/ngày ở trạng thái mở.
-- Payment giữ tổng `paid + pending` không vượt booking total; confirm/cancel khóa row khi database hỗ trợ.
-- Field/time slot đã được dùng sẽ ngừng hoạt động thay vì xóa lịch sử.
-- Model AI được load cache, không train trong request.
+- Router chỉ nhận/validate request và gọi service.
+- Service thực thi state machine, ownership, tính tiền, inventory và audit.
+- Repository đóng gói truy vấn booking, payment, dashboard, AI và availability.
+- Schema Pydantic kiểm tra request/response.
+- SQLAlchemy model lưu dữ liệu nghiệp vụ và quan hệ.
 
-## Quy ước frontend hiện tại
+## Vai trò và tenant
 
-- Tất cả source logic trong `Frontend/src` dùng `.jsx`; dự án không phụ thuộc React và tiếp tục render DOM/template theo kiến trúc ban đầu.
-- CSS auth nằm riêng trong `features/auth/auth.css` và dùng namespace `auth-*`; CSS dashboard, payment và AI cũng nằm theo feature để hạn chế xung đột.
-- Trang auth tính chiều cao từ `100dvh` sau khi trừ topbar. Màn hình thấp dùng compact mode, mobile ẩn topbar marketing để form không tạo scroll thừa.
-- API URL chỉ lấy từ `VITE_API_URL` hoặc same-origin. API client từ chối phản hồi không phải JSON và bootstrap luôn có fallback UI.
-- Backend vẫn là nguồn quyết định quyền cuối cùng; guard/menu frontend chỉ cải thiện trải nghiệm.
+- `CUSTOMER`: dữ liệu booking/payment/refund của chính mình.
+- `OWNER`: dữ liệu thuộc các facility mình sở hữu.
+- `SYSTEM_ADMIN`: quản trị và xét duyệt; không vận hành booking OWNER.
+- Không có vai trò MANAGER.
+- Backend không dùng `owner_id` frontend gửi để cấp quyền; owner được lấy từ JWT.
+
+## Các cụm dữ liệu chính
+
+```text
+User
+ ├─ OwnerApplication
+ ├─ Notification
+ └─ Facility (qua owner_id)
+      ├─ FacilityImage
+      ├─ FacilityDocument
+      ├─ FacilityReviewEvent
+      ├─ Field
+      │   ├─ TimeSlot
+      │   └─ Booking
+      │       ├─ BookingSlot
+      │       ├─ BookingProductItem
+      │       ├─ Payment
+      │       └─ Invoice
+      └─ FacilityProduct
+          ├─ ProductSport
+          └─ ProductStockMovement
+
+ProductCatalogItem → gợi ý để OWNER tạo FacilityProduct
+```
+
+## State machine cơ sở
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> PENDING_APPROVAL: OWNER gửi hồ sơ
+    PENDING_APPROVAL --> APPROVED: SYSTEM_ADMIN duyệt
+    PENDING_APPROVAL --> REJECTED: SYSTEM_ADMIN từ chối
+    REJECTED --> PENDING_APPROVAL: OWNER sửa và gửi lại
+    PENDING_APPROVAL --> DRAFT: hủy yêu cầu nếu workflow cho phép
+    APPROVED --> SUSPENDED: quản trị hệ thống
+```
+
+- Chỉ `DRAFT` được xóa bằng API xóa bản nháp.
+- Chỉ `APPROVED` được công khai, nhận booking và tạo dữ liệu vận hành.
+- Giấy tờ/ảnh private được truy cập qua endpoint có quyền.
+
+## Booking, sản phẩm và thanh toán
+
+```mermaid
+flowchart LR
+    A[Chọn sân/ngày] --> B[Chọn nhiều slot]
+    B --> C[Chọn dịch vụ tùy chọn]
+    C --> D[Backend kiểm tra slot, giá, tồn kho]
+    D --> E[PENDING_PAYMENT]
+    E --> F[Reserve slot và sản phẩm]
+    F -->|Thanh toán| G[Xác nhận/vận hành]
+    F -->|Expired/Cancelled| H[Release slot và sản phẩm]
+    G --> I[OWNER thêm phát sinh]
+    I --> J[Payment còn lại và Invoice]
+```
+
+- `booking_slots` lưu snapshot từng khung giờ.
+- `booking_product_items` lưu snapshot tên, loại, đơn vị, số lượng và giá.
+- `court_amount`, `service_amount`, `total_amount` được tách riêng.
+- Deposit chỉ tính trên `court_amount`; backend không tin tổng tiền frontend.
+- Inventory dùng stock/reserved/available và lịch sử movement.
+- Sản phẩm có lịch sử được archive thay vì hard delete.
+
+## Catalog và cấu hình dịch vụ
+
+- `product_catalog_items` chứa 47 mẫu theo môn và dùng chung.
+- Seed idempotent theo `catalog_key`, dùng chung cơ chế seed dự án.
+- OWNER chủ động import; catalog không tự tạo sản phẩm cho mọi facility.
+- Cấu hình thực tế nằm ở `facility_products` và `product_sports`.
+- Nhiều court cùng facility/sport dùng chung cấu hình, tránh dữ liệu lặp.
+
+## AI
+
+- Intent router phân loại câu hỏi và trích entity.
+- Domain policy chặn câu hỏi ngoài phạm vi hoặc mutation không được phép.
+- Repository/service áp lại owner/customer scope trước khi đọc dữ liệu.
+- Giá và tồn kho sản phẩm lấy từ database thực tế.
+- Demand prediction dùng pipeline/metrics lưu sẵn; không train model trong request.
+- Provider ngoài phụ thuộc environment và có fallback an toàn.
+
+## Tính toàn vẹn và bảo mật
+
+- Bcrypt password; JWT access/refresh và session version.
+- Kiểm tra overlap và unique constraint bảo vệ slot đang mở.
+- Transaction/row locking được dùng cho cạnh tranh booking/inventory khi database hỗ trợ.
+- Payment không vượt tổng booking; snapshot bảo vệ lịch sử trước thay đổi giá.
+- Upload kiểm tra MIME, kích thước, hash, tên lưu an toàn và private path.
+- CORS, secret, database URL, seed và provider config đọc từ environment.
+- Audit log ghi các mutation quan trọng.
+
+## Migration và seed
+
+- `Base.metadata.create_all` tạo bảng còn thiếu trong môi trường phù hợp.
+- Startup migration nâng cấp schema legacy theo hướng tương thích.
+- Demo seed bật/tắt bằng environment và idempotent.
+- Catalog seed vẫn chạy khi tắt tài khoản demo để OWNER có catalog sử dụng.

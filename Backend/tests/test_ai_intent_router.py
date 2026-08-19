@@ -161,6 +161,39 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(payload['understood'].get('result_field_ids'), None)
         self.assertEqual(payload['suggestions'], [])
 
+    def test_follow_up_buoi_toi_thi_sao(self):
+        result = self.route('Buổi tối thì sao?', {
+            'sport_type': 'cầu lông', 'booking_date': '2026-08-11'
+        })
+        self.assertTrue(result.is_follow_up)
+        self.assertEqual(result.intent, AssistantIntent.RECOMMEND_SLOT)
+        self.assertEqual(result.entities.sport_type, 'cầu lông')
+        self.assertEqual(result.entities.date, '2026-08-11')
+
+    def test_follow_up_san_khac_thi_sao(self):
+        result = self.route('Sân khác thì sao?', {
+            'sport_type': 'tennis', 'booking_date': '2026-08-11', 'field_id': 10
+        })
+        self.assertTrue(result.is_follow_up)
+        self.assertEqual(result.intent, AssistantIntent.FOLLOW_UP)
+        self.assertEqual(result.entities.sport_type, 'tennis')
+        self.assertEqual(result.entities.date, '2026-08-11')
+
+    def test_follow_up_ngay_nao_trong(self):
+        result = self.route('Vậy còn ngày nào trống?', {
+            'sport_type': 'bóng rổ', 'location': 'Cầu Giấy'
+        })
+        self.assertTrue(result.is_follow_up)
+        self.assertEqual(result.intent, AssistantIntent.CHECK_AVAILABILITY)
+        self.assertEqual(result.entities.sport_type, 'bóng rổ')
+        self.assertEqual(result.entities.location, 'Cầu Giấy')
+
+    def test_switch_to_payment_does_not_mix_context(self):
+        result = self.route('Tôi muốn thanh toán bằng thẻ tín dụng', {
+            'sport_type': 'bóng rổ', 'location': 'Cầu Giấy', 'last_intent': 'SEARCH_VENUE'
+        })
+        self.assertEqual(result.intent, AssistantIntent.PAYMENT_SUPPORT)
+
 
 if __name__ == '__main__':
     unittest.main()

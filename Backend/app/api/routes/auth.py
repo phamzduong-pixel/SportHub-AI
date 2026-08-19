@@ -7,12 +7,17 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from ...core.security import create_access_token, create_refresh_token, decode_refresh_token, get_password_hash, verify_password
+from ...core.security import create_access_token, create_password_reset_token, create_refresh_token, decode_refresh_token, get_password_hash, verify_password, verify_password_reset_token
 from ...database.session import get_db
 from ...models.owner_application import OwnerApplication, OwnerApplicationStatus
 from ...models.user import User, UserRole
 from ...schemas.owner_application import OwnerApplicationDraft, OwnerApplicationRequest, OwnerApplicationResponse, OwnerApplicationWithdraw
-from ...schemas.user import ChangePasswordRequest, LoginRequest, LogoutRequest, MessageResponse, ProfileUpdateRequest, RefreshTokenRequest, RegisterRequest, TokenResponse, UserResponse
+from ...schemas.user import (
+    ChangePasswordRequest, ForgotPasswordEmailRequest, ForgotPasswordPhoneRequest,
+    LoginRequest, LogoutRequest, MessageResponse, ProfileUpdateRequest,
+    RefreshTokenRequest, RegisterRequest, ResetPasswordRequest, TokenResponse,
+    UserResponse, VerifyOTPRequest,
+)
 from ..dependencies import get_current_user
 from ...services.audit_service import record_audit
 from ...services.notification_service import NotificationService
@@ -304,3 +309,126 @@ def change_password(payload: ChangePasswordRequest, current_user: User = Depends
     current_user.session_version = int(current_user.session_version or 0) + 1
     db.commit()
     return {'message': 'Đổi mật khẩu thành công'}
+
+
+# ─── Forgot / Reset Password ────────────────────────────────────────────────
+
+# Simple in-memory set to blacklist used reset tokens (single-use enforcement)
+_used_reset_tokens: set[str] = set()
+
+
+@router.post('/forgot-password/email', response_model=MessageResponse)
+def forgot_password_email(payload: ForgotPasswordEmailRequest, db: Session = Depends(get_db)):
+    """Request a password reset link via email.
+
+    Always returns 200 with a generic message to prevent account enumeration.
+    Only sends a real email when the account exists AND email service is configured.
+    """
+    user = db.scalar(select(User).where(User.email == payload.email, User.is_active == True))
+
+    # Generic message regardless of whether user exists (anti-enumeration)
+    generic_message = 'Nếu email tồn tại trong hệ thống, hướng dẫn đặt lại mật khẩu sẽ được gửi.'
+
+    if not user:
+        logger.info('Forgot-password request for non-existent email (not disclosed to client)')
+        return {'message': generic_message}
+
+    token = create_password_reset_token(user.email)
+
+    try:
+        from ...services.email_service import send_password_reset_email
+        send_password_reset_email(user.email, token)
+    except RuntimeError as exc:
+        logger.error('Email service error: %s', exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.exception('Failed to send reset email')
+        raise HTTPException(
+            status_code=503,
+            detail='Không thể gửi email lúc này. Vui lòng thử lại sau.',
+        )
+
+    return {'message': generic_message}
+
+
+@router.post('/forgot-password/phone', response_model=MessageResponse)
+def forgot_password_phone(payload: ForgotPasswordPhoneRequest, db: Session = Depends(get_db)):
+    """Request an OTP via SMS for password reset.
+
+    Always returns 200 with a generic message to prevent account enumeration.
+    """
+    user = db.scalar(select(User).where(User.phone == payload.phone, User.is_active == True))
+    generic_message = 'Nếu số điện thoại đã đăng ký, mã OTP sẽ được gửi.'
+
+    if not user:
+        logger.info('Forgot-password phone request for non-existent phone (not disclosed)')
+        return {'message': generic_message}
+
+    try:
+        from ...services.otp_service import generate_otp
+        from ...services.sms_service import send_otp
+        otp_code = generate_otp(payload.phone)
+        send_otp(payload.phone, otp_code)
+    except ValueError as exc:
+        # Rate-limited
+        raise HTTPException(status_code=429, detail=str(exc))
+    except (RuntimeError, NotImplementedError) as exc:
+        logger.error('SMS service error: %s', exc)
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.exception('Failed to send OTP')
+        raise HTTPException(status_code=503, detail='Không thể gửi OTP lúc này. Vui lòng thử lại sau.')
+
+    return {'message': generic_message}
+
+
+class _OTPTokenResponse(MessageResponse):
+    token: str
+
+
+@router.post('/verify-otp', response_model=_OTPTokenResponse)
+def verify_otp_endpoint(payload: VerifyOTPRequest, db: Session = Depends(get_db)):
+    """Verify a phone OTP and return a password-reset token if valid."""
+    from ...services.otp_service import verify_otp
+    if not verify_otp(payload.phone, payload.otp):
+        raise HTTPException(status_code=400, detail='Mã OTP không đúng, đã hết hạn hoặc đã được sử dụng.')
+
+    user = db.scalar(select(User).where(User.phone == payload.phone, User.is_active == True))
+    if not user:
+        raise HTTPException(status_code=400, detail='Không tìm thấy tài khoản.')
+
+    token = create_password_reset_token(user.email)
+    return {'message': 'Xác thực OTP thành công.', 'token': token}
+
+
+@router.post('/reset-password', response_model=MessageResponse)
+def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Reset user password using a valid reset token. Token is single-use."""
+    # Check if token was already used
+    if payload.token in _used_reset_tokens:
+        raise HTTPException(status_code=400, detail='Liên kết đặt lại mật khẩu đã được sử dụng.')
+
+    try:
+        email = verify_password_reset_token(payload.token)
+    except JWTError:
+        raise HTTPException(status_code=400, detail='Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.')
+
+    user = db.scalar(select(User).where(User.email == email, User.is_active == True))
+    if not user:
+        raise HTTPException(status_code=400, detail='Tài khoản không tồn tại hoặc đã bị vô hiệu hóa.')
+
+    if verify_password(payload.new_password, user.hashed_password):
+        raise HTTPException(status_code=400, detail='Mật khẩu mới phải khác mật khẩu hiện tại.')
+
+    user.hashed_password = get_password_hash(payload.new_password)
+    user.session_version = int(user.session_version or 0) + 1  # Invalidate all existing sessions
+    db.commit()
+
+    # Mark token as used (single-use enforcement)
+    _used_reset_tokens.add(payload.token)
+    # Limit blacklist size (prevent memory leak for long-running servers)
+    if len(_used_reset_tokens) > 10000:
+        _used_reset_tokens.clear()
+
+    logger.info('Password reset successful for user %s', user.id)
+    return {'message': 'Đặt lại mật khẩu thành công. Bạn có thể đăng nhập bằng mật khẩu mới.'}

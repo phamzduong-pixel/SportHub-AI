@@ -59,7 +59,7 @@ SportHub AI/
 │       ├── layouts/       # Public, Customer, Management
 │       ├── pages/         # Các màn hình ứng dụng
 │       ├── routes/        # React Router
-│       ├── services/      # Local storage và mock service
+│       ├── services/      # API client và service nghiệp vụ
 │       ├── styles/        # Tailwind và global CSS
 │       ├── types/         # TypeScript models
 │       └── utils/         # Hàm tiện ích
@@ -100,12 +100,14 @@ SportHub AI/
 - `/management/courts`
 - `/management/schedules`
 - `/management/pricing`
+- `/management/products`
 - `/management/customers`
 - `/management/payments`
 - `/management/reports`
 - `/management/ai-insights`
-- `/management/team`
-- `/management/roles`
+- `/management/maintenance`
+- `/management/complaints`
+- `/management/reviews`
 - `/management/settings`
 
 Các route tiếng Việt cũ như `/dang-nhap`, `/dang-ky`, `/tai-khoan/*` và `/quan-ly/*` được giữ dưới dạng redirect tương thích.
@@ -120,66 +122,40 @@ Mật khẩu demo không được ghi cố định trong repository. Tài khoả
 | OWNER | `owner@sporthub.vn` | `/management/dashboard` |
 | SYSTEM_ADMIN | cấu hình qua `SYSTEM_ADMIN_EMAIL` hoặc script khởi tạo | `/system-admin` |
 
-## Các phần đang dùng mock data
+## Trạng thái dữ liệu hiện tại
 
-- Đăng nhập, đăng ký, quên mật khẩu và phiên người dùng.
-- Hồ sơ đăng ký đối tác, trạng thái `PENDING`/`APPROVED`/`REJECTED`/`SUSPENDED` và chuyển quyền OWNER sau xác minh.
-- Danh sách sân, lịch trống, booking và QR xác nhận.
-- Thanh toán, hoàn tiền và đối soát.
-- Dashboard, báo cáo và export PDF/Excel/CSV.
-- Quản lý cơ sở, sân, khung giờ, bảng giá, khách hàng và đội ngũ.
-- OWNER được kiểm tra ownership theo cơ sở/sân tại backend.
-- Hội thoại AI, gợi ý sân, dự báo nhu cầu và insight vận hành.
-- Toast/email/thông báo và mọi thao tác “áp dụng” AI.
+Các luồng xác thực, hồ sơ đối tác, hồ sơ cơ sở, upload giấy tờ, sân/slot, booking nhiều khung giờ, sản phẩm/tồn kho, payment, refund, invoice, notification và dashboard đều dùng FastAPI/database thật theo JWT.
 
-Authentication, profile, booking, payment và dữ liệu quản trị được lấy từ backend theo JWT hiện tại. Frontend chỉ giữ cache giao diện có phạm vi user và xóa cache này khi logout hoặc trước khi đăng nhập tài khoản khác.
+Các giới hạn còn lại:
 
-## API backend cần phát triển hoặc tích hợp tiếp
-
-- Authentication: đăng nhập, đăng ký, refresh token, đăng xuất, quên/đặt lại mật khẩu, xác minh email.
-- User và ownership: hồ sơ, ba vai trò, phạm vi cơ sở/sân và audit log.
-- Venue: CRUD cơ sở, upload/xóa ảnh, tiện ích, chính sách và trạng thái.
-- Court và schedule: CRUD sân, lịch hoạt động, slot, ngày nghỉ, khóa lịch và bảo trì.
-- Pricing: giá cơ bản, rule cao/thấp điểm, ngày lễ, promotion và lịch sử giá.
-- Booking: kiểm tra xung đột, giữ chỗ, xác nhận, hủy, đặt lại và đánh giá.
-- Payment: tạo giao dịch, webhook nhà cung cấp, hoàn tiền, hóa đơn và đối soát.
-- Customer CRM: thống kê khách hàng, trạng thái tài khoản và lịch sử hoạt động.
-- Dashboard/report: KPI theo thời gian thực, bộ lọc, tổng hợp và export server-side.
-- AI Customer: ranking sân, tìm kiếm ngôn ngữ tự nhiên và cá nhân hóa.
-- AI Owner: inference dự báo, phát hiện bất thường, giải thích mô hình và lưu quyết định áp dụng.
-- Notification: email, SMS, push notification và quản lý template.
+- Quên/đặt lại mật khẩu qua email chưa hoàn chỉnh.
+- Bản đồ đang dùng `MapMock`, chưa tích hợp nhà cung cấp bản đồ thật.
+- Email/SMS/push/realtime notification chưa hoàn chỉnh; thông báo trong ứng dụng đã có model/API/UI.
+- UI riêng cho field-block và audit log còn giới hạn.
+- Payment gateway ngân hàng thật và LLM ngoài phụ thuộc cấu hình môi trường; hệ thống có demo/fallback được kiểm soát.
 
 ## Cập nhật gần nhất
 
-Chi tiết bàn giao mới nhất ngày 13/08/2026: [docs/SECTION_HANDOFF_2026-08-13_FACILITY_AI_UI.md](docs/SECTION_HANDOFF_2026-08-13_FACILITY_AI_UI.md).
+Hiện trạng chức năng ngày 16/08/2026 được tổng hợp tại [docs/Chucnang.md](docs/Chucnang.md) và [docs/FUNCTIONAL_HIERARCHY.md](docs/FUNCTIONAL_HIERARCHY.md).
+
+Đợt cập nhật mới nhất hoàn thiện đăng ký/xét duyệt cơ sở, draft, booking nhiều khung giờ, dịch vụ–sản phẩm–tồn kho, catalog 47 mục, cấu hình dịch vụ tại sân, payment/invoice snapshot và notification trong ứng dụng.
 
 Bàn giao Platform/Deploy ngày 11/08/2026 được giữ tại [docs/SECTION_HANDOFF_2026-08-11_PLATFORM_DEPLOY.md](docs/SECTION_HANDOFF_2026-08-11_PLATFORM_DEPLOY.md) như tài liệu lịch sử.
 
-Phần đăng ký tài khoản, xác minh đối tác và tổ chức frontend đã hoàn thành các nội dung sau:
+Các điểm đã xác minh trong đợt hiện tại:
 
-- Đăng ký public luôn tạo `CUSTOMER`; hồ sơ đăng ký OWNER nằm ở bảng xét duyệt riêng và chỉ SYSTEM_ADMIN có thể phê duyệt.
-- Thêm quy trình hồ sơ đối tác ba bước và trang trạng thái xác minh tại `/owner-application` và `/owner-application/status`.
-- `AuthGuard`, `RoleGuard` và backend dependency bảo đảm CUSTOMER không vào `/management`, OWNER không vào `/system-admin` và SYSTEM_ADMIN không vận hành API OWNER.
-- Bổ sung tài khoản demo OWNER đang chờ xác minh `pending.owner@sporthub.vn` / `123456`.
-- Hoàn thiện chống đặt trùng theo cùng sân và khoảng thời gian; các booking giữ lịch gồm `PENDING_PAYMENT`, `PENDING_CONFIRMATION`, `CONFIRMED`; giữ chỗ thanh toán trong 10 phút và trả HTTP 409 khi xung đột.
-- Frontend vô hiệu hóa slot đã đặt/đang giữ, làm mới khung giờ và hiển thị toast khi có xung đột; booking do OWNER tạo cũng tuân theo cùng quy tắc.
-- Chuẩn hóa stack thành React 19 + Vite + TypeScript + Tailwind CSS; không trộn Vue, Angular, Next.js, Bootstrap, Material UI hay Ant Design.
-- Dọn phần authentication bị trùng, chỉ giữ một luồng Login/Register; tách `AuthShell`, `PasswordField`, trang quên mật khẩu, guard, mock auth service và TypeScript model theo đúng trách nhiệm.
-- Xác nhận `components/common/index.ts` là barrel export hợp lệ; file dùng `.ts` vì không chứa JSX, còn các component giao diện dùng `.tsx`.
-- Chuyển `@vitejs/plugin-react` sang `devDependencies` và đồng bộ `package-lock.json`.
+- Ba vai trò `CUSTOMER`, `OWNER`, `SYSTEM_ADMIN` được bảo vệ ở frontend và backend.
+- Facility là thực thể riêng, liên kết OWNER, sân, giấy tờ, sản phẩm và booking.
+- Booking hỗ trợ nhiều slot và dịch vụ snapshot; inventory được reserve/release theo trạng thái.
+- Catalog sản phẩm được seed idempotent trong database, không tự gán cho mọi cơ sở.
+- File giấy tờ được lưu private và chỉ xem qua endpoint có quyền.
 
-Kết quả kiểm tra gần nhất:
+Kết quả kiểm tra module dịch vụ gần nhất:
 
 ```text
-Frontend dependency tree: hợp lệ
-TypeScript: npm run typecheck — thành công
-Production build: npm run build — thành công, 2213 modules transformed
-Backend compile check: python -m compileall -q app — thành công
-Backend regression tests: 32/32 test thành công
-Booking conflict tests: 10/10 test thành công
+Product/Inventory/Booking/Payment/Invoice tests: 21/21 thành công
+Frontend TypeScript + Vite production build: thành công
 ```
-
-Lưu ý: dự án hiện chưa cấu hình ESLint nên chưa có script `npm run lint`. Authentication, hồ sơ đối tác, upload giấy tờ/hình ảnh và quá trình duyệt hồ sơ vẫn đang dùng mock data/localStorage; file upload chỉ lưu tên file mô phỏng, không lưu nội dung giấy tờ.
 
 ## Cập nhật AI Trợ lý SportHub — 07/08/2026
 
@@ -220,18 +196,11 @@ AIAssistantPage
   → chat message + suggestion cards
 ```
 
-Kết quả kiểm tra:
-
-```text
-AI Assistant backend tests: 10/10 thành công
-Toàn bộ backend regression tests gần nhất: 41/41 thành công
-Frontend TypeScript + Vite production build: thành công, 2223 modules transformed
-```
-
-Lưu ý dữ liệu: schema hiện tại dùng `Field` làm thực thể sân/cơ sở hiển thị và chưa có bảng `Facility` riêng. AI không tự tạo tên cơ sở để bù cho dữ liệu chưa tồn tại.
+AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Schema hiện có thực thể `Facility` riêng; `Field` là từng sân/court thuộc cơ sở. AI không tự tạo dữ liệu thay thế khi database không có kết quả.
 
 ## Tài liệu
 
+- [Bàn giao OWNER Facility, Mobile UX và Booking Service — 16/08/2026](docs/SECTION_HANDOFF_2026-08-16_OWNER_FACILITY_MOBILE_BOOKING_SERVICE.md)
 - [Bàn giao AI hỗ trợ CUSTOMER đăng ký OWNER — 14/08/2026](docs/SECTION_HANDOFF_2026-08-14_AI_PARTNER_SUPPORT.md)
 - [Báo cáo tiến độ phiên 10/08/2026](docs/SESSION_PROGRESS_2026-08-10.md)
 - [Frontend](Frontend/README.md)

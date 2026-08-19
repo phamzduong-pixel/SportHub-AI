@@ -6,6 +6,7 @@ import {
   Printer,
   RefreshCw,
   XCircle,
+  Star,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -17,8 +18,10 @@ import {
   LoadingSkeleton,
   PageHeader,
   useToast,
+  Modal,
 } from "@/components/common";
 import { RefundStatusPanel } from "@/components/refunds/RefundStatusPanel";
+import { createReview, getReviewByBooking, updateReview, type Review } from "@/services/reviewService";
 import { TransactionHistory } from "@/components/payments/TransactionHistory";
 import { apiRequest } from "@/services/apiClient";
 import {
@@ -122,6 +125,8 @@ export function CustomerBookingDetailPage() {
   const [newFieldId, setNewFieldId] = useState<number>();
   const [newSlotIds, setNewSlotIds] = useState<number[]>([]);
   const [rescheduleQuote, setRescheduleQuote] = useState<RescheduleQuote>();
+  const [showReviewModal, setShowReviewModal] = useState(false);
+
   const load = async () => {
     const next = await getMyBooking(bookingId);
     setBooking(next);
@@ -452,6 +457,19 @@ export function CustomerBookingDetailPage() {
               {paymentLabels[booking.payment_status] || booking.payment_status}
             </Badge>
           </div>
+          {booking.status === "completed" && (
+            <div className="mt-3">
+              {!booking.reviewed ? (
+                <Button size="sm" onClick={() => setShowReviewModal(true)}>
+                  ⭐ Đánh giá sân
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => setShowReviewModal(true)}>
+                  Đã đánh giá · Xem đánh giá
+                </Button>
+              )}
+            </div>
+          )}
           {booking.cancellation_reason && (
             <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm">
               <b>Lý do hủy:</b> {booking.cancellation_reason}
@@ -515,11 +533,6 @@ export function CustomerBookingDetailPage() {
             </Button>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
-            {booking.status === "completed" && !booking.reviewed && (
-              <Link to={`/customer/reviews?booking=${booking.id}`}>
-                <Button size="sm">Đánh giá sân</Button>
-              </Link>
-            )}
             {cancellable && (
               <Button
                 variant="danger"
@@ -810,6 +823,15 @@ export function CustomerBookingDetailPage() {
         </section>
       )}
       {invoice && <CompletedInvoice invoice={invoice} />}
+      <BookingReviewModal
+        booking={booking}
+        open={showReviewModal}
+        onClose={() => setShowReviewModal(false)}
+        onSuccess={() => {
+          setShowReviewModal(false);
+          setBooking({ ...booking, reviewed: true });
+        }}
+      />
     </>
   );
 }
@@ -936,5 +958,152 @@ function CompletedInvoice({ invoice }: { invoice: BookingInvoice }) {
         In hóa đơn
       </Button>
     </section>
+  );
+}
+
+function BookingReviewModal({
+  booking,
+  open,
+  onClose,
+  onSuccess,
+}: {
+  booking: ApiBooking;
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [existingReview, setExistingReview] = useState<Review>();
+  const [isEditing, setIsEditing] = useState(false);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (!open) return;
+    if (!booking.reviewed) {
+      setLoading(false);
+      setRating(5);
+      setComment("");
+      return;
+    }
+    setLoading(true);
+    getReviewByBooking(booking.id)
+      .then((review) => {
+        setExistingReview(review);
+        setRating(review.rating);
+        setComment(review.comment);
+        setIsEditing(false);
+      })
+      .catch(() => toast("Không tải được đánh giá.", "error"))
+      .finally(() => setLoading(false));
+  }, [open, booking.id, booking.reviewed]);
+
+
+  const handleUpdate = async () => {
+    if (rating < 1 || rating > 5) return toast("Vui lòng chọn số sao.", "error");
+    if (comment.trim().length > 1000) return toast("Nhận xét tối đa 1000 ký tự.", "error");
+    if (!existingReview) return;
+    setSaving(true);
+    try {
+      const updated = await updateReview(existingReview.id, rating, comment.trim());
+      setExistingReview(updated);
+      setIsEditing(false);
+      toast("Đã cập nhật đánh giá.", "success");
+      onSuccess();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không thể cập nhật đánh giá.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submit = async () => {
+    if (rating < 1 || rating > 5) return toast("Vui lòng chọn số sao.", "error");
+    if (comment.trim().length > 1000) return toast("Nhận xét tối đa 1000 ký tự.", "error");
+    setSaving(true);
+    try {
+      await createReview(booking.id, rating, comment.trim());
+      toast("Cảm ơn bạn đã đánh giá sân.", "success");
+      onSuccess();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Không thể gửi đánh giá.", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="Đánh giá sân" open={open} onClose={onClose} >
+      {loading ? (
+        <LoadingSkeleton lines={4} />
+      ) : (
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm">
+              <b>Cơ sở:</b> {booking.facility_name} <br />
+              <b>Sân:</b> {booking.field_name}
+            </p>
+            {existingReview && !isEditing && (
+              <Button size="sm" variant="outline" onClick={() => setIsEditing(true)}>Chỉnh sửa</Button>
+            )}
+          </div>
+          <div className="mb-4 flex gap-1">
+            {[1, 2, 3, 4, 5].map((star) => (
+              <button
+                key={star}
+                type="button"
+                onClick={() => (!existingReview || isEditing) && setRating(star)}
+                disabled={!!existingReview && !isEditing}
+                aria-label={`${star} sao`}
+              >
+                <Star
+                  className={star <= rating ? "fill-amber-400 text-amber-400" : "text-slate-300"}
+                />
+              </button>
+            ))}
+          </div>
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            disabled={!!existingReview && !isEditing}
+            maxLength={1000}
+            placeholder="Chia sẻ trải nghiệm của bạn (tùy chọn)..."
+            className="field min-h-32 py-2 disabled:bg-slate-50 disabled:text-slate-700"
+          />
+          {!existingReview && (
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="ghost" onClick={onClose} disabled={saving}>
+                Hủy
+              </Button>
+              <Button loading={saving} onClick={() => void submit()}>
+                Gửi đánh giá
+              </Button>
+            </div>
+          )}
+          {existingReview && isEditing && (
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => {
+                setRating(existingReview.rating);
+                setComment(existingReview.comment);
+                setIsEditing(false);
+              }} disabled={saving}>
+                Hủy
+              </Button>
+              <Button loading={saving} onClick={() => void handleUpdate()}>
+                Lưu thay đổi
+              </Button>
+            </div>
+          )}
+          {existingReview && existingReview.owner_reply && !isEditing && (
+            <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm">
+              <b className="mb-1 block text-brand-800">Chủ sân phản hồi:</b>
+              <p>{existingReview.owner_reply}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }

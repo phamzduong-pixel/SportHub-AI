@@ -47,6 +47,31 @@ class Settings:
     FACILITY_IMAGE_MAX_BYTES = int(os.getenv('FACILITY_IMAGE_MAX_BYTES', str(5 * 1024 * 1024)))
     FACILITY_DOCUMENT_MAX_BYTES = int(os.getenv('FACILITY_DOCUMENT_MAX_BYTES', str(10 * 1024 * 1024)))
 
+    # Email / SMTP
+    EMAIL_ENABLED = os.getenv('EMAIL_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+    SMTP_HOST = os.getenv('SMTP_HOST', '')
+    SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
+    SMTP_USER = os.getenv('SMTP_USER', '')
+    SMTP_PASSWORD = os.getenv('SMTP_PASSWORD', '')
+    SMTP_FROM_EMAIL = os.getenv('SMTP_FROM_EMAIL', '')
+    SMTP_FROM_NAME = os.getenv('SMTP_FROM_NAME', 'SportHub AI')
+    SMTP_USE_TLS = os.getenv('SMTP_USE_TLS', 'true').lower() in ('1', 'true', 'yes')
+
+    # SMS (placeholder until a real provider is configured)
+    SMS_ENABLED = os.getenv('SMS_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+    SMS_PROVIDER = os.getenv('SMS_PROVIDER', '')
+    SMS_API_KEY = os.getenv('SMS_API_KEY', '')
+    SMS_SECRET_KEY = os.getenv('SMS_SECRET_KEY', '')
+    SMS_BRAND_NAME = os.getenv('SMS_BRAND_NAME', 'SportHub')
+
+    # Frontend URL (for email reset links)
+    FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+
+    # Password reset
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = int(os.getenv('PASSWORD_RESET_TOKEN_EXPIRE_MINUTES', '15'))
+    OTP_EXPIRE_MINUTES = int(os.getenv('OTP_EXPIRE_MINUTES', '5'))
+    OTP_MAX_ATTEMPTS = int(os.getenv('OTP_MAX_ATTEMPTS', '5'))
+
     def __init__(self):
         if not os.getenv('SECRET_KEY'):
             warnings.warn(

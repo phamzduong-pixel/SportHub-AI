@@ -13,6 +13,18 @@ class ReviewCreate(RequestModel):
         if len(value) < 2:
             raise ValueError('Nhận xét phải có ít nhất 2 ký tự')
         return value
+class ReviewUpdate(RequestModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=2, max_length=2000)
+
+    @field_validator('comment')
+    @classmethod
+    def normalize_comment(cls, value: str):
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError('Nhận xét phải có ít nhất 2 ký tự')
+        return value
+
 class ReviewReply(RequestModel):
     reply: str = Field(min_length=2, max_length=2000)
 class ReviewResponse(BaseModel):

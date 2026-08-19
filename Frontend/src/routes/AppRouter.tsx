@@ -86,6 +86,11 @@ const CustomerReviewsPage = lazy(() =>
     default: m.CustomerReviewsPage,
   })),
 );
+const CustomerComplaintsPage = lazy(() =>
+  import("@/pages/CustomerComplaintsPage").then((m) => ({
+    default: m.CustomerComplaintsPage,
+  })),
+);
 const ManagementDashboardPage = lazy(() =>
   import("@/pages/ManagementDashboardWithOnboardingPage").then((m) => ({
     default: m.ManagementDashboardWithOnboardingPage,
@@ -169,6 +174,11 @@ const ForgotPasswordPage = lazy(() =>
     default: m.ForgotPasswordPage,
   })),
 );
+const ResetPasswordPage = lazy(() =>
+  import("@/pages/ResetPasswordPage").then((m) => ({
+    default: m.ResetPasswordPage,
+  })),
+);
 const OwnerApplicationPage = lazy(() =>
   import("@/pages/PartnerApplicationPage").then((m) => ({
     default: m.PartnerApplicationPage,
@@ -232,6 +242,7 @@ const router = createBrowserRouter([
   { path: "/login", element: load(<LoginPage />) },
   { path: "/register", element: load(<RegisterPage />) },
   { path: "/forgot-password", element: load(<ForgotPasswordPage />) },
+  { path: "/reset-password", element: load(<ResetPasswordPage />) },
   {
     path: "/owner-application",
     element: <AuthGuard>{load(<OwnerApplicationPage />)}</AuthGuard>,
@@ -314,6 +325,7 @@ const router = createBrowserRouter([
         element: <Navigate to="/notifications" replace />,
       },
       { path: "reviews", element: load(<CustomerReviewsPage />) },
+      { path: "complaints", element: load(<CustomerComplaintsPage />) },
     ],
   },
   {

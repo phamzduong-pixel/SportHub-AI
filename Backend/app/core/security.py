@@ -43,3 +43,20 @@ def decode_access_token(token: str) -> Any:
         return payload
     except JWTError as e:
         raise e
+
+def create_password_reset_token(email: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    return jwt.encode(
+        {'sub': email, 'exp': expire, 'iat': datetime.now(timezone.utc), 'type': 'password_reset'},
+        settings.SECRET_KEY, algorithm=settings.ALGORITHM,
+    )
+
+def verify_password_reset_token(token: str) -> str:
+    """Decode a password-reset JWT and return the email. Raises JWTError on failure."""
+    payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    if payload.get('type') != 'password_reset':
+        raise JWTError('Token type không hợp lệ')
+    email: str | None = payload.get('sub')
+    if not email:
+        raise JWTError('Token không chứa email')
+    return email

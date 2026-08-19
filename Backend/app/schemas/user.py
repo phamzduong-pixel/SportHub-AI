@@ -109,3 +109,47 @@ class StatusUpdateRequest(RequestModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ForgotPasswordEmailRequest(RequestModel):
+    email: str
+
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, value: str):
+        return RegisterRequest.validate_email(value)
+
+
+class ForgotPasswordPhoneRequest(RequestModel):
+    phone: str = Field(min_length=10, max_length=10, pattern=r'^0[0-9]{9}$')
+
+    @field_validator('phone', mode='before')
+    @classmethod
+    def validate_phone(cls, value):
+        if not isinstance(value, str):
+            raise ValueError('Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.')
+        return value.strip()
+
+
+class VerifyOTPRequest(RequestModel):
+    phone: str = Field(min_length=10, max_length=10, pattern=r'^0[0-9]{9}$')
+    otp: str = Field(min_length=6, max_length=6, pattern=r'^[0-9]{6}$')
+
+
+class ResetPasswordRequest(RequestModel):
+    token: str = Field(min_length=20, max_length=4000)
+    new_password: str = Field(min_length=8, max_length=72)
+    confirm_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator('new_password')
+    @classmethod
+    def validate_password_bytes(cls, value: str):
+        return RegisterRequest.validate_password_bytes(value)
+
+    @field_validator('confirm_password')
+    @classmethod
+    def passwords_match(cls, value: str, info):
+        new_pw = info.data.get('new_password')
+        if new_pw and value != new_pw:
+            raise ValueError('Mật khẩu xác nhận không khớp')
+        return value

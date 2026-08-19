@@ -1,4 +1,4 @@
-import { Bell, Bot, Building2, CalendarDays, ChevronDown, Gift, Heart, LogOut, Menu, ShieldCheck, UserRound } from 'lucide-react';
+import { AlertCircle, Bell, Bot, Building2, CalendarDays, ChevronDown, Gift, Heart, LogOut, Menu, ShieldCheck, UserRound } from 'lucide-react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { Button, Drawer, Dropdown } from '@/components/common';
 import { useAuth } from '@/contexts/AuthContext';
@@ -16,6 +16,7 @@ export function PublicHeader() {
     { label: 'Hồ sơ cá nhân', icon: <UserRound size={16} />, onClick: () => navigate('/customer/profile') },
     { label: 'Lịch đặt sân của tôi', icon: <CalendarDays size={16} />, onClick: () => navigate('/customer/bookings') },
     { label: 'Đánh giá sân', icon: <UserRound size={16} />, onClick: () => navigate('/customer/reviews') },
+    { label: 'Khiếu nại của tôi', icon: <AlertCircle size={16} />, onClick: () => navigate('/customer/complaints') },
     { label: 'Sân yêu thích', icon: <Heart size={16} />, onClick: () => navigate('/customer/favorites') },
     { label: 'Thông báo', icon: <Bell size={16} />, onClick: () => navigate('/customer/notifications') },
     { label: 'Đăng xuất', icon: <LogOut size={16} />, danger: true, onClick: signOut },

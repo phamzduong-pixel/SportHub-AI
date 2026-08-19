@@ -118,7 +118,7 @@ class AIAssistantService:
 
         criteria = self._extract(query, context_field_id)
         fresh_end_minute = criteria.end_minute
-        self._merge_context(criteria, effective_context)
+        self._merge_context(criteria, effective_context, query)
         if route.entities.start_time and not route.entities.end_time and fresh_end_minute is None:
             criteria.end_minute = None
         self._resolve_result_reference(criteria, query, effective_context)
@@ -157,7 +157,7 @@ class AIAssistantService:
             return self._response('Khung giờ không hợp lệ. Giờ kết thúc phải sau giờ bắt đầu.', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['end_time'])
         if not criteria.sport_type:
             return self._response('Bạn muốn tìm sân cho môn thể thao nào?', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['sport_type'])
-        if not criteria.booking_date:
+        if not criteria.booking_date and not any(term in query for term in ('ngay nao trong', 'ngay trong')):
             return self._response(f'Bạn muốn chơi {criteria.sport_type} vào ngày nào?', criteria, [], needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['date'])
         if criteria.near_me and not criteria.location:
             return self._response('Bạn muốn tìm sân gần khu vực nào?', criteria, [], needs_clarification=True, classification=ScopeClassification.UNCLEAR, status='NEED_MORE_DATA', missing_fields=['location'])
@@ -177,6 +177,24 @@ class AIAssistantService:
             allow_alternatives=criteria.allow_alternatives,
         ))
         if ranked_result['status'] != 'OK':
+            if any(term in query for term in ('ngay nao trong', 'ngay trong', 'ngay khac')) or criteria.allow_alternatives:
+                alternative_suggestions = self._search_alternative_dates(SlotRecommendationRequest(
+                    sport_type=criteria.sport_type, booking_date=criteria.booking_date or datetime.now(self.tz).date(),
+                    court_type=criteria.court_type,
+                    court_id=criteria.requested_field_id, slot_id=criteria.requested_time_slot_id,
+                    start_time=time(criteria.start_minute // 60, criteria.start_minute % 60) if criteria.start_minute is not None else None,
+                    end_time=time(criteria.end_minute // 60, criteria.end_minute % 60) if criteria.end_minute is not None and criteria.end_minute < 1440 else None,
+                    time_ranges=[
+                        (time(start // 60, start % 60), time(end // 60, end % 60))
+                        for start, end in criteria.time_ranges
+                    ],
+                    duration_minutes=criteria.duration_minutes,
+                    max_price=criteria.max_price, location=criteria.location,
+                    allow_alternatives=criteria.allow_alternatives,
+                ))
+                if alternative_suggestions:
+                    return self._format_alternative_dates_response(alternative_suggestions, criteria, route.intent)
+
             return self._response(
                 ranked_result['message'], criteria, [], status=ranked_result['status'],
                 missing_fields=ranked_result.get('missing_fields', []),
@@ -206,6 +224,58 @@ class AIAssistantService:
         if route.intent == AssistantIntent.CREATE_BOOKING:
             reply += ' Hãy mở phương án phù hợp, kiểm tra lại thông tin rồi tự xác nhận đặt sân.'
         response = self._response(reply, criteria, suggestions)
+        response['understood']['result_field_ids'] = [item['field_id'] for item in suggestions]
+        response['understood']['result_time_slot_ids'] = [item['time_slot_id'] for item in suggestions]
+        response['understood']['result_prices'] = [item['price'] for item in suggestions]
+        response['understood']['reference_price'] = suggestions[0]['price'] if suggestions else None
+        return response
+
+    def _search_alternative_dates(self, payload: SlotRecommendationRequest, days: int = 7) -> list:
+        found_suggestions = []
+        original_date = payload.booking_date or datetime.now(self.tz).date()
+        for i in range(1, days + 1):
+            next_date = original_date + timedelta(days=i)
+            payload_copy = payload.model_copy(update={'booking_date': next_date})
+            result = AIFeatureService(self.repository.db).recommend_slots(payload_copy)
+            if result['status'] == 'OK' and result['recommendations']:
+                for item in result['recommendations'][:2]:
+                    start_label = item['start_time'].strftime('%H:%M')
+                    end_label = item['end_time'].strftime('%H:%M')
+                    found_suggestions.append({
+                        'facility_id': item.get('facility_id'),
+                        'field_id': item['court_id'], 'facility_name': item['facility_name'],
+                        'court_name': item['court_name'], 'field_name': item['court_name'],
+                        'sport_type': item['sport_type'], 'court_type': item.get('court_type'), 'location': item['location'],
+                        'image_url': item.get('image_url'), 'time_slot_id': item['slot_id'],
+                        'time_slot_ids': item.get('slot_ids', [item['slot_id']]),
+                        'selected_slots': item.get('selected_slots', []),
+                        'slot_name': item['slot_name'], 'start_time': start_label, 'end_time': end_label,
+                        'price': item['price'], 'duration_minutes': item.get('duration_minutes', 0),
+                        'rating': item['rating'], 'distance_km': item.get('distance_km'),
+                        'booking_date': item['booking_date'], 'reason': item['reason'],
+                        'availability_status': 'available', 'is_nearest_alternative': False,
+                        'alternative_type': 'alternative_date',
+                    })
+            if len(found_suggestions) >= 4:
+                break
+        return found_suggestions
+
+    def _format_alternative_dates_response(self, suggestions: list, criteria: SearchCriteria, intent: AssistantIntent):
+        dates_map = {}
+        for s in suggestions:
+            d_str = s['booking_date'].strftime('%d/%m')
+            time_str = f"{s['start_time']}–{s['end_time']}"
+            if d_str not in dates_map:
+                dates_map[d_str] = []
+            if time_str not in dates_map[d_str]:
+                dates_map[d_str].append(time_str)
+        
+        reply = "Hiện chưa còn lịch phù hợp. Gần nhất tôi tìm thấy:\n" if not criteria.booking_date else "Hiện chưa còn lịch phù hợp cho ngày bạn chọn. Gần nhất tôi tìm thấy:\n"
+        for d, times in dates_map.items():
+            reply += f"- {d}: {', '.join(times)}\n"
+        reply += "Bạn muốn xem ngày nào?"
+        
+        response = self._response(reply, criteria, suggestions, status='OK')
         response['understood']['result_field_ids'] = [item['field_id'] for item in suggestions]
         response['understood']['result_time_slot_ids'] = [item['time_slot_id'] for item in suggestions]
         response['understood']['result_prices'] = [item['price'] for item in suggestions]
@@ -622,15 +692,16 @@ class AIAssistantService:
         )
 
     @staticmethod
-    def _merge_context(criteria: SearchCriteria, context: dict[str, Any]):
+    def _merge_context(criteria: SearchCriteria, context: dict[str, Any], query: str):
         values = {
             'sport_type': context.get('sport_type'),
             'court_type': context.get('court_type'),
             'location': context.get('location'),
             'max_price': context.get('max_price'),
             'people': context.get('people'),
-            'requested_field_id': context.get('field_id'),
         }
+        if 'san khac' not in query and 'co so khac' not in query:
+            values['requested_field_id'] = context.get('field_id')
         for name, value in values.items():
             if getattr(criteria, name) is None and value is not None:
                 setattr(criteria, name, value)

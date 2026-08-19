@@ -31,7 +31,7 @@ export interface RescheduleQuote extends RescheduleRequest { booking_id: number;
 export const confirmManagedBooking = (bookingId: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/confirm`, { method: 'PATCH', body: JSON.stringify({}) });
 export const rejectManagedBooking = (bookingId: number, note?: string) => apiRequest<ApiBooking>(`/bookings/${bookingId}/reject`, { method: 'PATCH', body: JSON.stringify({ note: note || null }) });
 export const cancelManagedBooking = (bookingId: number, reason: string) => apiRequest<ApiBooking>(`/bookings/${bookingId}/cancel`, { method: 'PATCH', body: JSON.stringify({ reason }) });
-export const startManagedBooking = (bookingId: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/start`, { method: 'PATCH', body: JSON.stringify({}) });
+export const startManagedBooking = (bookingId: number, confirmEarly = false) => apiRequest<ApiBooking>(`/bookings/${bookingId}/start`, { method: 'PATCH', body: JSON.stringify({ confirm_early: confirmEarly }) });
 export const completeManagedBooking = (bookingId: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/complete`, { method: 'PATCH', body: JSON.stringify({}) });
 export const addManagedBookingProduct = (bookingId: number, productId: number, quantity: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/products`, { method: 'POST', body: JSON.stringify({ product_id: productId, quantity }) });
 export const updateManagedBookingProduct = (bookingId: number, itemId: number, quantity: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/products/${itemId}`, { method: 'PATCH', body: JSON.stringify({ quantity }) });
@@ -42,7 +42,7 @@ export type RefundStatus = 'refund_pending' | 'refund_overdue' | 'refunded' | 'd
 export interface BookingActivity { id: number; actor_id: number | null; actor_name: string | null; actor_role: string | null; action: string; from_status: string | null; to_status: string | null; details: Record<string, unknown>; created_at: string; }
 export interface RefundRequest { id: number; booking_id: number; booking_code: string; customer_id: number; customer_name: string; field_name: string; amount: number; status: RefundStatus; reason: string; requested_by: number; requested_by_name: string; processed_by: number | null; processed_by_name: string | null; requested_at: string; due_at: string; refunded_at: string | null; customer_confirmed_at: string | null; disputed_at: string | null; transaction_reference: string | null; evidence_url: string | null; dispute_reason: string | null; is_overdue: boolean; activities: BookingActivity[]; created_at: string; updated_at: string; }
 export interface RefundReputation { total_bookings: number; owner_cancelled_bookings: number; owner_cancellation_rate: number; completed_refunds: number; on_time_refunds: number; on_time_refund_rate: number; }
-export interface BookingComplaint { id: number; booking_id: number; booking_code: string; customer_id: number; customer_name: string; field_id: number; field_name: string; category: string; description: string; evidence_url: string | null; status: 'open' | 'in_review' | 'resolved' | 'rejected'; resolution: string | null; resolved_by: number | null; resolved_by_name: string | null; resolved_at: string | null; created_at: string; updated_at: string; }
+export interface BookingComplaint { id: number; booking_id: number; booking_code: string; customer_id: number; customer_name: string; field_id: number; field_name: string; category: string; description: string; evidence_url: string | null; status: 'open' | 'in_review' | 'resolved' | 'rejected' | 'cancelled'; resolution: string | null; resolved_by: number | null; resolved_by_name: string | null; resolved_at: string | null; created_at: string; updated_at: string; }
 
 export const getMyBookings = () => apiRequest<{ items: ApiBooking[]; total: number }>('/bookings/my?page_size=100');
 export const getMyBooking = (id: string | number) => apiRequest<ApiBooking>(`/bookings/${id}`);
@@ -81,3 +81,6 @@ export async function payBooking(booking: ApiBooking): Promise<{ booking: ApiBoo
   const confirmed = await apiRequest<ApiPayment>(`/payments/${payment.id}/confirm`, { method: 'PATCH', body: JSON.stringify({}) });
   return { booking: await getMyBooking(booking.id), payment: confirmed };
 }
+
+export const cancelComplaint = (id: number) => apiRequest<BookingComplaint>(`/complaints/${id}/cancel`, { method: 'PATCH' });
+

@@ -595,22 +595,76 @@ class BookingService:
             raise HTTPException(status_code=409, detail=self.CONFLICT_MESSAGE)
         return self.response(self.repository.get(booking.id))
 
-    def start(self, booking_id: int, note: str | None, user: User) -> BookingResponse:
+    def start(self, booking_id: int, note: str | None, confirm_early: bool, user: User) -> BookingResponse:
         booking = self._booking_or_404(booking_id)
         self._require_owned_booking(booking, user)
         if booking.status != BookingStatus.CONFIRMED.value:
             raise HTTPException(status_code=409, detail='Chỉ booking đã xác nhận mới có thể bắt đầu')
-        if self._scheduled_at(booking) > datetime.now(self.timezone):
-            raise HTTPException(status_code=409, detail='Chưa đến giờ sử dụng sân')
-        return self._transition(booking_id, {BookingStatus.CONFIRMED.value}, BookingStatus.IN_PROGRESS.value, note, user)
+        
+        now = datetime.now(self.timezone)
+        # Verify slot bounds logic for early start. Find the specific slot we are trying to start early.
+        # Actually, if we just rely on first slot scheduled_at
+        scheduled_at = self._scheduled_at(booking)
+        is_early = scheduled_at > now
+        
+        if is_early:
+            if not confirm_early:
+                raise HTTPException(status_code=400, detail='Chưa đến giờ sử dụng sân. Vui lòng xác nhận để bắt đầu sớm.')
+            
+            # Check for conflict with IN_PROGRESS bookings at the current time
+            from sqlalchemy import select, and_, or_
+            from ...models.field import BookingSlot, Booking
+            from ...models.operations import FieldBlock
+            
+            current_time = now.time()
+            current_date = now.date()
+            
+            conflict_booking = self.repository.db.scalar(
+                select(Booking.id)
+                .outerjoin(BookingSlot, BookingSlot.booking_id == Booking.id)
+                .where(
+                    Booking.field_id == booking.field_id,
+                    Booking.booking_date == current_date,
+                    Booking.status == BookingStatus.IN_PROGRESS.value,
+                    Booking.id != booking.id,
+                    or_(
+                        and_(BookingSlot.start_time_snapshot <= current_time, BookingSlot.end_time_snapshot >= current_time),
+                        and_(~Booking.booking_slots.any(), Booking.start_time_snapshot <= current_time, Booking.end_time_snapshot >= current_time)
+                    )
+                )
+            )
+            if conflict_booking:
+                raise HTTPException(status_code=409, detail='Sân đang có khách sử dụng. Không thể bắt đầu sớm.')
+                
+            conflict_block = self.repository.db.scalar(
+                select(FieldBlock.id).where(
+                    FieldBlock.field_id == booking.field_id,
+                    FieldBlock.block_date == current_date,
+                    FieldBlock.start_time <= current_time,
+                    FieldBlock.end_time >= current_time
+                )
+            )
+            if conflict_block:
+                raise HTTPException(status_code=409, detail='Sân đang được bảo trì/khóa. Không thể bắt đầu sớm.')
+
+        res = self._transition(booking_id, {BookingStatus.CONFIRMED.value}, BookingStatus.IN_PROGRESS.value, note, user)
+        if is_early:
+            self._add_activity(booking_id, user, 'booking_started_early', BookingStatus.CONFIRMED.value, BookingStatus.IN_PROGRESS.value, {
+                'actual_started_at': now.isoformat(),
+                'started_early': True,
+                'started_by_owner_id': user.id
+            })
+            self.repository.db.commit()
+        return res
 
     def no_show(self, booking_id: int, note: str | None, user: User) -> BookingResponse:
         booking = self._booking_or_404(booking_id)
         self._require_owned_booking(booking, user)
         if booking.status != BookingStatus.CONFIRMED.value:
             raise HTTPException(status_code=409, detail='Chỉ booking đã xác nhận mới có thể đánh dấu no-show')
-        if self._scheduled_at(booking) > datetime.now(self.timezone):
-            raise HTTPException(status_code=409, detail='Chưa đến giờ booking')
+        grace_period = timedelta(minutes=15)
+        if self._scheduled_at(booking) + grace_period > datetime.now(self.timezone):
+            raise HTTPException(status_code=409, detail='Chưa đến giờ no-show hợp lệ (sau giờ bắt đầu 15 phút)')
         return self._transition(booking_id, {BookingStatus.CONFIRMED.value}, BookingStatus.NO_SHOW.value, note, user)
 
     def complete(self, booking_id: int, note: str | None, user: User) -> BookingResponse:
