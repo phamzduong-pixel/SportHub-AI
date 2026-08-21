@@ -93,6 +93,7 @@ class ProfileUpdateRequest(RequestModel):
     def validate_name(cls, value: str | None):
         return value if value is None else RegisterRequest.validate_name(value)
 
+
 class ChangePasswordRequest(RequestModel):
     current_password: str = Field(min_length=1, max_length=72)
     new_password: str = Field(min_length=8, max_length=72)
@@ -132,7 +133,8 @@ class ForgotPasswordPhoneRequest(RequestModel):
 
 
 class VerifyOTPRequest(RequestModel):
-    phone: str = Field(min_length=10, max_length=10, pattern=r'^0[0-9]{9}$')
+    channel: str = Field(pattern=r'^(email|phone)$')
+    identifier: str = Field(min_length=5, max_length=255)
     otp: str = Field(min_length=6, max_length=6, pattern=r'^[0-9]{6}$')
 
 

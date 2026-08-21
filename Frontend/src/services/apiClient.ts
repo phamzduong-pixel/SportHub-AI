@@ -67,8 +67,23 @@ export class ApiError extends Error {
   }
 }
 
+const PUBLIC_AUTH_PATHS = [
+  '/auth/login',
+  '/auth/register',
+  '/auth/forgot-password/email',
+  '/auth/forgot-password/phone',
+  '/auth/verify-otp',
+  '/auth/reset-password',
+  '/auth/refresh',
+  '/auth/logout',
+];
+
+export const isPublicAuthPath = (path: string) =>
+  PUBLIC_AUTH_PATHS.some((prefix) => path.startsWith(prefix));
+
 export async function apiRequest<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
-  const token = readToken();
+  const isAuthRoute = isPublicAuthPath(path);
+  const token = isAuthRoute ? null : readToken();
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15_000);
   const abort = () => controller.abort();
@@ -84,7 +99,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
       },
     });
   } catch (error) {
-    if (controller.signal.aborted) throw new Error('Yêu cầu quá thời gian chờ. Vui lòng thử lại.');
+    if (controller.signal.aborted) throw new Error('Yêu cầu quá thời gian chờ. Vui lòng kiểm tra lại kết nối mạng hoặc máy chủ backend.');
     throw new Error('Không thể kết nối SportHub. Vui lòng kiểm tra mạng hoặc thử lại sau.');
   } finally {
     window.clearTimeout(timeout);
@@ -92,8 +107,8 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
   }
 
   if (!response.ok) {
-    if (response.status === 401) {
-      if (!retried && path !== '/auth/refresh' && await tryRefresh()) return apiRequest<T>(path, init, true);
+    if (response.status === 401 && !isAuthRoute) {
+      if (!retried && await tryRefresh()) return apiRequest<T>(path, init, true);
       clearToken();
       localStorage.removeItem('sporthub_auth');
       // Only dispatch the event if we HAD a token (i.e. this is an actual
@@ -105,11 +120,24 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, retrie
     }
     const payload = await response.json().catch(() => null) as { detail?: string | ApiValidationIssue[] } | null;
     const validationIssues = Array.isArray(payload?.detail) ? payload.detail : [];
-    const detail = typeof payload?.detail === 'string' ? payload.detail : undefined;
+    let detail: string | undefined = undefined;
+
+    if (typeof payload?.detail === 'string') {
+      detail = payload.detail;
+    } else if (Array.isArray(payload?.detail) && payload.detail.length > 0) {
+      const first = payload.detail[0];
+      if (first?.msg) {
+        detail = first.msg.replace(/^Value error,\s*/i, '');
+      }
+    }
+
     const fallback: Record<number, string> = {
-      401: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.', 403: 'Bạn không có quyền thực hiện thao tác này.',
-      404: 'Không tìm thấy dữ liệu yêu cầu.', 409: 'Dữ liệu đã thay đổi hoặc bị trùng. Vui lòng tải lại.',
-      422: 'Dữ liệu gửi lên chưa hợp lệ.', 500: 'Máy chủ gặp lỗi. Vui lòng thử lại sau.',
+      401: 'Email hoặc mật khẩu không đúng.',
+      403: 'Bạn không có quyền thực hiện thao tác này.',
+      404: 'Không tìm thấy dữ liệu yêu cầu.',
+      409: 'Dữ liệu đã bị trùng hoặc đã thay đổi. Vui lòng thử lại.',
+      422: 'Dữ liệu gửi lên chưa hợp lệ.',
+      500: 'Máy chủ gặp lỗi. Vui lòng thử lại sau.',
     };
     throw new ApiError(detail || fallback[response.status] || `Yêu cầu thất bại (${response.status}).`, response.status, validationIssues);
   }

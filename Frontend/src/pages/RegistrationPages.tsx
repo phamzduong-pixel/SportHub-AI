@@ -14,7 +14,30 @@ export function LoginPage() {
   const { login } = useAuth();
   const rememberedEmail = localStorage.getItem('sporthub_remembered_email') || '';
   const [email, setEmail] = useState(rememberedEmail); const [password, setPassword] = useState(''); const [remember, setRemember] = useState(Boolean(rememberedEmail)); const [show, setShow] = useState(false); const [errors, setErrors] = useState<Record<string, string>>({}); const [loading, setLoading] = useState(false);
-  const submit = async (event: FormEvent) => { event.preventDefault(); const next: Record<string, string> = {}; if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Vui lòng nhập email hợp lệ.'; if (!password) next.password = 'Vui lòng nhập mật khẩu.'; setErrors(next); if (Object.keys(next).length) return; setLoading(true); try { const user = await login(email, password); if (remember) localStorage.setItem('sporthub_remembered_email', email); else localStorage.removeItem('sporthub_remembered_email'); toast(`Chào mừng ${user.full_name}!`, 'success'); const requested = (location.state as { from?: string } | null)?.from; const target = user.role === 'CUSTOMER' && requested?.startsWith('/booking/') ? requested : homeForRole(user.role); navigate(target, { replace: true }); } catch (error) { setErrors({ password: error instanceof Error ? error.message : 'Đăng nhập thất bại.' }); toast('Đăng nhập thất bại. Vui lòng kiểm tra lại thông tin.', 'error'); } finally { setLoading(false); } };
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const next: Record<string, string> = {};
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) next.email = 'Vui lòng nhập email hợp lệ.';
+    if (!password) next.password = 'Vui lòng nhập mật khẩu.';
+    setErrors(next);
+    if (Object.keys(next).length) return;
+    setLoading(true);
+    try {
+      const user = await login(email, password);
+      if (remember) localStorage.setItem('sporthub_remembered_email', email);
+      else localStorage.removeItem('sporthub_remembered_email');
+      toast(`Chào mừng ${user.full_name}!`, 'success');
+      const requested = (location.state as { from?: string } | null)?.from;
+      const target = user.role === 'CUSTOMER' && requested?.startsWith('/booking/') ? requested : homeForRole(user.role);
+      navigate(target, { replace: true });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Đăng nhập thất bại.';
+      setErrors({ password: msg });
+      toast(msg, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
   return (
     <AuthFrame title="Chào mừng trở lại" description="Đăng nhập để tiếp tục hành trình thể thao cùng SportHub AI.">
       <form onSubmit={submit} noValidate className="space-y-5">
@@ -65,8 +88,61 @@ export function RegisterPage() {
   const formValid = form.name.trim().length >= 2 && phoneValid && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()) && form.password.length >= 8 && form.confirm === form.password && form.accepted;
   const dirty = Object.values(form).some(Boolean);
   useEffect(() => { const warn = (event: BeforeUnloadEvent) => { if (dirty && !loading) event.preventDefault(); }; window.addEventListener('beforeunload', warn); return () => window.removeEventListener('beforeunload', warn); }, [dirty, loading]);
-  const submit = async (event: FormEvent) => { event.preventDefault(); const next: Record<string, string> = {}; if (form.name.trim().length < 2) next.name = 'Vui lòng nhập họ tên đầy đủ.'; if (!phoneValid) next.phone = 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.'; if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) next.email = 'Email chưa hợp lệ.'; if (form.password.length < 8) next.password = 'Mật khẩu cần ít nhất 8 ký tự.'; if (form.confirm !== form.password) next.confirm = 'Mật khẩu xác nhận không khớp.'; if (!form.accepted) next.accepted = 'Bạn cần đồng ý điều khoản sử dụng.'; setErrors(next); if (Object.keys(next).length) { toast('Vui lòng kiểm tra các trường bắt buộc.', 'error'); return; } setLoading(true); try { await register({ full_name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), password: form.password }); toast('Đăng ký CUSTOMER thành công! Bạn có thể đăng nhập ngay.', 'success'); navigate('/login', { replace: true }); } catch (error) { const message = error instanceof Error ? error.message : 'Không thể tạo tài khoản.'; setErrors(message.includes('Số điện thoại') ? { phone: message } : { email: message }); toast('Không thể hoàn tất đăng ký.', 'error'); } finally { setLoading(false); } };
-  return <AuthFrame title="Tạo tài khoản khách hàng" description="Đăng ký công khai luôn tạo tài khoản CUSTOMER."><form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2"><Input label="Họ và tên" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} error={errors.name} /><Input label="Số điện thoại" type="tel" inputMode="numeric" maxLength={10} value={form.phone} onChange={(e) => { const phone = e.target.value.replace(/\D/g, '').slice(0, 10); setForm({ ...form, phone }); setErrors({ ...errors, phone: phone && !/^0[0-9]{9}$/.test(phone) ? 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.' : '' }); }} error={errors.phone} /><Input className="sm:col-span-2" label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} error={errors.email} /><PasswordField label="Mật khẩu" value={form.password} show={show} onShow={setShow} onChange={(value) => setForm({ ...form, password: value })} error={errors.password} /><PasswordField label="Xác nhận mật khẩu" value={form.confirm} show={show} onShow={setShow} onChange={(value) => setForm({ ...form, confirm: value })} error={errors.confirm} /><Check value={form.accepted} onChange={(value) => setForm({ ...form, accepted: value })} error={errors.accepted}>Tôi đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư.</Check><Button type="submit" disabled={!formValid} loading={loading} size="lg" className="sm:col-span-2">Tạo tài khoản CUSTOMER</Button></form><div className="mt-5 space-y-2 text-center text-sm text-slate-500"><p>Đã có tài khoản? <Link to="/login" className="font-semibold text-brand-700">Đăng nhập</Link></p><p>Muốn trở thành chủ sân? Hãy đăng nhập CUSTOMER và gửi hồ sơ tại <Link to="/owner-application" className="font-semibold text-brand-700">Đăng ký đối tác</Link>.</p></div></AuthFrame>;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const next: Record<string, string> = {};
+    if (form.name.trim().length < 2) next.name = 'Vui lòng nhập họ tên đầy đủ.';
+    if (!phoneValid) next.phone = 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) next.email = 'Email chưa hợp lệ.';
+    if (form.password.length < 8) next.password = 'Mật khẩu cần ít nhất 8 ký tự.';
+    if (form.confirm !== form.password) next.confirm = 'Mật khẩu xác nhận không khớp.';
+    if (!form.accepted) next.accepted = 'Bạn cần đồng ý điều khoản sử dụng.';
+    setErrors(next);
+    if (Object.keys(next).length) {
+      toast('Vui lòng kiểm tra các trường bắt buộc.', 'error');
+      return;
+    }
+    setLoading(true);
+    try {
+      await register({
+        full_name: form.name.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        password: form.password,
+      });
+      toast('Đăng ký tài khoản thành công! Bạn có thể đăng nhập ngay.', 'success');
+      navigate('/login', { replace: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không thể tạo tài khoản.';
+      if (message.toLowerCase().includes('email')) {
+        setErrors({ email: message });
+      } else if (message.toLowerCase().includes('điện thoại') || message.toLowerCase().includes('phone')) {
+        setErrors({ phone: message });
+      } else {
+        setErrors({ name: message });
+      }
+      toast(message, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <AuthFrame title="Tạo tài khoản khách hàng" description="Đăng ký tài khoản thành viên SportHub AI.">
+      <form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">
+        <Input label="Họ và tên" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (errors.name) setErrors({ ...errors, name: '' }); }} error={errors.name} />
+        <Input label="Số điện thoại" type="tel" inputMode="numeric" maxLength={10} value={form.phone} onChange={(e) => { const phone = e.target.value.replace(/\D/g, '').slice(0, 10); setForm({ ...form, phone }); setErrors({ ...errors, phone: phone && !/^0[0-9]{9}$/.test(phone) ? 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.' : '' }); }} error={errors.phone} />
+        <Input className="sm:col-span-2" label="Email" type="email" value={form.email} onChange={(e) => { setForm({ ...form, email: e.target.value }); if (errors.email) setErrors({ ...errors, email: '' }); }} error={errors.email} />
+        <PasswordField label="Mật khẩu" value={form.password} show={show} onShow={setShow} onChange={(value) => { setForm({ ...form, password: value }); if (errors.password) setErrors({ ...errors, password: '' }); }} error={errors.password} />
+        <PasswordField label="Xác nhận mật khẩu" value={form.confirm} show={show} onShow={setShow} onChange={(value) => { setForm({ ...form, confirm: value }); if (errors.confirm) setErrors({ ...errors, confirm: '' }); }} error={errors.confirm} />
+        <Check value={form.accepted} onChange={(value) => { setForm({ ...form, accepted: value }); if (errors.accepted) setErrors({ ...errors, accepted: '' }); }} error={errors.accepted}>Tôi đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư.</Check>
+        <Button type="submit" disabled={!formValid} loading={loading} size="lg" className="sm:col-span-2">Tạo tài khoản thành viên</Button>
+      </form>
+      <div className="mt-5 space-y-2 text-center text-sm text-slate-500">
+        <p>Đã có tài khoản? <Link to="/login" className="font-semibold text-brand-700">Đăng nhập</Link></p>
+        <p>Muốn trở thành chủ sân? Hãy đăng nhập và gửi hồ sơ tại <Link to="/owner-application" className="font-semibold text-brand-700">Đăng ký đối tác</Link>.</p>
+      </div>
+    </AuthFrame>
+  );
 }
 
 function Check({ value, onChange, error, children }: { value: boolean; onChange: (value: boolean) => void; error?: string; children: ReactNode }) { return <label className="sm:col-span-2 text-xs text-slate-600"><span className="flex items-start gap-2"><input type="checkbox" checked={value} onChange={(e) => onChange(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-600" />{children}</span>{error && <span className="mt-1 block text-xs text-red-600">{error}</span>}</label>; }

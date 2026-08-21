@@ -11,11 +11,12 @@ from .maintenance import FieldMaintenance, MaintenanceStatus
 from .review import Review
 from .notification import Notification
 from .product import BookingProductItem, FacilityProduct, ProductCatalogItem, ProductSport, ProductStockMovement
+from .password_reset import PasswordResetChallenge
 
 __all__ = [
     'User', 'UserFavoriteField', 'UserRole', 'Facility', 'FacilityDocument', 'FacilityImage', 'FacilityReviewEvent', 'FacilityStatus', 'OwnerApplication', 'OwnerApplicationStatus', 'Field', 'FieldStatus', 'Booking',
     'BookingStatus', 'BookingSlot', 'TimeSlot', 'Payment', 'PaymentMethod', 'PaymentStatus', 'PaymentType', 'EscrowStatus', 'Review',
     'RefundRequest', 'RefundStatus', 'BookingActivity',
     'FieldBlock', 'BookingComplaint', 'AuditLog', 'FieldMaintenance', 'MaintenanceStatus', 'Notification',
-    'FacilityProduct', 'ProductCatalogItem', 'ProductSport', 'BookingProductItem', 'ProductStockMovement',
+    'FacilityProduct', 'ProductCatalogItem', 'ProductSport', 'BookingProductItem', 'ProductStockMovement', 'PasswordResetChallenge',
 ]

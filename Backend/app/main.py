@@ -1,4 +1,12 @@
 from contextlib import asynccontextmanager
+import sys
+
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +17,7 @@ from .database.base import Base
 from .database.demo_seed import seed_demo_db
 from .database.migrations import migrate_booking_slots, migrate_cancelled_booking_balances, migrate_deposit_payment_schema, migrate_empty_legacy_booking_schema, migrate_field_recommendation_columns, migrate_facility_approval_schema, migrate_ownership_columns, migrate_partner_application_schema, migrate_product_inventory_schema, migrate_professional_booking_schema, migrate_refund_workflow_schema, migrate_system_roles, migrate_user_profile_columns
 from .database.session import SessionLocal, engine
-from .models import AuditLog, Booking, BookingActivity, BookingComplaint, BookingProductItem, BookingSlot, Facility, FacilityDocument, FacilityImage, FacilityProduct, FacilityReviewEvent, Field, FieldBlock, FieldMaintenance, Invoice, Notification, OwnerApplication, Payment, ProductCatalogItem, ProductSport, ProductStockMovement, RefundRequest, Review, TimeSlot, User, UserFavoriteField  # noqa: F401 - registers metadata
+from .models import AuditLog, Booking, BookingActivity, BookingComplaint, BookingProductItem, BookingSlot, Facility, FacilityDocument, FacilityImage, FacilityProduct, FacilityReviewEvent, Field, FieldBlock, FieldMaintenance, Invoice, Notification, OwnerApplication, PasswordResetChallenge, Payment, ProductCatalogItem, ProductSport, ProductStockMovement, RefundRequest, Review, TimeSlot, User, UserFavoriteField  # noqa: F401 - registers metadata
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):

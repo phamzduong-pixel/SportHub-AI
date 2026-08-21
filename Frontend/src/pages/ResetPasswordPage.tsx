@@ -1,18 +1,20 @@
-import { CheckCircle2, Eye, EyeOff, Lock } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AuthShell } from '@/components/auth/AuthShell';
 import { Button, Input, useToast } from '@/components/common';
 import { apiRequest } from '@/services/apiClient';
 
 export function ResetPasswordPage() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const token = searchParams.get('token') || '';
 
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -22,23 +24,34 @@ export function ResetPasswordPage() {
       <AuthShell title="Liên kết không hợp lệ" description="">
         <div className="text-center">
           <p className="text-sm text-slate-500">
-            Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.
+            Liên kết hoặc mã xác thực đặt lại mật khẩu không hợp lệ hoặc đã hết hạn.
           </p>
           <Link to="/forgot-password">
-            <Button className="mt-6 w-full" variant="outline">Gửi lại liên kết</Button>
+            <Button className="mt-6 w-full rounded-xl" variant="outline">
+              Yêu cầu gửi lại mã OTP
+            </Button>
           </Link>
-          <Link to="/login" className="mt-3 block text-center text-sm font-semibold text-brand-700">
-            ← Quay lại đăng nhập
+          <Link
+            to="/login"
+            className="mt-4 flex items-center justify-center gap-1.5 text-center text-sm font-semibold text-brand-700 hover:text-brand-800"
+          >
+            <ArrowLeft size={15} />
+            <span>Quay lại đăng nhập</span>
           </Link>
         </div>
       </AuthShell>
     );
   }
 
+  const hasMinLength = newPassword.length >= 8;
+  const hasNumber = /[0-9]/.test(newPassword);
+  const hasLetter = /[a-zA-Z]/.test(newPassword);
+  const isMatch = newPassword && confirmPassword && newPassword === confirmPassword;
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (newPassword.length < 8) {
-      setError('Mật khẩu phải có ít nhất 8 ký tự.');
+      setError('Mật khẩu mới phải có ít nhất 8 ký tự.');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -70,55 +83,121 @@ export function ResetPasswordPage() {
   if (success) {
     return (
       <AuthShell title="Đặt lại mật khẩu thành công" description="">
-        <div className="text-center">
-          <span className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-50 text-emerald-600">
-            <CheckCircle2 size={32} />
+        <div className="text-center py-2">
+          <span className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-emerald-50 text-emerald-600 shadow-inner">
+            <CheckCircle2 size={36} />
           </span>
-          <h2 className="mt-4 font-bold text-emerald-700">Mật khẩu đã được cập nhật</h2>
+          <h2 className="mt-4 text-lg font-bold text-slate-900">Mật khẩu đã được cập nhật!</h2>
           <p className="mt-2 text-sm text-slate-500">
-            Bạn có thể đăng nhập bằng mật khẩu mới ngay bây giờ.
+            Tài khoản của bạn đã được cập nhật mật khẩu mới. Bạn có thể đăng nhập ngay bây giờ.
           </p>
           <Link to="/login">
-            <Button className="mt-6 w-full">Đăng nhập ngay</Button>
+            <Button size="lg" className="mt-6 w-full rounded-xl shadow-[0_8px_20px_rgba(13,135,76,0.2)]">
+              Đăng nhập ngay
+            </Button>
           </Link>
         </div>
       </AuthShell>
     );
   }
 
-  const toggleIcon = showPassword
-    ? <EyeOff size={17} className="cursor-pointer text-slate-400" onClick={() => setShowPassword(false)} />
-    : <Eye size={17} className="cursor-pointer text-slate-400" onClick={() => setShowPassword(true)} />;
-
   return (
-    <AuthShell title="Đặt lại mật khẩu" description="Nhập mật khẩu mới cho tài khoản của bạn.">
+    <AuthShell
+      title="Tạo mật khẩu mới"
+      description="Nhập mật khẩu mới an toàn cho tài khoản SportHub AI của bạn."
+    >
       <form onSubmit={submit} noValidate className="space-y-4">
         <Input
           label="Mật khẩu mới"
           type={showPassword ? 'text' : 'password'}
           autoFocus
           value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
+          onChange={(e) => {
+            setNewPassword(e.target.value);
+            if (error) setError('');
+          }}
           leftIcon={<Lock size={17} />}
-          rightIcon={toggleIcon}
+          rightIcon={
+            <button
+              type="button"
+              tabIndex={-1}
+              className="text-slate-400 hover:text-slate-600 transition"
+              onClick={() => setShowPassword(!showPassword)}
+            >
+              {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          }
           placeholder="Tối thiểu 8 ký tự"
         />
+
         <Input
-          label="Xác nhận mật khẩu"
-          type={showPassword ? 'text' : 'password'}
+          label="Xác nhận mật khẩu mới"
+          type={showConfirm ? 'text' : 'password'}
           value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
+          onChange={(e) => {
+            setConfirmPassword(e.target.value);
+            if (error) setError('');
+          }}
           error={error}
           leftIcon={<Lock size={17} />}
+          rightIcon={
+            <button
+              type="button"
+              tabIndex={-1}
+              className="text-slate-400 hover:text-slate-600 transition"
+              onClick={() => setShowConfirm(!showConfirm)}
+            >
+              {showConfirm ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          }
           placeholder="Nhập lại mật khẩu mới"
         />
-        <Button type="submit" size="lg" loading={loading} className="w-full">
-          Đặt lại mật khẩu
+
+        {newPassword && (
+          <div className="rounded-lg bg-slate-50 p-3 text-xs space-y-1.5 border border-slate-200">
+            <p className="font-semibold text-slate-700">Yêu cầu bảo mật:</p>
+            <div className="flex items-center gap-2">
+              <span className={`h-1.5 w-1.5 rounded-full ${hasMinLength ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+              <span className={hasMinLength ? 'text-emerald-700 font-medium' : 'text-slate-500'}>
+                Ít nhất 8 ký tự
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`h-1.5 w-1.5 rounded-full ${hasLetter && hasNumber ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+              <span className={hasLetter && hasNumber ? 'text-emerald-700 font-medium' : 'text-slate-500'}>
+                Bao gồm cả chữ cái và chữ số
+              </span>
+            </div>
+            {confirmPassword && (
+              <div className="flex items-center gap-2">
+                <span className={`h-1.5 w-1.5 rounded-full ${isMatch ? 'bg-emerald-500' : 'bg-red-400'}`} />
+                <span className={isMatch ? 'text-emerald-700 font-medium' : 'text-red-600'}>
+                  {isMatch ? 'Mật khẩu xác nhận khớp' : 'Mật khẩu xác nhận chưa khớp'}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <Button
+          type="submit"
+          size="lg"
+          loading={loading}
+          disabled={!hasMinLength || newPassword !== confirmPassword}
+          className="w-full rounded-xl shadow-[0_8px_20px_rgba(13,135,76,0.2)]"
+        >
+          Cập nhật mật khẩu mới
         </Button>
-        <Link to="/login" className="block text-center text-sm font-semibold text-brand-700">
-          ← Quay lại đăng nhập
+
+        <Link
+          to="/login"
+          className="mt-4 flex items-center justify-center gap-1.5 text-center text-sm font-semibold text-brand-700 hover:text-brand-800 transition"
+        >
+          <ArrowLeft size={15} />
+          <span>Quay lại đăng nhập</span>
         </Link>
       </form>
     </AuthShell>
   );
 }
+
