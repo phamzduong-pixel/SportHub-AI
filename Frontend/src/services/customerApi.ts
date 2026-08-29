@@ -36,7 +36,7 @@ export const completeManagedBooking = (bookingId: number) => apiRequest<ApiBooki
 export const addManagedBookingProduct = (bookingId: number, productId: number, quantity: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/products`, { method: 'POST', body: JSON.stringify({ product_id: productId, quantity }) });
 export const updateManagedBookingProduct = (bookingId: number, itemId: number, quantity: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/products/${itemId}`, { method: 'PATCH', body: JSON.stringify({ quantity }) });
 export const deleteManagedBookingProduct = (bookingId: number, itemId: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/products/${itemId}`, { method: 'DELETE' });
-export const noShowManagedBooking = (bookingId: number) => apiRequest<ApiBooking>(`/bookings/${bookingId}/no-show`, { method: 'PATCH', body: JSON.stringify({}) });
+export const noShowManagedBooking = (bookingId: number, note?: string) => apiRequest<ApiBooking>(`/bookings/${bookingId}/no-show`, { method: 'PATCH', body: JSON.stringify({ note: note || null }) });
 export interface PaymentSummary { booking_id: number; booking_code: string; court_amount: number; service_amount: number; total_amount: number; deposit_amount: number; additional_paid_amount: number; paid_amount: number; pending_amount: number; remaining_amount: number; payment_status: string; transactions: ApiPayment[]; }
 export type RefundStatus = 'refund_pending' | 'refund_overdue' | 'refunded' | 'disputed';
 export interface BookingActivity { id: number; actor_id: number | null; actor_name: string | null; actor_role: string | null; action: string; from_status: string | null; to_status: string | null; details: Record<string, unknown>; created_at: string; }

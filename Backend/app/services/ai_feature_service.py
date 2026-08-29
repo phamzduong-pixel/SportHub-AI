@@ -1,4 +1,5 @@
 import re
+import itertools
 from datetime import date, timedelta
 
 from fastapi import HTTPException
@@ -163,36 +164,32 @@ class AIFeatureService:
                     'selected_slots': [{'slot_id': slot.id, 'start_time': slot.start_time, 'end_time': slot.end_time, 'price': float(slot.price)}],
                 } for slot in slots)
                 continue
-            for start_index, first in enumerate(slots):
-                sequence = [first]
-                duration = self._minutes(first.end_time) - self._minutes(first.start_time)
-                for following in slots[start_index + 1:]:
-                    if duration >= requested_duration or sequence[-1].end_time != following.start_time:
-                        break
-                    sequence.append(following)
-                    duration += self._minutes(following.end_time) - self._minutes(following.start_time)
-                if duration != requested_duration:
-                    continue
-                if payload.start_time and first.start_time != payload.start_time:
-                    continue
-                if payload.end_time and sequence[-1].end_time != payload.end_time:
-                    continue
-                total_price = sum(float(slot.price) for slot in sequence)
-                if payload.max_price is not None and total_price > payload.max_price:
-                    continue
-                data = self._slot_data(field, first, payload.booking_date)
-                data.update({
-                    'slot_ids': [slot.id for slot in sequence],
-                    'slot_name': '; '.join(slot.name for slot in sequence),
-                    'end_time': sequence[-1].end_time,
-                    'price': total_price,
-                    'duration_minutes': duration,
-                    'selected_slots': [
-                        {'slot_id': slot.id, 'start_time': slot.start_time, 'end_time': slot.end_time, 'price': float(slot.price)}
-                        for slot in sequence
-                    ],
-                })
-                options.append(data)
+            for r in range(1, min(len(slots) + 1, 5)):
+                for sequence_tuple in itertools.combinations(slots, r):
+                    sequence = list(sequence_tuple)
+                    duration = sum(self._minutes(slot.end_time) - self._minutes(slot.start_time) for slot in sequence)
+                    if duration != requested_duration:
+                        continue
+                    if payload.start_time and sequence[0].start_time != payload.start_time:
+                        continue
+                    if payload.end_time and sequence[-1].end_time != payload.end_time:
+                        continue
+                    total_price = sum(float(slot.price) for slot in sequence)
+                    if payload.max_price is not None and total_price > payload.max_price:
+                        continue
+                    data = self._slot_data(field, sequence[0], payload.booking_date)
+                    data.update({
+                        'slot_ids': [slot.id for slot in sequence],
+                        'slot_name': '; '.join(slot.name for slot in sequence),
+                        'end_time': sequence[-1].end_time,
+                        'price': total_price,
+                        'duration_minutes': duration,
+                        'selected_slots': [
+                            {'slot_id': slot.id, 'start_time': slot.start_time, 'end_time': slot.end_time, 'price': float(slot.price)}
+                            for slot in sequence
+                        ],
+                    })
+                    options.append(data)
         return options
 
     @staticmethod

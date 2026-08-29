@@ -592,11 +592,11 @@ export function BookingPage() {
           >
             Thanh toán đặt cọc {money(quote.deposit_amount)}
           </Button>
-          <p className="mt-3 text-center text-xs text-slate-400">
-            Backend xác nhận lại đúng court, ngày, slot và giá ngay trước khi
-            tạo booking tạm.
+          <p className="mt-3 text-center text-xs text-slate-500">
+            Thông tin sân, ngày, khung giờ và mức giá được hệ thống kiểm tra và cập nhật trực tiếp theo thời gian thực.
           </p>
         </aside>
+
       </div>
     </div>
   );

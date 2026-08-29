@@ -95,7 +95,7 @@ class AIAssistantService:
             )
         if route.intent == AssistantIntent.UNCLEAR:
             return self._response(
-                'Bạn muốn hỏi về sân, lịch trống, booking hay thanh toán nào trong SportHub AI?',
+                'Bạn muốn tìm sân, kiểm tra lịch trống hay xem thông tin gì trên SportHub AI? Hãy cho mình biết môn thể thao, khu vực hoặc ngày bạn muốn chơi nhé.',
                 SearchCriteria(), [], needs_clarification=True, classification=ScopeClassification.UNCLEAR,
                 status='NEED_MORE_DATA',
             )
@@ -141,10 +141,12 @@ class AIAssistantService:
             AssistantIntent.SEARCH_VENUE, AssistantIntent.RECOMMEND_VENUE,
             AssistantIntent.FOLLOW_UP, AssistantIntent.CHECK_AVAILABILITY, AssistantIntent.RECOMMEND_SLOT,
         }
-        location_first_request = bool(criteria.location) or (
-            criteria.booking_date is None
-            and criteria.start_minute is None
-            and any(term in query for term in ('co san', 'san nao', 'toi muon san', 'muon san'))
+        location_first_request = (criteria.requested_field_id is None) and (
+            bool(criteria.location) or (
+                criteria.booking_date is None
+                and criteria.start_minute is None
+                and any(term in query for term in ('co san', 'san nao', 'toi muon san', 'muon san'))
+            )
         )
         if route.intent in venue_search_intents and location_first_request:
             venue_response = self._venue_search_response(criteria)
@@ -349,7 +351,7 @@ class AIAssistantService:
                     needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location'],
                 )
             return self._response(
-                'Bạn muốn tìm sân ở khu vực nào hoặc cho môn thể thao nào?', criteria, [],
+                'Được chứ! Bạn cho mình biết môn thể thao (bóng đá, cầu lông, pickleball, tennis...), khu vực và ngày muốn chơi nhé.', criteria, [],
                 needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location', 'sport_type'],
             )
         fields = self.repository.search_venues(
@@ -540,7 +542,7 @@ class AIAssistantService:
         criteria = SearchCriteria()
         if intent == 'system_help':
             return self._response(
-                'Bạn có thể dùng SportHub AI để tìm sân và lịch trống, mở trang chi tiết, chọn khung giờ rồi tự xác nhận booking và thanh toán. Tôi không tự tạo booking hoặc giao dịch thay bạn.',
+                'Tôi là trợ lý AI chuyên biệt của SportHub. Tôi có thể giúp bạn: \n• Tìm sân thể thao và kiểm tra lịch trống thực tế theo ngày, giờ, khu vực.\n• Gợi ý khung giờ phù hợp và báo giá niêm yết.\n• Xem thông tin đặt sân và hướng dẫn thanh toán/hủy sân.\n• Phân tích công suất vận hành (dành cho chủ sân OWNER) và hỗ trợ hồ sơ đối tác.',
                 criteria, [], intent=intent,
             )
         if intent == 'profile':
@@ -647,13 +649,21 @@ class AIAssistantService:
 
     @staticmethod
     def _resolve_result_reference(criteria: SearchCriteria, query: str, context: dict[str, Any]):
-        match = re.search(r'\b(?:san|lua chon|ket qua)\s*(?:thu\s*)?(\d+|mot|hai|ba|tu|nam)\b', query)
-        if not match:
-            return
-        ordinals = {'mot': 1, 'hai': 2, 'ba': 3, 'tu': 4, 'nam': 5}
-        position = int(match[1]) if match[1].isdigit() else ordinals[match[1]]
         field_ids = context.get('result_field_ids') or []
-        if 0 < position <= len(field_ids):
+        if not field_ids:
+            return
+        position = None
+        if any(term in query for term in ('san dau tien', 'san dau', 'lua chon dau', 'ket qua dau', 'san so 1', 'lua chon 1', 'ket qua 1')):
+            position = 1
+        elif any(term in query for term in ('san cuoi cung', 'san cuoi', 'lua chon cuoi', 'ket qua cuoi')):
+            position = len(field_ids)
+        else:
+            match = re.search(r'\b(?:san|lua chon|ket qua)\s*(?:thu\s*|so\s*)?(\d+|mot|hai|ba|tu|nam)\b', query)
+            if match:
+                ordinals = {'mot': 1, 'hai': 2, 'ba': 3, 'tu': 4, 'nam': 5}
+                position = int(match[1]) if match[1].isdigit() else ordinals.get(match[1], 1)
+
+        if position and 0 < position <= len(field_ids):
             criteria.requested_field_id = int(field_ids[position - 1])
             time_slot_ids = context.get('result_time_slot_ids') or []
             if position <= len(time_slot_ids):
@@ -801,6 +811,8 @@ class AIAssistantService:
 
     def _date(self, query: str) -> tuple[date | None, bool]:
         today = datetime.now(self.tz).date()
+        if 'ngay kia' in query or 'ngay mot' in query:
+            return today + timedelta(days=2), False
         if 'hom nay' in query or 'toi nay' in query:
             return today, False
         if 'ngay mai' in query or 'toi mai' in query or re.search(r'\bmai\b', query):

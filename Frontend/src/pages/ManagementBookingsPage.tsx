@@ -1,4 +1,4 @@
-import { Check, Download, Eye, Minus, Plus, Printer, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, Clock, Download, Eye, Minus, Plus, Printer, Trash2, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -37,8 +37,8 @@ const statusLabel: Record<string, string> = {
   pending_confirmation: "Chờ xác nhận",
   confirmed: "Đã xác nhận",
   in_progress: "Đang diễn ra",
-  completed: "Hoàn thành",
-  no_show: "Không đến sân",
+  completed: "Đã hoàn thành",
+  no_show: "Khách vắng mặt",
   cancelled: "Đã hủy",
   cancelled_by_customer: "Khách đã hủy",
   cancelled_by_owner: "Chủ sân đã hủy",
@@ -60,6 +60,34 @@ const paymentLabel: Record<string, string> = {
 const listBookings = () =>
   apiRequest<{ items: ApiBooking[]; total: number }>("/bookings?page_size=100");
 
+function getEarlyStartInfo(item: ApiBooking) {
+  const now = new Date();
+  const dateStr = item.booking_date;
+  const timeStr = item.selected_slots[0]?.start_time || "00:00:00";
+  const scheduledDate = new Date(`${dateStr}T${timeStr.slice(0, 8)}`);
+  const isEarly = scheduledDate.getTime() > now.getTime();
+  const diffMs = scheduledDate.getTime() - now.getTime();
+  const diffMins = Math.ceil(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMins / 60);
+  const remainingMins = diffMins % 60;
+
+  let diffText = "";
+  if (diffHours > 24) {
+    const days = Math.floor(diffHours / 24);
+    diffText = `sớm ${days} ngày ${diffHours % 24 > 0 ? `${diffHours % 24} giờ` : ""}`;
+  } else if (diffHours > 0) {
+    diffText = `sớm ${diffHours} giờ ${remainingMins > 0 ? `${remainingMins} phút` : ""}`;
+  } else if (diffMins > 0) {
+    diffText = `sớm ${diffMins} phút`;
+  }
+
+  return {
+    isEarly,
+    diffText: diffText.trim() || "sớm hơn lịch",
+    scheduledDateStr: `${dateStr} · ${timeStr.slice(0, 5)}`,
+  };
+}
+
 export function ManagementBookingsPage() {
   const { toast } = useToast();
   const [items, setItems] = useState<ApiBooking[]>([]);
@@ -67,17 +95,23 @@ export function ManagementBookingsPage() {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("today");
   const [busy, setBusy] = useState<number>();
+
+  const [earlyStartTarget, setEarlyStartTarget] = useState<ApiBooking | null>(null);
+  const [noShowTarget, setNoShowTarget] = useState<ApiBooking | null>(null);
+  const [noShowNote, setNoShowNote] = useState("");
+
   const load = () => listBookings().then((result) => setItems(result.items));
   useEffect(() => {
     load()
       .catch((e) =>
         toast(
-          e instanceof Error ? e.message : "Không tải được booking.",
+          e instanceof Error ? e.message : "Không tải được danh sách booking.",
           "error",
         ),
       )
       .finally(() => setLoading(false));
   }, []);
+
   const rows = useMemo(
     () =>
       items.filter((item) => {
@@ -113,6 +147,7 @@ export function ManagementBookingsPage() {
       }),
     [items, query, group],
   );
+
   const counts = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     const result: Record<string, number> = {
@@ -150,8 +185,8 @@ export function ManagementBookingsPage() {
       setItems(items.map((x) => (x.id === updated.id ? updated : x)));
       toast(
         accept
-          ? "Đã xác nhận booking."
-          : "Đã từ chối; tiền cọc chuyển sang chờ hoàn.",
+          ? "Đã xác nhận booking thành công."
+          : "Đã từ chối booking; tiền cọc chuyển sang chờ hoàn tiền.",
         "success",
       );
     } catch (e) {
@@ -163,36 +198,75 @@ export function ManagementBookingsPage() {
       setBusy(undefined);
     }
   };
+
   const transition = async (
     item: ApiBooking,
     action: "start" | "complete" | "no_show",
+    confirmEarly = false,
+    note?: string,
   ) => {
     setBusy(item.id);
     try {
       const updated =
         action === "start"
-          ? await startManagedBooking(item.id)
+          ? await startManagedBooking(item.id, confirmEarly)
           : action === "complete"
             ? await completeManagedBooking(item.id)
-            : await noShowManagedBooking(item.id);
+            : await noShowManagedBooking(item.id, note);
       setItems((current) =>
         current.map((entry) => (entry.id === updated.id ? updated : entry)),
       );
-      toast("Đã cập nhật trạng thái booking.", "success");
-    } catch (error) {
       toast(
-        error instanceof Error
-          ? error.message
-          : "Chuyển trạng thái không hợp lệ.",
-        "error",
+        action === "start"
+          ? confirmEarly
+            ? "Đã xác nhận cho khách bắt đầu nhận sân sớm thành công!"
+            : "Đã bắt đầu ca chơi thành công!"
+          : action === "complete"
+            ? "Đã hoàn tất ca chơi."
+            : "Đã ghi nhận khách vắng mặt (No-show).",
+        "success",
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Chuyển trạng thái không hợp lệ.";
+      if (action === "start" && !confirmEarly && message.includes("Chưa đến giờ")) {
+        setEarlyStartTarget(item);
+        return;
+      }
+      toast(message, "error");
     } finally {
       setBusy(undefined);
     }
   };
+
+  const handleStartClick = (item: ApiBooking) => {
+    const info = getEarlyStartInfo(item);
+    if (info.isEarly) {
+      setEarlyStartTarget(item);
+    } else {
+      void transition(item, "start", false);
+    }
+  };
+
+  const confirmEarlyStart = async () => {
+    if (!earlyStartTarget) return;
+    await transition(earlyStartTarget, "start", true);
+    setEarlyStartTarget(null);
+  };
+
+  const handleNoShowClick = (item: ApiBooking) => {
+    setNoShowTarget(item);
+    setNoShowNote("");
+  };
+
+  const confirmNoShow = async () => {
+    if (!noShowTarget) return;
+    await transition(noShowTarget, "no_show", false, noShowNote.trim() || undefined);
+    setNoShowTarget(null);
+  };
+
   const exportCsv = () => {
     const content = [
-      "Mã,Khách hàng,Sân,Tổng tiền,Đã cọc,Còn lại,Thanh toán,Booking",
+      "Mã,Khách hàng,Sân,Tổng tiền,Đã cọc,Còn lại,Thanh toán,Trạng thái",
       ...rows.map((x) =>
         [
           x.booking_code,
@@ -202,7 +276,7 @@ export function ManagementBookingsPage() {
           Math.min(x.paid_amount, x.deposit_amount),
           x.remaining_amount,
           paymentLabel[x.payment_status],
-          statusLabel[x.status],
+          statusLabel[x.status] || x.status,
         ].join(","),
       ),
     ].join("\n");
@@ -212,6 +286,7 @@ export function ManagementBookingsPage() {
     a.click();
     URL.revokeObjectURL(a.href);
   };
+
   const groups = [
     ["today", "Hôm nay"],
     ["upcoming", "Sắp tới"],
@@ -219,8 +294,9 @@ export function ManagementBookingsPage() {
     ["in_progress", "Đang diễn ra"],
     ["completed", "Đã hoàn thành"],
     ["cancelled", "Đã hủy"],
-    ["no_show", "No-show"],
+    ["no_show", "Khách vắng mặt"],
   ];
+
   return (
     <>
       <PageHeader
@@ -318,7 +394,7 @@ export function ManagementBookingsPage() {
                     <Badge>{statusLabel[item.status] || item.status}</Badge>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       {item.status === "pending_confirmation" && (
                         <>
                           <Button
@@ -345,7 +421,7 @@ export function ManagementBookingsPage() {
                           <Button
                             size="sm"
                             loading={busy === item.id}
-                            onClick={() => void transition(item, "start")}
+                            onClick={() => handleStartClick(item)}
                           >
                             Bắt đầu
                           </Button>
@@ -353,9 +429,9 @@ export function ManagementBookingsPage() {
                             size="sm"
                             variant="danger"
                             disabled={busy === item.id}
-                            onClick={() => void transition(item, "no_show")}
+                            onClick={() => handleNoShowClick(item)}
                           >
-                            No-show
+                            Khách vắng mặt
                           </Button>
                         </>
                       )}
@@ -397,6 +473,158 @@ export function ManagementBookingsPage() {
           description="Không tìm thấy dữ liệu phù hợp trong nhóm này."
         />
       )}
+
+      {/* Modal xác nhận bắt đầu nhận sân sớm */}
+      <Modal
+        open={Boolean(earlyStartTarget)}
+        onClose={() => setEarlyStartTarget(null)}
+        title="Xác nhận nhận sân sớm"
+        description="Thông báo cho phép khách nhận sân trước khung giờ quy định."
+      >
+        {earlyStartTarget && (() => {
+          const info = getEarlyStartInfo(earlyStartTarget);
+          return (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                <div className="flex items-center gap-2 font-bold text-amber-800">
+                  <Clock size={18} />
+                  <span>Chưa đến giờ đặt sân ({info.diffText})</span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-amber-800">
+                  Khung giờ đặt lịch của khách là <b>{info.scheduledDateStr}</b>. Hiện tại chưa đến giờ, bạn có chắc chắn muốn cho khách bắt đầu nhận sân sớm không?
+                </p>
+              </div>
+
+              <div className="rounded-xl border bg-slate-50 p-3.5 text-sm space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Mã booking:</span>
+                  <b className="text-brand-700">{earlyStartTarget.booking_code}</b>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Khách hàng:</span>
+                  <span className="font-semibold text-slate-800">{earlyStartTarget.customer_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Sân bóng:</span>
+                  <span className="font-semibold text-slate-800">{earlyStartTarget.field_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Lịch đặt:</span>
+                  <span className="font-semibold text-slate-800">
+                    {earlyStartTarget.booking_date} ·{" "}
+                    {earlyStartTarget.selected_slots
+                      .map((s) => `${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}`)
+                      .join(", ")}
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 italic">
+                * Khi xác nhận, booking sẽ được chuyển sang trạng thái <b>Đang diễn ra</b> và hệ thống sẽ bắt đầu tính giờ sử dụng sân thực tế.
+              </p>
+
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy === earlyStartTarget.id}
+                  onClick={() => setEarlyStartTarget(null)}
+                >
+                  Quay lại
+                </Button>
+                <Button
+                  type="button"
+                  loading={busy === earlyStartTarget.id}
+                  leftIcon={<Check size={16} />}
+                  onClick={() => void confirmEarlyStart()}
+                >
+                  Xác nhận bắt đầu sớm
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Modal xác nhận khách vắng mặt (No-show) */}
+      <Modal
+        open={Boolean(noShowTarget)}
+        onClose={() => setNoShowTarget(null)}
+        title="Xác nhận khách vắng mặt (No-show)"
+        description="Đánh dấu khách hàng không đến nhận sân theo quy định."
+      >
+        {noShowTarget && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-900">
+              <div className="flex items-center gap-2 font-bold text-red-800">
+                <AlertTriangle size={18} />
+                <span>Cảnh báo đánh dấu vắng mặt</span>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-red-800">
+                Bạn đang thực hiện đánh dấu khách hàng không đến nhận sân. Ca chơi sẽ được kết thúc với trạng thái <b>Khách vắng mặt</b> và tiền đặt cọc sẽ được xử lý theo quy định của cơ sở.
+              </p>
+            </div>
+
+            <div className="rounded-xl border bg-slate-50 p-3.5 text-sm space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Mã booking:</span>
+                <b className="text-brand-700">{noShowTarget.booking_code}</b>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Khách hàng:</span>
+                <span className="font-semibold text-slate-800">
+                  {noShowTarget.customer_name}{" "}
+                  {noShowTarget.customer_phone ? `(${noShowTarget.customer_phone})` : ""}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Sân bóng:</span>
+                <span className="font-semibold text-slate-800">{noShowTarget.field_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Khung giờ:</span>
+                <span className="font-semibold text-slate-800">
+                  {noShowTarget.booking_date} ·{" "}
+                  {noShowTarget.selected_slots
+                    .map((s) => `${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}`)
+                    .join(", ")}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Ghi chú lý do vắng mặt (tùy chọn)
+              </label>
+              <Input
+                value={noShowNote}
+                onChange={(e) => setNoShowNote(e.target.value)}
+                placeholder="Ví dụ: Khách không liên lạc được sau 15 phút, khách báo hủy đột xuất..."
+              />
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy === noShowTarget.id}
+                onClick={() => setNoShowTarget(null)}
+              >
+                Quay lại
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={busy === noShowTarget.id}
+                leftIcon={<UserX size={16} />}
+                onClick={() => void confirmNoShow()}
+              >
+                Xác nhận vắng mặt
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </>
   );
 }
@@ -582,6 +810,75 @@ export function ManagementBookingDetailPage() {
       setBusy(false);
     }
   };
+
+  const [earlyStartOpen, setEarlyStartOpen] = useState(false);
+  const [noShowOpen, setNoShowOpen] = useState(false);
+  const [noShowNote, setNoShowNote] = useState("");
+
+  const handleStart = () => {
+    if (!booking) return;
+    const info = getEarlyStartInfo(booking);
+    if (info.isEarly) {
+      setEarlyStartOpen(true);
+    } else {
+      void executeStart(false);
+    }
+  };
+
+  const executeStart = async (confirmEarly: boolean) => {
+    if (!booking) return;
+    setBusy(true);
+    try {
+      const updated = await startManagedBooking(booking.id, confirmEarly);
+      setBooking(updated);
+      setEarlyStartOpen(false);
+      toast(
+        confirmEarly
+          ? "Đã cho khách nhận sân sớm thành công!"
+          : "Đã bắt đầu ca chơi thành công!",
+        "success",
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Không thể bắt đầu.";
+      if (!confirmEarly && msg.includes("Chưa đến giờ")) {
+        setEarlyStartOpen(true);
+        return;
+      }
+      toast(msg, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const executeNoShow = async () => {
+    if (!booking) return;
+    setBusy(true);
+    try {
+      const updated = await noShowManagedBooking(booking.id, noShowNote.trim() || undefined);
+      setBooking(updated);
+      setNoShowOpen(false);
+      toast("Đã ghi nhận khách vắng mặt (No-show).", "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Không thể ghi nhận vắng mặt.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const executeComplete = async () => {
+    if (!booking) return;
+    setBusy(true);
+    try {
+      const updated = await completeManagedBooking(booking.id);
+      setBooking(updated);
+      toast("Đã hoàn tất ca chơi thành công.", "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Không thể hoàn tất ca chơi.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) return <LoadingSkeleton lines={8} />;
   if (!booking)
     return (
@@ -594,7 +891,7 @@ export function ManagementBookingDetailPage() {
     <>
       <button
         onClick={() => navigate(-1)}
-        className="mb-4 text-sm text-brand-700"
+        className="mb-4 text-sm text-brand-700 font-medium hover:underline"
       >
         ← Quay lại
       </button>
@@ -602,10 +899,33 @@ export function ManagementBookingDetailPage() {
         title={booking.booking_code}
         description={`${booking.customer_name} · ${booking.customer_email}`}
         actions={
-          <>
-            <Badge>{statusLabel[booking.status]}</Badge>
-            <Badge>{paymentLabel[booking.payment_status]}</Badge>
-          </>
+          <div className="flex items-center gap-2">
+            <Badge>{statusLabel[booking.status] || booking.status}</Badge>
+            <Badge>{paymentLabel[booking.payment_status] || booking.payment_status}</Badge>
+            {booking.status === "confirmed" && (
+              <>
+                <Button size="sm" loading={busy} onClick={handleStart}>
+                  Bắt đầu nhận sân
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setNoShowOpen(true);
+                    setNoShowNote("");
+                  }}
+                >
+                  Khách vắng mặt
+                </Button>
+              </>
+            )}
+            {booking.status === "in_progress" && (
+              <Button size="sm" loading={busy} onClick={() => void executeComplete()}>
+                Hoàn tất ca chơi
+              </Button>
+            )}
+          </div>
         }
       />
       {["pending_confirmation", "confirmed"].includes(booking.status) && (
@@ -811,6 +1131,158 @@ export function ManagementBookingDetailPage() {
             <Button type="button" variant="danger" loading={deletingProduct} disabled={deletingProduct} leftIcon={<Trash2 size={16} />} onClick={() => void confirmDeleteProduct()}>{deletingProduct ? "Đang xóa..." : "Xóa dịch vụ"}</Button>
           </div>
         </div>}
+      </Modal>
+
+      {/* Modal xác nhận bắt đầu nhận sân sớm */}
+      <Modal
+        open={earlyStartOpen}
+        onClose={() => setEarlyStartOpen(false)}
+        title="Xác nhận nhận sân sớm"
+        description="Thông báo cho phép khách nhận sân trước khung giờ quy định."
+      >
+        {booking && (() => {
+          const info = getEarlyStartInfo(booking);
+          return (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                <div className="flex items-center gap-2 font-bold text-amber-800">
+                  <Clock size={18} />
+                  <span>Chưa đến giờ đặt sân ({info.diffText})</span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-amber-800">
+                  Khung giờ đặt lịch của khách là <b>{info.scheduledDateStr}</b>. Hiện tại chưa đến giờ, bạn có chắc chắn muốn cho khách bắt đầu nhận sân sớm không?
+                </p>
+              </div>
+
+              <div className="rounded-xl border bg-slate-50 p-3.5 text-sm space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Mã booking:</span>
+                  <b className="text-brand-700">{booking.booking_code}</b>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Khách hàng:</span>
+                  <span className="font-semibold text-slate-800">{booking.customer_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Sân bóng:</span>
+                  <span className="font-semibold text-slate-800">{booking.field_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Lịch đặt:</span>
+                  <span className="font-semibold text-slate-800">
+                    {booking.booking_date} ·{" "}
+                    {booking.selected_slots
+                      .map((s) => `${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}`)
+                      .join(", ")}
+                  </span>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-500 italic">
+                * Khi xác nhận, booking sẽ được chuyển sang trạng thái <b>Đang diễn ra</b> và hệ thống sẽ bắt đầu tính giờ sử dụng sân thực tế.
+              </p>
+
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setEarlyStartOpen(false)}
+                >
+                  Quay lại
+                </Button>
+                <Button
+                  type="button"
+                  loading={busy}
+                  leftIcon={<Check size={16} />}
+                  onClick={() => void executeStart(true)}
+                >
+                  Xác nhận bắt đầu sớm
+                </Button>
+              </div>
+            </div>
+          );
+        })()}
+      </Modal>
+
+      {/* Modal xác nhận khách vắng mặt (No-show) */}
+      <Modal
+        open={noShowOpen}
+        onClose={() => setNoShowOpen(false)}
+        title="Xác nhận khách vắng mặt (No-show)"
+        description="Đánh dấu khách hàng không đến nhận sân theo quy định."
+      >
+        {booking && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-900">
+              <div className="flex items-center gap-2 font-bold text-red-800">
+                <AlertTriangle size={18} />
+                <span>Cảnh báo đánh dấu vắng mặt</span>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-red-800">
+                Bạn đang thực hiện đánh dấu khách hàng không đến nhận sân. Ca chơi sẽ được kết thúc với trạng thái <b>Khách vắng mặt</b> và tiền đặt cọc sẽ được xử lý theo quy định của cơ sở.
+              </p>
+            </div>
+
+            <div className="rounded-xl border bg-slate-50 p-3.5 text-sm space-y-2">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Mã booking:</span>
+                <b className="text-brand-700">{booking.booking_code}</b>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Khách hàng:</span>
+                <span className="font-semibold text-slate-800">
+                  {booking.customer_name}{" "}
+                  {booking.customer_phone ? `(${booking.customer_phone})` : ""}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Sân bóng:</span>
+                <span className="font-semibold text-slate-800">{booking.field_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Khung giờ:</span>
+                <span className="font-semibold text-slate-800">
+                  {booking.booking_date} ·{" "}
+                  {booking.selected_slots
+                    .map((s) => `${s.start_time.slice(0, 5)}–${s.end_time.slice(0, 5)}`)
+                    .join(", ")}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Ghi chú lý do vắng mặt (tùy chọn)
+              </label>
+              <Input
+                value={noShowNote}
+                onChange={(e) => setNoShowNote(e.target.value)}
+                placeholder="Ví dụ: Khách không liên lạc được sau 15 phút, khách báo hủy đột xuất..."
+              />
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setNoShowOpen(false)}
+              >
+                Quay lại
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={busy}
+                leftIcon={<UserX size={16} />}
+                onClick={() => void executeNoShow()}
+              >
+                Xác nhận vắng mặt
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   );

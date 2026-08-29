@@ -12,7 +12,7 @@ interface Report { summary: Summary; granularity: string; trend: Breakdown[]; by
 type Preset = 'today' | '7days' | '30days' | 'month' | 'previous_month' | 'custom';
 const money = (value: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value);
 const iso = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-const statusLabels: Record<string, string> = { pending_payment: 'Chờ thanh toán', pending_confirmation: 'Chờ xác nhận', confirmed: 'Đã xác nhận', in_progress: 'Đang sử dụng', completed: 'Hoàn thành', cancelled: 'Đã hủy', cancelled_by_customer: 'Khách hủy', cancelled_by_owner: 'Chủ sân hủy', expired: 'Hết hạn', no_show: 'Không đến', failed: 'Thất bại', rejected: 'Từ chối' };
+const statusLabels: Record<string, string> = { pending_payment: 'Chờ thanh toán', pending_confirmation: 'Chờ xác nhận', confirmed: 'Đã xác nhận', in_progress: 'Đang sử dụng', completed: 'Hoàn thành', cancelled: 'Đã hủy', cancelled_by_customer: 'Khách hủy', cancelled_by_owner: 'Chủ sân hủy', expired: 'Hết hạn', no_show: 'Khách vắng mặt', failed: 'Thất bại', rejected: 'Từ chối' };
 
 function rangeFor(preset: Preset) {
   const today = new Date(); let start = new Date(today); let end = new Date(today);

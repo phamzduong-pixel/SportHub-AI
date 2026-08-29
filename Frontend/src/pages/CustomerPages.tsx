@@ -44,7 +44,7 @@ const bookingLabel = (status: ApiBooking["status"]) =>
     confirmed: "Đã xác nhận",
     in_progress: "Đang sử dụng",
     completed: "Đã hoàn thành",
-    no_show: "Không đến sân",
+    no_show: "Khách vắng mặt",
     cancelled: "Đã hủy",
     cancelled_by_customer: "Khách đã hủy",
     cancelled_by_owner: "Chủ sân hủy",

@@ -613,8 +613,8 @@ class BookingService:
             
             # Check for conflict with IN_PROGRESS bookings at the current time
             from sqlalchemy import select, and_, or_
-            from ...models.field import BookingSlot, Booking
-            from ...models.operations import FieldBlock
+            from ..models.field import BookingSlot, Booking
+            from ..models.operations import FieldBlock
             
             current_time = now.time()
             current_date = now.date()
@@ -661,10 +661,10 @@ class BookingService:
         booking = self._booking_or_404(booking_id)
         self._require_owned_booking(booking, user)
         if booking.status != BookingStatus.CONFIRMED.value:
-            raise HTTPException(status_code=409, detail='Chỉ booking đã xác nhận mới có thể đánh dấu no-show')
+            raise HTTPException(status_code=409, detail='Chỉ booking đã xác nhận mới có thể đánh dấu khách vắng mặt')
         grace_period = timedelta(minutes=15)
         if self._scheduled_at(booking) + grace_period > datetime.now(self.timezone):
-            raise HTTPException(status_code=409, detail='Chưa đến giờ no-show hợp lệ (sau giờ bắt đầu 15 phút)')
+            raise HTTPException(status_code=409, detail='Chưa đủ điều kiện đánh dấu vắng mặt (chỉ được thực hiện sau giờ bắt đầu ít nhất 15 phút)')
         return self._transition(booking_id, {BookingStatus.CONFIRMED.value}, BookingStatus.NO_SHOW.value, note, user)
 
     def complete(self, booking_id: int, note: str | None, user: User) -> BookingResponse:

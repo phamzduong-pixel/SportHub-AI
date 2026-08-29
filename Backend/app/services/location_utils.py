@@ -8,9 +8,17 @@ LOCATION_ALIASES = {
     'tp hcm': 'TP.HCM', 'tphcm': 'TP.HCM', 'ho chi minh': 'TP.HCM',
     'sai gon': 'TP.HCM',
     'da nang': 'Đà Nẵng',
-    'cau giay': 'Cầu Giấy', 'tay ho': 'Tây Hồ',
+    'cau giay': 'Cầu Giấy', 'tay ho': 'Tây Hồ', 'hoan kiem': 'Hoàn Kiếm',
+    'ba dinh': 'Ba Đình', 'dong da': 'Đống Đa', 'thanh xuan': 'Thanh Xuân',
+    'nam tu liem': 'Nam Từ Liêm', 'bac tu liem': 'Bắc Từ Liêm',
+    'long bien': 'Long Biên', 'ha dong': 'Hà Đông', 'hai ba trung': 'Hai Bà Trưng',
+    'hoang mai': 'Hoàng Mai', 'thanh tri': 'Thanh Trì', 'gia lam': 'Gia Lâm',
     'binh thanh': 'Bình Thạnh', 'go vap': 'Gò Vấp',
-    'tan binh': 'Tân Bình', 'thu duc': 'Thủ Đức',
+    'tan binh': 'Tân Bình', 'tan phu': 'Tân Phú', 'phu nhuan': 'Phú Nhuận',
+    'thu duc': 'Thủ Đức', 'binh tan': 'Bình Tân',
+    'quan 1': 'Quận 1', 'quan 2': 'Quận 2', 'quan 3': 'Quận 3', 'quan 4': 'Quận 4',
+    'quan 5': 'Quận 5', 'quan 6': 'Quận 6', 'quan 7': 'Quận 7', 'quan 8': 'Quận 8',
+    'quan 9': 'Quận 9', 'quan 10': 'Quận 10', 'quan 11': 'Quận 11', 'quan 12': 'Quận 12',
 }
 
 

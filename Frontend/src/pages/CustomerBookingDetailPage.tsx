@@ -70,7 +70,7 @@ const bookingLabels: Record<string, string> = {
   confirmed: "Đã xác nhận",
   in_progress: "Đang sử dụng",
   completed: "Hoàn thành",
-  no_show: "Không đến sân",
+  no_show: "Khách vắng mặt",
   cancelled: "Đã hủy",
   cancelled_by_customer: "Khách đã hủy",
   cancelled_by_owner: "Chủ sân đã hủy",
@@ -103,6 +103,14 @@ const activityLabels: Record<string, string> = {
   owner_rejected_booking: "Chủ sân đã từ chối booking",
   refund_completed: "Đã hoàn tiền",
 };
+const complaintStatusLabels: Record<string, string> = {
+  open: "Chờ xử lý",
+  in_review: "Đang xử lý",
+  resolved: "Đã giải quyết",
+  rejected: "Bị từ chối",
+  cancelled: "Đã hủy",
+};
+
 
 export function CustomerBookingDetailPage() {
   const { bookingId = "" } = useParams();
@@ -780,12 +788,26 @@ export function CustomerBookingDetailPage() {
           <h2 className="font-bold">Báo cáo vấn đề booking</h2>
           {complaint ? (
             <div className="mt-3 rounded-lg bg-slate-50 p-4 text-sm">
-              <p>
-                <b>Trạng thái:</b> {complaint.status}
-              </p>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="font-semibold text-slate-700">Trạng thái:</span>
+                <Badge
+                  variant={
+                    complaint.status === "resolved"
+                      ? "success"
+                      : complaint.status === "rejected"
+                        ? "danger"
+                        : complaint.status === "cancelled"
+                          ? "neutral"
+                          : "warning"
+                  }
+                >
+                  {complaintStatusLabels[complaint.status] || complaint.status}
+                </Badge>
+              </div>
               <p>
                 <b>Nội dung:</b> {complaint.description}
               </p>
+
               {complaint.resolution && (
                 <p>
                   <b>Phản hồi:</b> {complaint.resolution}
