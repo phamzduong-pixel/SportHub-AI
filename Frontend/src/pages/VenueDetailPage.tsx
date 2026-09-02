@@ -1,4 +1,4 @@
-import { Heart, MapPin, Share2, Star } from 'lucide-react';
+import { Bot, Heart, MapPin, Share2, Star } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { VenueBookingPanel } from '@/components/booking/VenueBookingPanel';
@@ -62,7 +62,11 @@ export function VenueDetailPage() {
         <p className="mt-2 flex items-start gap-2 text-sm text-slate-500"><MapPin size={17} className="mt-0.5 shrink-0" />{venue.address}, {venue.city}</p>
         <p className="mt-2 flex items-center gap-1 text-sm"><Star size={17} className="fill-amber-400 text-amber-400" /><b>{venue.rating}</b><span className="text-slate-500">({venue.reviewCount} đánh giá) • Cách bạn {venue.distance} km</span></p>
       </div>
-      <div className="flex gap-2"><Button variant="outline" leftIcon={<Share2 size={17} />} onClick={() => void share()}>Chia sẻ</Button><Button variant={favorite ? 'danger' : 'outline'} leftIcon={<Heart size={17} className={favorite ? 'fill-current' : ''} />} onClick={toggleFavorite}>{favorite ? 'Đã thích' : 'Yêu thích'}</Button></div>
+      <div className="flex flex-wrap gap-2">
+        <Link to={`/ai-assistant?courtId=${venue.id}`}><Button variant="ai" leftIcon={<Bot size={17} />}>Hỏi AI về sân này</Button></Link>
+        <Button variant="outline" leftIcon={<Share2 size={17} />} onClick={() => void share()}>Chia sẻ</Button>
+        <Button variant={favorite ? 'danger' : 'outline'} leftIcon={<Heart size={17} className={favorite ? 'fill-current' : ''} />} onClick={toggleFavorite}>{favorite ? 'Đã thích' : 'Yêu thích'}</Button>
+      </div>
     </header>
 <div className="grid min-w-0 items-start gap-5 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_350px]"><div className="min-w-0"><VenueDetailTabs venue={venue} /><VenueReviews fieldId={venue.id} /></div><VenueBookingPanel venue={venue} /></div>
   </div>;

@@ -681,28 +681,37 @@ class AIAssistantService:
             end = min(24 * 60, start + duration)
         booking_date, invalid_date = self._date(query)
         requested = context_field_id if context_field_id and ('san nay' in query or 'co so nay' in query) else self._field_by_name(query)
+        if requested is None and context_field_id:
+            requested = context_field_id
+        extracted_sport = next((value for key, value in SPORT_ALIASES.items() if key in query), None)
+        extracted_location = self._active_route.entities.location if self._active_route else None
+        if requested and not extracted_sport:
+            field_ctx = self.repository.field_context(requested)
+            if field_ctx:
+                extracted_sport = field_ctx.sport_type
+                if not extracted_location:
+                    extracted_location = field_ctx.location
         return SearchCriteria(
-            sport_type=next((value for key, value in SPORT_ALIASES.items() if key in query), None),
+            sport_type=extracted_sport,
             court_type=self._active_route.entities.court_type if self._active_route else None,
             booking_date=booking_date,
             start_minute=start,
             end_minute=end,
             duration_minutes=duration or (end - start if start is not None and end is not None else None),
             time_ranges=time_ranges,
-            location=self._active_route.entities.location if self._active_route else None,
+            location=extracted_location,
             max_price=self._price(query),
             people=self._people(query),
             special_requirements=[value for key, value in SPECIAL_REQUIREMENTS.items() if key in query],
             requested_field_id=requested,
-            allow_alternatives=any(term in query for term in ('khong co thi', 'gio khac', 'san khac', 'gan nhat')),
+            allow_alternatives=any(term in query for term in ('khong co thi', 'gio khac', 'san khac', 'gan nhat', 'con san nao')),
             prefer_cheap=any(term in query for term in ('re mot chut', 'gia re', 're nhat', 're hon', 'tiet kiem')),
             near_me=any(term in query for term in ('gan day', 'gan toi', 'quanh day')),
             invalid_date=invalid_date,
             invalid_time=start is not None and end is not None and end <= start,
         )
 
-    @staticmethod
-    def _merge_context(criteria: SearchCriteria, context: dict[str, Any], query: str):
+    def _merge_context(self, criteria: SearchCriteria, context: dict[str, Any], query: str):
         values = {
             'sport_type': context.get('sport_type'),
             'court_type': context.get('court_type'),
@@ -710,11 +719,23 @@ class AIAssistantService:
             'max_price': context.get('max_price'),
             'people': context.get('people'),
         }
-        if 'san khac' not in query and 'co so khac' not in query:
+        clearing_court = any(term in query for term in (
+            'san khac', 'co so khac', 'con san nao', 'con san khac',
+            'vay con san nao', 'con san nao khong', 'san nao khac',
+        ))
+        if not clearing_court:
             values['requested_field_id'] = context.get('field_id')
+        else:
+            criteria.requested_field_id = None
         for name, value in values.items():
             if getattr(criteria, name) is None and value is not None:
                 setattr(criteria, name, value)
+        if criteria.requested_field_id and not criteria.sport_type:
+            field_ctx = self.repository.field_context(criteria.requested_field_id)
+            if field_ctx:
+                criteria.sport_type = field_ctx.sport_type
+                if not criteria.location:
+                    criteria.location = field_ctx.location
         if criteria.booking_date is None and context.get('booking_date'):
             try:
                 criteria.booking_date = date.fromisoformat(str(context['booking_date']))

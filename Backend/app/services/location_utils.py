@@ -72,3 +72,19 @@ def extract_location(query: str) -> str | None:
 def location_matches(requested: str, *values: str | None) -> bool:
     needle = normalize_location_text(requested)
     return any(needle in normalize_location_text(value or '') for value in values)
+
+
+def sport_matches(requested_sport: str | None, field_sport: str | None) -> bool:
+    if not requested_sport or not field_sport:
+        return False
+    q_norm = normalize_location_text(requested_sport)
+    f_norm = normalize_location_text(field_sport)
+    if q_norm == f_norm:
+        return True
+    distinct_sports = ('bong da', 'bong ro', 'bong chuyen', 'cau long', 'tennis', 'pickleball')
+    for sport in distinct_sports:
+        if sport in q_norm and sport in f_norm:
+            return True
+        if (sport in q_norm) != (sport in f_norm):
+            return False
+    return q_norm in f_norm or f_norm in q_norm

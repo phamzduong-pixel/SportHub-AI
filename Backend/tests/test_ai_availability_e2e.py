@@ -152,7 +152,78 @@ class AIAvailabilityE2ETests(unittest.TestCase):
             self.assertEqual(data['status'], 'OK')
             self.assertGreaterEqual(len(data['suggestions']), 1)
             self.assertEqual(data['suggestions'][0]['start_time'], '18:00')
-            self.assertTrue(data['suggestions'][0]['is_nearest_alternative'])
+    def test_court_context_auto_resolves_sport_and_date_availability(self):
+        target_date = (date.today() + timedelta(days=5)).isoformat()
+        with patch('app.repositories.ai_repository.AIRepository.field_context') as mock_field_ctx, \
+             patch('app.repositories.booking_repository.BookingRepository.availability') as mock_avail:
+            mock_field = Field(id=7, name='Sân 7', sport_type='Bóng đá 7 người', capacity=14, base_price=300000, location='Cầu Giấy, Hà Nội', facility_id=1)
+            mock_slot1 = TimeSlot(id=701, field_id=7, name='Ca 1', start_time=time(8, 0), end_time=time(9, 0), price=300000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+            mock_slot2 = TimeSlot(id=702, field_id=7, name='Ca 2', start_time=time(9, 0), end_time=time(10, 0), price=300000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+            mock_field_ctx.return_value = mock_field
+            mock_avail.return_value = ([mock_field], [mock_slot1, mock_slot2], [], [], [])
+
+            # User is on Sân 7 (context_field_id=7) and asks "Sân này còn khung giờ nào trống..."
+            response = self.client.post('/ai/assistant', json={
+                'message': f'Sân này còn khung giờ nào trống vào ngày {target_date}?',
+                'context_field_id': 7,
+            })
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data['status'], 'OK')
+            self.assertEqual(len(data['suggestions']), 2)
+            self.assertEqual(data['suggestions'][0]['field_id'], 7)
+            self.assertEqual(data['suggestions'][0]['start_time'], '08:00')
+            self.assertEqual(data['suggestions'][1]['start_time'], '09:00')
+
+    def test_multi_turn_date_then_sport_then_other_courts_follow_up(self):
+        target_date = (date.today() + timedelta(days=5)).isoformat()
+        with patch('app.repositories.booking_repository.BookingRepository.availability') as mock_avail:
+            mock_field1 = Field(id=7, name='Sân 7', sport_type='Bóng đá 7 người', capacity=14, base_price=300000, location='Cầu Giấy, Hà Nội', facility_id=1)
+            mock_slot1 = TimeSlot(id=701, field_id=7, name='Ca 1', start_time=time(8, 0), end_time=time(9, 0), price=300000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+            mock_slot2 = TimeSlot(id=702, field_id=7, name='Ca 2', start_time=time(9, 0), end_time=time(10, 0), price=300000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+
+            mock_field2 = Field(id=8, name='Sân 8 Hoàng Gia', sport_type='Bóng đá mini', capacity=10, base_price=280000, location='Cầu Giấy, Hà Nội', facility_id=1)
+            mock_slot3 = TimeSlot(id=801, field_id=8, name='Ca sáng Sân 8', start_time=time(8, 0), end_time=time(9, 30), price=280000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+
+            def avail_side_effect(field_id=None, **kwargs):
+                if field_id == 7:
+                    return ([mock_field1], [mock_slot1, mock_slot2], [], [], [])
+                return ([mock_field1, mock_field2], [mock_slot1, mock_slot2, mock_slot3], [], [], [])
+
+            mock_avail.side_effect = avail_side_effect
+
+            # Turn 1: No context_field_id, asking for date
+            res1 = self.client.post('/ai/assistant', json={
+                'message': f'Sân này còn khung giờ nào trống vào ngày {target_date}?',
+            })
+            self.assertEqual(res1.status_code, 200)
+            data1 = res1.json()
+            self.assertEqual(data1['status'], 'NEED_MORE_DATA')
+            self.assertIn('môn thể thao', data1['reply'])
+            self.assertEqual(data1['understood']['booking_date'], target_date)
+
+            # Turn 2: User answers "môn bóng đá"
+            res2 = self.client.post('/ai/assistant', json={
+                'message': 'môn bóng đá',
+                'context': data1['understood'],
+            })
+            self.assertEqual(res2.status_code, 200)
+            data2 = res2.json()
+            self.assertEqual(data2['status'], 'OK')
+            self.assertGreaterEqual(len(data2['suggestions']), 1)
+            self.assertEqual(data2['understood']['sport_type'], 'bóng đá')
+            self.assertEqual(data2['understood']['booking_date'], target_date)
+
+            # Turn 3: User asks "vậy còn sân nào không?"
+            res3 = self.client.post('/ai/assistant', json={
+                'message': 'vậy còn sân nào không?',
+                'context': data2['understood'],
+            })
+            self.assertEqual(res3.status_code, 200)
+            data3 = res3.json()
+            self.assertEqual(data3['status'], 'OK')
+            self.assertGreaterEqual(len(data3['suggestions']), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

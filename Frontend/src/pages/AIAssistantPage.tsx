@@ -1,6 +1,6 @@
 import { Bot, CalendarDays, ChevronRight, Clock3, MapPin, Send, ShieldCheck, Sparkles, Star, UserRound, WalletCards } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Badge, Button } from '@/components/common';
 import { AssistantApiError, AssistantTimeoutError, askSportHubAssistant, type AssistantIntent, type AssistantSuggestion, type AssistantVenueResult } from '@/services/aiAssistantService';
 
@@ -35,11 +35,21 @@ const money = (value: number) => `${value.toLocaleString('vi-VN')}đ`;
 const dateLabel = (value: string) => new Intl.DateTimeFormat('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit' }).format(new Date(`${value}T00:00:00`));
 
 export function AIAssistantPage() {
-  const [messages, setMessages] = useState<Message[]>([{ id: 1, role: 'assistant', text: 'Chào bạn! Mình có thể tìm sân và khung giờ còn trống trực tiếp từ hệ thống SportHub. Bạn muốn chơi môn gì, ở đâu và khi nào?' }]);
+  const [searchParams] = useSearchParams();
+  const initialCourtId = Number(searchParams.get('courtId') || searchParams.get('field_id')) || undefined;
+  const [messages, setMessages] = useState<Message[]>([
+    {
+      id: 1,
+      role: 'assistant',
+      text: initialCourtId
+        ? 'Chào bạn! Mình đã nhận thông tin sân bạn đang xem. Bạn muốn kiểm tra lịch trống vào ngày nào, hoặc cần tư vấn thêm gì về sân này?'
+        : 'Chào bạn! Mình có thể tìm sân và khung giờ còn trống trực tiếp từ hệ thống SportHub. Bạn muốn chơi môn gì, ở đâu và khi nào?',
+    },
+  ]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('Đang tìm sân phù hợp...');
-  const [contextFieldId, setContextFieldId] = useState<number>();
+  const [contextFieldId, setContextFieldId] = useState<number | undefined>(initialCourtId);
   const [searchContext, setSearchContext] = useState<Record<string, unknown>>({});
   const messagesRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef<HTMLTextAreaElement>(null);

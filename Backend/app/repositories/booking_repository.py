@@ -33,7 +33,12 @@ class BookingRepository:
         if search:
             field_filters.append(Field.name.ilike(f'%{search.strip()}%'))
         if sport_type:
-            field_filters.append(func.lower(Field.sport_type) == sport_type.strip().lower())
+            sport_norm = sport_type.strip().lower()
+            sport_term = f'%{sport_norm}%'
+            field_filters.append(or_(
+                func.lower(Field.sport_type) == sport_norm,
+                func.lower(Field.sport_type).ilike(sport_term),
+            ))
         if location:
             loc_term = f'%{location.strip()}%'
             field_filters.append(or_(
@@ -48,8 +53,11 @@ class BookingRepository:
         if owner_id is not None:
             field_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
         fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*field_filters).order_by(Field.name)).all())
-        if not fields and location:
-            # Fallback relaxed query then filter with Python normalized location_matches
+        if sport_type:
+            from ..services.location_utils import sport_matches
+            fields = [f for f in fields if sport_matches(sport_type, f.sport_type)]
+        if not fields and (location or sport_type):
+            # Fallback relaxed query then filter with Python normalized location_matches and sport_matches
             relaxed_filters = [
                 Field.status == 'available',
                 or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
@@ -58,19 +66,21 @@ class BookingRepository:
                 relaxed_filters.append(Field.id == field_id)
             if search:
                 relaxed_filters.append(Field.name.ilike(f'%{search.strip()}%'))
-            if sport_type:
-                relaxed_filters.append(func.lower(Field.sport_type) == sport_type.strip().lower())
             if owner_id is not None:
                 relaxed_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
             all_fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*relaxed_filters).order_by(Field.name)).all())
-            from ..services.location_utils import location_matches
-            fields = [f for f in all_fields if location_matches(
-                location, f.location,
-                f.facility.location if f.facility else None,
-                f.facility.city if f.facility else None,
-                f.facility.district if f.facility else None,
-                f.facility.name if f.facility else None,
-            )]
+            from ..services.location_utils import location_matches, sport_matches
+            fields = all_fields
+            if sport_type:
+                fields = [f for f in fields if sport_matches(sport_type, f.sport_type)]
+            if location:
+                fields = [f for f in fields if location_matches(
+                    location, f.location,
+                    f.facility.location if f.facility else None,
+                    f.facility.city if f.facility else None,
+                    f.facility.district if f.facility else None,
+                    f.facility.name if f.facility else None,
+                )]
         if not fields:
             return []
         field_ids = [field.id for field in fields]
