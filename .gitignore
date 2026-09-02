@@ -39,8 +39,6 @@ Thumbs.db
 .pytest_cache/
 .mypy_cache/
 
-# Private uploaded documents
+# Uploaded documents and runtime media
 Backend/data/private/
-
-# User avatars/uploads
-Backend/data/public/avatars/
+Backend/data/public/
