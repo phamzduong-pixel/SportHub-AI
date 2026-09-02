@@ -50,14 +50,15 @@ OUT_OF_SCOPE_TERMS = (
     'python', 'lap trinh', 'code', 'toan hoc', 'giai bai', 'lich su viet', 'chinh tri',
     'suc khoe', 'benh', 'thuoc', 'tai chinh', 'chung khoan', 'phap luat', 'luat su',
     'viet bai', 'bai tho', 'dich thuat', 'dich sang', 'thoi tiet', 'tin tuc',
-    'thit cho', 'mon an', 'nau an', 'phim', 'am nhac', 'du lich',
+    'thit cho', 'mon an', 'nau an', 'phim', 'am nhac', 'du lich', 'chuyen cuoi', 'ke chuyen',
+    'dich doan', 'dich cau', 'tieng anh',
 )
 DOMAIN_TERMS = (
     'san', 'the thao', 'sporthub', 'co so', 'dia diem', 'tien ich', 'khung gio',
     'lich trong', 'booking', 'ma dat', 'dat lich', 'dat coc', 'thanh toan', 'hoan tien',
     'hoa don', 'bien lai', 'huy', 'doi lich', 'doi gio', 'tai khoan', 'ho so',
     'owner', 'chu san', 'doi tac', 'quan ly', 'gia', 'choi', 'cong suat', 'thap diem', 'cao diem', 'it khach', 'uu dai',
-    'san pham', 'dich vu', 'cho thue', 'con hang', 'so luong con', 'ton kho', 'tim', 'giup', 'tro ly',
+    'san pham', 'dich vu', 'cho thue', 'con hang', 'so luong con', 'ton kho', 'tim', 'giup', 'tro ly', 'lap day',
 )
 
 
@@ -155,7 +156,8 @@ class IntentRouter:
         partner_context = context.get('last_intent') == AssistantIntent.PARTNER_APPLICATION_SUPPORT.value
         if any(term in query for term in (
             'tro thanh chu san', 'dang ky lam doi tac', 'dang ky doi tac', 'dang ky owner',
-            'ho so doi tac', 'ho so chu san', 'ho so owner', 'gui lai ho so',
+            'ho so doi tac', 'ho so chu san', 'ho so owner', 'gui lai ho so', 'lam chu san', 'lam doi tac',
+            'quy trinh dang ky', 'quy trinh tro thanh',
             'ho so cua toi dang o trang thai nao', 'ho so cua toi den dau',
             'tai sao ho so bi tu choi', 'cap nhat va gui lai ho so',
             'can chuan bi thong tin gi', 'can chuan bi giay to gi', 'duyet ho so cua toi',
@@ -166,24 +168,25 @@ class IntentRouter:
             return AssistantIntent.PARTNER_APPLICATION_SUPPORT, 0.98
         if any(term in query for term in (
             'cong suat', 'thap diem', 'cao diem', 'it khach', 'gio vang',
-            'chay uu dai', 'khuyen mai luc nao', 'san nao vang',
+            'chay uu dai', 'khuyen mai luc nao', 'san nao vang', 'lap day', 'ty le lap day',
         )):
             return AssistantIntent.OCCUPANCY_INSIGHT, 0.97
         if any(term in query for term in (
             'san pham', 'dich vu them', 'dich vu nao', 'cho thue gi',
             'con hang', 'so luong con', 'ton kho', 'thue vot', 'vot cho thue', 'mua nuoc',
+            'ban nuoc', 'nuoc uong', 'phu kien', 'thue bong', 'ao pitch',
         )):
             return AssistantIntent.GET_PRODUCTS, 0.97
-        if any(term in query for term in ('hoan tien', 'thanh toan', 'dat coc', 'tien coc', 'hoa don', 'bien lai', 'giao dich', 'hoan coc', 'doanh thu')):
+        if any(term in query for term in ('hoan tien', 'thanh toan', 'dat coc', 'tien coc', 'hoa don', 'bien lai', 'giao dich', 'hoan coc', 'doanh thu')) and not any(term in query for term in ('chinh sach huy', 'huy booking', 'huy dat')):
             return AssistantIntent.PAYMENT_SUPPORT, 0.96
         has_booking_context = bool(
             fresh_entities.booking_code or context.get('booking_code')
             or context.get('last_intent') in {'GET_BOOKING', 'CANCEL_BOOKING', 'RESCHEDULE_BOOKING'}
-            or any(term in query for term in ('booking', 'lich dat', 'ma dat'))
+            or any(term in query for term in ('booking', 'lich dat', 'ma dat', 'dat san'))
         )
-        if has_booking_context and any(term in query for term in ('doi lich', 'doi gio', 'doi ngay', 'doi san', 'dời lịch', 'reschedule')):
+        if has_booking_context and any(term in query for term in ('doi lich', 'doi gio', 'doi ngay', 'doi san', 'dời lịch', 'doi ca', 'reschedule')):
             return AssistantIntent.RESCHEDULE_BOOKING, 0.97
-        if re.search(r'\b(huy|huỷ)\b', query) and any(term in query for term in ('san', 'booking', 'lich dat', 'ma dat')):
+        if re.search(r'\b(huy|huỷ)\b', query) and any(term in query for term in ('san', 'booking', 'lich dat', 'ma dat', 'chinh sach')):
             return AssistantIntent.CANCEL_BOOKING, 0.96
         if any(term in query for term in ('trang thai booking', 'booking cua toi', 'lich su dat', 'lich dat cua toi', 'xem booking', 'ma dat', 'bao nhieu booking', 'booking hom nay')) or (
             'booking' in query and ('the nao' in query or 'trang thai' in query)
@@ -193,7 +196,8 @@ class IntentRouter:
             return AssistantIntent.ACCOUNT_SUPPORT, 0.94
         if any(term in query for term in (
             'huong dan', 'cach su dung', 'cach dat san', 'sporthub lam duoc gi',
-            'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi'
+            'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi',
+            'giup toi nhung gi', 'giup duoc gi', 'hoat dong nhu the nao',
         )):
             return AssistantIntent.SYSTEM_GUIDE, 0.93
         if any(term in query for term in ('bao nhieu co so', 'co bao nhieu co so', 'so luong co so')):
@@ -209,21 +213,21 @@ class IntentRouter:
             return AssistantIntent.CREATE_BOOKING, 0.95
 
         # Explicit search venue verbs prioritize SEARCH_VENUE
-        if any(term in query for term in ('tim san', 'tim co so', 'kiem san', 'cho toi san', 'muon tim san')) or query.startswith('tim '):
+        if any(term in query for term in ('tim san', 'tim co so', 'kiem san', 'cho toi san', 'muon tim san', 'danh sach san')) or (query.startswith('tim ') and not any(term in query for term in ('khung gio', 'gio'))):
             if any(term in query for term in ('con trong', 'lich trong', 'con san', 'con gio', 'co trong khong')):
                 return AssistantIntent.CHECK_AVAILABILITY, 0.95
             return AssistantIntent.SEARCH_VENUE, 0.94
 
-        if 're hon' not in query and (any(term in query for term in ('con trong', 'lich trong', 'con san', 'con gio', 'khung gio nao', 'con 19h', 'co trong khong', 'ngay nao trong', 'ngay trong')) or (
+        if 're hon' not in query and (any(term in query for term in ('con trong', 'lich trong', 'con san', 'con gio', 'khung gio nao', 'con 19h', 'co trong khong', 'ngay nao trong', 'ngay trong', 'con khung gio', 'con slot')) or (
             follow_up and re.search(r'\bcon\s+\d{1,2}(?::\d{2})?\s*(?:h|gio)?\b', query)
         )):
             return AssistantIntent.CHECK_AVAILABILITY, 0.95
 
-        if any(term in query for term in ('goi y khung gio', 'goi y gio', 'gio phu hop', 'gio nao phu hop', 'gio gan do', 're hon')) or (
+        if any(term in query for term in ('goi y khung gio', 'goi y gio', 'gio phu hop', 'gio nao phu hop', 'gio gan do', 're hon', 'tim khung gio', 'khung gio')) or (
             follow_up and (fresh_entities.start_time is not None or fresh_entities.preferred_time is not None)
         ):
             return AssistantIntent.RECOMMEND_SLOT, 0.94
-        if any(term in query for term in ('goi y', 'de xuat', 'phu hop', 'nen chon', 'tot nhat')):
+        if any(term in query for term in ('goi y', 'de xuat', 'phu hop', 'nen chon', 'tot nhat')) and not any(term in query for term in ('gio', 'khung gio', 'slot')):
             return AssistantIntent.RECOMMEND_VENUE, 0.93
         if any(term in query for term in (
             'dia chi', 'tien ich', 'thong tin san', 'chi tiet san', 'gia bao nhieu', 'gia san',
@@ -236,8 +240,8 @@ class IntentRouter:
         has_date_or_time = bool(fresh_entities.date or fresh_entities.start_time or fresh_entities.preferred_time)
         has_search_terms = any(term in query for term in (
             'co san', 'san nao', 'tim san', 'tim co so', 'kiem san', 'cho toi san',
-            'toi muon san', 'muon san', 'muon tim', 'giup toi tim', 'co tim san', 'tim giup', 'giup tim', 'cho toi'
-        )) or query.startswith('co ') or query.startswith('tim ') or query.startswith('san ')
+            'toi muon san', 'muon san', 'muon tim', 'giup toi tim', 'co tim san', 'tim giup', 'giup tim',
+        )) or query.startswith('co san') or query.startswith('tim ') or query.startswith('san ')
 
         if has_search_entities or has_search_terms:
             if has_date_or_time or any(term in query for term in ('hom nay', 'ngay mai', 'toi nay', 'toi mai', 'ngay kia')):
@@ -249,7 +253,7 @@ class IntentRouter:
     @staticmethod
     def _is_greeting(query: str) -> bool:
         cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
-        return cleaned in {'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'xin chao sporthub'}
+        return cleaned in {'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'xin chao sporthub', 'hello sporthub', 'hi sporthub'}
 
     @staticmethod
     def _has_continuation_detail(query: str) -> bool:

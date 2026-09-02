@@ -35,10 +35,42 @@ class BookingRepository:
         if sport_type:
             field_filters.append(func.lower(Field.sport_type) == sport_type.strip().lower())
         if location:
-            field_filters.append(Field.location.ilike(f'%{location.strip()}%'))
+            loc_term = f'%{location.strip()}%'
+            field_filters.append(or_(
+                Field.location.ilike(loc_term),
+                Field.facility.has(or_(
+                    Facility.location.ilike(loc_term),
+                    Facility.city.ilike(loc_term),
+                    Facility.district.ilike(loc_term),
+                    Facility.name.ilike(loc_term),
+                ))
+            ))
         if owner_id is not None:
             field_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
-        fields = list(self.db.scalars(select(Field).where(*field_filters).order_by(Field.name)).all())
+        fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*field_filters).order_by(Field.name)).all())
+        if not fields and location:
+            # Fallback relaxed query then filter with Python normalized location_matches
+            relaxed_filters = [
+                Field.status == 'available',
+                or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
+            ]
+            if field_id:
+                relaxed_filters.append(Field.id == field_id)
+            if search:
+                relaxed_filters.append(Field.name.ilike(f'%{search.strip()}%'))
+            if sport_type:
+                relaxed_filters.append(func.lower(Field.sport_type) == sport_type.strip().lower())
+            if owner_id is not None:
+                relaxed_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
+            all_fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*relaxed_filters).order_by(Field.name)).all())
+            from ..services.location_utils import location_matches
+            fields = [f for f in all_fields if location_matches(
+                location, f.location,
+                f.facility.location if f.facility else None,
+                f.facility.city if f.facility else None,
+                f.facility.district if f.facility else None,
+                f.facility.name if f.facility else None,
+            )]
         if not fields:
             return []
         field_ids = [field.id for field in fields]

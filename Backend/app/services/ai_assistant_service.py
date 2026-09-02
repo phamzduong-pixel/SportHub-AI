@@ -179,7 +179,7 @@ class AIAssistantService:
             allow_alternatives=criteria.allow_alternatives,
         ))
         if ranked_result['status'] != 'OK':
-            if any(term in query for term in ('ngay nao trong', 'ngay trong', 'ngay khac')) or criteria.allow_alternatives:
+            if ranked_result['status'] == 'NO_AVAILABLE_SLOT' or any(term in query for term in ('ngay nao trong', 'ngay trong', 'ngay khac')) or criteria.allow_alternatives:
                 alternative_suggestions = self._search_alternative_dates(SlotRecommendationRequest(
                     sport_type=criteria.sport_type, booking_date=criteria.booking_date or datetime.now(self.tz).date(),
                     court_type=criteria.court_type,
@@ -192,7 +192,7 @@ class AIAssistantService:
                     ],
                     duration_minutes=criteria.duration_minutes,
                     max_price=criteria.max_price, location=criteria.location,
-                    allow_alternatives=criteria.allow_alternatives,
+                    allow_alternatives=True,
                 ))
                 if alternative_suggestions:
                     return self._format_alternative_dates_response(alternative_suggestions, criteria, route.intent)

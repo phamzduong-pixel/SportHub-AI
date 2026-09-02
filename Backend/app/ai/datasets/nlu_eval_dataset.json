@@ -1,0 +1,108 @@
+[
+  {"text": "tìm sân bóng đá ở Cầu Giấy", "intent": "SEARCH_VENUE"},
+  {"text": "ở Hà Nội có những cơ sở thể thao nào", "intent": "SEARCH_VENUE"},
+  {"text": "có sân cầu lông nào gần Thanh Xuân không", "intent": "SEARCH_VENUE"},
+  {"text": "tìm sân pickleball quận 1", "intent": "SEARCH_VENUE"},
+  {"text": "SportHub có bao nhiêu cơ sở ở Đà Nẵng", "intent": "SEARCH_VENUE"},
+  {"text": "tìm sân tennis ngoài trời", "intent": "SEARCH_VENUE"},
+  {"text": "kiếm sân bóng rổ quanh Đống Đa", "intent": "SEARCH_VENUE"},
+  {"text": "cho tôi danh sách sân bóng chuyền", "intent": "SEARCH_VENUE"},
+
+  {"text": "gợi ý sân cầu lông được đánh giá cao nhất", "intent": "RECOMMEND_VENUE"},
+  {"text": "sân bóng đá nào tốt nhất ở Ba Đình", "intent": "RECOMMEND_VENUE"},
+  {"text": "nên chọn sân tennis nào gần đây", "intent": "RECOMMEND_VENUE"},
+  {"text": "đề xuất cơ sở pickleball chất lượng", "intent": "RECOMMEND_VENUE"},
+  {"text": "sân nào phù hợp cho nhóm 10 người", "intent": "RECOMMEND_VENUE"},
+
+  {"text": "kiểm tra lịch trống sân bóng đá ngày mai", "intent": "CHECK_AVAILABILITY"},
+  {"text": "hôm nay còn sân cầu lông nào trống không", "intent": "CHECK_AVAILABILITY"},
+  {"text": "tối mai có sân tennis nào còn giờ không", "intent": "CHECK_AVAILABILITY"},
+  {"text": "ngày 2026-09-05 sân pickleball còn lịch không", "intent": "CHECK_AVAILABILITY"},
+  {"text": "cuối tuần này có sân bóng đá nào mở không", "intent": "CHECK_AVAILABILITY"},
+  {"text": "thứ bảy tới có còn khung giờ trống không", "intent": "CHECK_AVAILABILITY"},
+  {"text": "sân bóng cỏ nhân tạo ngày mai còn trống không", "intent": "CHECK_AVAILABILITY"},
+
+  {"text": "gợi ý khung giờ đá bóng tối mai khoảng 19h", "intent": "RECOMMEND_SLOT"},
+  {"text": "giờ nào phù hợp để chơi cầu lông ngày mai", "intent": "RECOMMEND_SLOT"},
+  {"text": "gợi ý giờ chơi pickleball buổi sáng", "intent": "RECOMMEND_SLOT"},
+  {"text": "có khung giờ nào giá dưới 200k không", "intent": "RECOMMEND_SLOT"},
+  {"text": "gợi ý slot chơi tennis rẻ một chút", "intent": "RECOMMEND_SLOT"},
+  {"text": "tìm khung giờ đá bóng 18h đến 20h", "intent": "RECOMMEND_SLOT"},
+
+  {"text": "tôi muốn đặt sân này", "intent": "CREATE_BOOKING"},
+  {"text": "xác nhận đặt sân bóng đá", "intent": "CREATE_BOOKING"},
+  {"text": "tạo booking cho khung giờ 19h", "intent": "CREATE_BOOKING"},
+  {"text": "đặt giúp tôi sân số 1", "intent": "CREATE_BOOKING"},
+
+  {"text": "xem chi tiết sân bóng đá Hoàng Gia", "intent": "GET_VENUE_DETAIL"},
+  {"text": "địa chỉ và tiện ích của sân cầu lông Cầu Giấy", "intent": "GET_VENUE_DETAIL"},
+  {"text": "sân này giá bao nhiêu một tiếng", "intent": "GET_VENUE_DETAIL"},
+  {"text": "sân có bãi đỗ xe và điều hòa không", "intent": "GET_VENUE_DETAIL"},
+  {"text": "giờ mở cửa và đóng cửa của cơ sở", "intent": "GET_VENUE_DETAIL"},
+
+  {"text": "ở sân có cho thuê vợt cầu lông không", "intent": "GET_PRODUCTS"},
+  {"text": "cơ sở có bán nước uống và phụ kiện không", "intent": "GET_PRODUCTS"},
+  {"text": "thuê bóng và áo pitch giá bao nhiêu", "intent": "GET_PRODUCTS"},
+  {"text": "dịch vụ cho thuê vợt pickleball còn hàng không", "intent": "GET_PRODUCTS"},
+
+  {"text": "kiểm tra trạng thái booking SH-100234", "intent": "GET_BOOKING"},
+  {"text": "mã đặt sân của tôi đang ở trạng thái nào", "intent": "GET_BOOKING"},
+  {"text": "lịch sử đặt sân của tôi", "intent": "GET_BOOKING"},
+  {"text": "hôm nay tôi có bao nhiêu booking", "intent": "GET_BOOKING"},
+
+  {"text": "tôi muốn hủy booking SH-100234", "intent": "CANCEL_BOOKING"},
+  {"text": "hủy lịch đặt sân bóng đá đã đặt", "intent": "CANCEL_BOOKING"},
+  {"text": "chính sách hủy booking và hoàn tiền như thế nào", "intent": "CANCEL_BOOKING"},
+
+  {"text": "tôi muốn đổi lịch booking SH-100234 sang ngày mai", "intent": "RESCHEDULE_BOOKING"},
+  {"text": "dời giờ đặt sân sang ca 20h", "intent": "RESCHEDULE_BOOKING"},
+  {"text": "đổi ngày chơi của lịch đặt", "intent": "RESCHEDULE_BOOKING"},
+
+  {"text": "tiền cọc booking tính như thế nào", "intent": "PAYMENT_SUPPORT"},
+  {"text": "hướng dẫn thanh toán quét mã QR ngân hàng", "intent": "PAYMENT_SUPPORT"},
+  {"text": "khoản tiền hoàn của tôi đã về chưa", "intent": "PAYMENT_SUPPORT"},
+  {"text": "doanh thu tháng này của các cơ sở", "intent": "PAYMENT_SUPPORT"},
+  {"text": "xem hóa đơn và biên lai thanh toán", "intent": "PAYMENT_SUPPORT"},
+
+  {"text": "thông tin tài khoản và hồ sơ của tôi", "intent": "ACCOUNT_SUPPORT"},
+  {"text": "đổi số điện thoại và email tài khoản", "intent": "ACCOUNT_SUPPORT"},
+  {"text": "toàn hệ thống có bao nhiêu owner đang hoạt động", "intent": "ACCOUNT_SUPPORT"},
+
+  {"text": "quy trình đăng ký làm chủ sân đối tác", "intent": "PARTNER_APPLICATION_SUPPORT"},
+  {"text": "hồ sơ đăng ký owner của tôi đang ở trạng thái nào", "intent": "PARTNER_APPLICATION_SUPPORT"},
+  {"text": "cần chuẩn bị thông tin gì để đăng ký đối tác", "intent": "PARTNER_APPLICATION_SUPPORT"},
+  {"text": "tại sao hồ sơ chủ sân của tôi bị từ chối", "intent": "PARTNER_APPLICATION_SUPPORT"},
+
+  {"text": "phân tích công suất sân tuần này", "intent": "OCCUPANCY_INSIGHT"},
+  {"text": "khung giờ nào thấp điểm ít khách cần chạy ưu đãi", "intent": "OCCUPANCY_INSIGHT"},
+  {"text": "tỷ lệ lấp đầy các sân trong tháng", "intent": "OCCUPANCY_INSIGHT"},
+  {"text": "giờ cao điểm của cơ sở là mấy giờ", "intent": "OCCUPANCY_INSIGHT"},
+
+  {"text": "trợ lý SportHub có thể giúp tôi những gì", "intent": "SYSTEM_GUIDE"},
+  {"text": "hướng dẫn cách sử dụng ứng dụng tìm sân", "intent": "SYSTEM_GUIDE"},
+  {"text": "hệ thống SportHub AI hoạt động như thế nào", "intent": "SYSTEM_GUIDE"},
+
+  {"text": "xin chào", "intent": "GREETING"},
+  {"text": "chào bạn", "intent": "GREETING"},
+  {"text": "hello sporthub", "intent": "GREETING"},
+  {"text": "hi", "intent": "GREETING"},
+
+  {"text": "sân đầu tiên giá bao nhiêu", "intent": "FOLLOW_UP"},
+  {"text": "lựa chọn thứ 2 thì sao", "intent": "FOLLOW_UP"},
+  {"text": "còn sân khác rẻ hơn không", "intent": "FOLLOW_UP"},
+  {"text": "vậy còn ngày nào trống", "intent": "FOLLOW_UP"},
+  {"text": "buổi tối thì sao", "intent": "FOLLOW_UP"},
+  {"text": "xem lựa chọn cuối cùng", "intent": "FOLLOW_UP"},
+
+  {"text": "cho tôi hỏi", "intent": "UNCLEAR"},
+  {"text": "cái này bao nhiêu", "intent": "UNCLEAR"},
+  {"text": "thế nào", "intent": "UNCLEAR"},
+  {"text": "có không", "intent": "UNCLEAR"},
+
+  {"text": "viết code python giải thuật sắp xếp", "intent": "OUT_OF_SCOPE"},
+  {"text": "hôm nay thời tiết thế nào", "intent": "OUT_OF_SCOPE"},
+  {"text": "tư vấn mua cổ phiếu chứng khoán", "intent": "OUT_OF_SCOPE"},
+  {"text": "cách nấu món phở bò ngon", "intent": "OUT_OF_SCOPE"},
+  {"text": "kể chuyện cười cho tôi nghe", "intent": "OUT_OF_SCOPE"},
+  {"text": "dịch đoạn văn này sang tiếng anh", "intent": "OUT_OF_SCOPE"}
+]

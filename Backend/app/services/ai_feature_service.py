@@ -38,7 +38,7 @@ class AIFeatureService:
             candidates = [pair for pair in candidates if pair[1].id == payload.slot_id]
         candidates = [pair for pair in candidates if self._matches_court_type(pair[0], payload.court_type)]
         used_alternatives = False
-        if not candidates and payload.allow_alternatives and (payload.start_time or payload.end_time):
+        if not candidates and (payload.start_time or payload.end_time or payload.duration_minutes or payload.allow_alternatives):
             candidates = self.availability.available_pairs(
                 booking_date=payload.booking_date, sport_type=payload.sport_type,
                 field_id=payload.court_id, location=payload.location, max_price=payload.max_price,
@@ -190,6 +190,14 @@ class AIFeatureService:
                         ],
                     })
                     options.append(data)
+        if not options and requested_duration:
+            for group in grouped.values():
+                field = group['field']
+                slots = sorted(group['slots'], key=lambda item: item.start_time)
+                options.extend(self._slot_data(field, slot, payload.booking_date) | {
+                    'slot_ids': [slot.id], 'duration_minutes': self._minutes(slot.end_time) - self._minutes(slot.start_time),
+                    'selected_slots': [{'slot_id': slot.id, 'start_time': slot.start_time, 'end_time': slot.end_time, 'price': float(slot.price)}],
+                } for slot in slots)
         return options
 
     @staticmethod

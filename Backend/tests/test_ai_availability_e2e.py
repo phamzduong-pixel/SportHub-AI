@@ -92,7 +92,7 @@ class AIAvailabilityE2ETests(unittest.TestCase):
             mock_field = Field(id=1, name='Sân 1', sport_type='tennis', capacity=4, base_price=100000, location='Hà Nội', facility_id=1)
             mock_slot = TimeSlot(id=101, field_id=1, name='Ca sáng', start_time=time(8,0), end_time=time(9,0), price=100000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
             
-            maintenance = FieldMaintenance(field_id=1, starts_at=datetime.combine(date.today() + timedelta(days=1), time(7,0), tzinfo=tz), ends_at=datetime.combine(date.today() + timedelta(days=1), time(10,0), tzinfo=tz))
+            maintenance = FieldMaintenance(field_id=1, starts_at=datetime.combine(date.today(), time(0,0), tzinfo=tz), ends_at=datetime.combine(date.today() + timedelta(days=30), time(23,59), tzinfo=tz))
             
             mock_avail.return_value = ([mock_field], [mock_slot], [], [], [maintenance])
             
@@ -116,6 +116,43 @@ class AIAvailabilityE2ETests(unittest.TestCase):
             
             response = self.client.post('/ai/assistant', json={'message': f'Tìm sân tennis ngày {tomorrow}'})
             self.assertEqual(len(response.json()['suggestions']), 0)
+
+    def test_newly_created_approved_facility_with_slots_is_suggested(self):
+        from app.models.facility import Facility
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        with patch('app.repositories.booking_repository.BookingRepository.availability') as mock_avail:
+            mock_facility = Facility(id=10, name='Cơ Sở Mới Hoàng Gia', location='Số 10 Duy Tân, Cầu Giấy, Hà Nội', city='Hà Nội', district='Cầu Giấy', status='APPROVED', is_active=True)
+            mock_field = Field(id=50, name='Sân Cầu Lông VIP', sport_type='cầu lông', capacity=4, base_price=80000, location='Số 10 Duy Tân, Cầu Giấy, Hà Nội', facility_id=10, facility=mock_facility)
+            mock_slot = TimeSlot(id=501, field_id=50, name='Ca tối 18h-19h30', start_time=time(18, 0), end_time=time(19, 30), price=80000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+            mock_avail.return_value = ([mock_field], [mock_slot], [], [], [])
+
+            response = self.client.post('/ai/assistant', json={'message': f'Tìm sân cầu lông ngày {tomorrow} ở Cầu Giấy'})
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data['status'], 'OK')
+            self.assertEqual(len(data['suggestions']), 1)
+            self.assertEqual(data['suggestions'][0]['field_id'], 50)
+            self.assertEqual(data['suggestions'][0]['time_slot_id'], 501)
+
+    def test_nearest_alternative_slots_suggested_when_time_differs(self):
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        with patch('app.repositories.booking_repository.BookingRepository.availability') as mock_avail:
+            mock_field = Field(id=1, name='Sân 1', sport_type='bóng đá', capacity=10, base_price=300000, location='Hà Nội', facility_id=1)
+            # Slot is 18:00 - 19:30, but user asks for 14:00
+            mock_slot = TimeSlot(id=101, field_id=1, name='Ca tối', start_time=time(18, 0), end_time=time(19, 30), price=300000, is_active=True, created_at=datetime.now(), updated_at=datetime.now())
+            
+            def avail_side_effect(booking_date, **kwargs):
+                return ([mock_field], [mock_slot], [], [], [])
+
+            mock_avail.side_effect = avail_side_effect
+
+            response = self.client.post('/ai/assistant', json={'message': f'Tìm sân bóng đá lúc 14h ngày {tomorrow}'})
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data['status'], 'OK')
+            self.assertGreaterEqual(len(data['suggestions']), 1)
+            self.assertEqual(data['suggestions'][0]['start_time'], '18:00')
+            self.assertTrue(data['suggestions'][0]['is_nearest_alternative'])
 
 if __name__ == '__main__':
     unittest.main()

@@ -51,16 +51,20 @@ def extract_location(query: str) -> str | None:
     district = re.search(r'\bquan\s+\d+\b', normalized)
     if district:
         return canonical_location(district[0])
+    ignore_tokens = {
+        'day', 'toi', 'san nao', 'san', 'co so', 're hon', 'trong', 'khung gio',
+        'slot', 'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen',
+        'gia re', 're nhat', 're', 'dat san', 'ngay mai', 'hom nay',
+    }
     patterns = (
         r'\b(?:o|tai|quanh|gan)\s+(.+?)(?=\s+(?:co|tim|con|ngay|luc|gia|duoi|khong)\b|$)',
         r'^(.+?)\s+co\s+(?:san|co so)\b',
-        r'^co\s+(.+?)\s+khong$',
     )
     for pattern in patterns:
         match = re.search(pattern, normalized)
         if match:
             candidate = re.sub(r'\b(?:san|co so|nao)$', '', match[1]).strip()
-            if candidate and candidate not in {'day', 'toi', 'san nao'}:
+            if candidate and candidate not in ignore_tokens and not any(tok in candidate for tok in ('re hon', 'con trong', 'bong da', 'cau long', 'pickleball', 'tennis', 'san nao')):
                 return canonical_location(candidate)
     return None
 
