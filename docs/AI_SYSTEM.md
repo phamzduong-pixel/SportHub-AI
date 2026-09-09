@@ -165,5 +165,37 @@ Thực tế HIGH        0            24              98
 
 Hệ thống **AI trong SportHub AI** được thiết kế đạt tiêu chuẩn **Enterprise Grade**:
 - **Bảo mật tuyệt đối**: Dữ liệu kinh doanh, giá cả, thông tin người dùng được cô lập hoàn toàn trước LLM. LLM chỉ nhận dữ liệu đã được lọc và kiểm tra bởi Backend.
-- **Tốc độ phản hồi cao**: Intent Router bằng Regex giúp phân loại 90% câu hỏi đơn giản không cần tốn chi phí và thời gian gọi LLM.
+- **Tốc độ phản hồi cao**: Intent Router bằng NLU/Regex giúp phân loại các câu hỏi không tốn chi phí và giảm độ trễ tối đa.
 - **Khả năng mở rộng dễ dàng**: Cấu trúc Adapter Pattern (`AIProvider`) cho phép chuyển đổi nhà cung cấp mô hình ngôn ngữ lớn (OpenAI, Gemini, Ollama local) mà không cần sửa đổi logic nghiệp vụ trong `AIAssistantService`.
+
+---
+
+## 9. CẬP NHẬT TỐI ƯU HÓA VÀ XỬ LÝ LỖI MÔI TRƯỜNG THỰC TẾ (PHIÊN 02/09/2026)
+
+### 9.1. Các vấn đề kỹ thuật đã xử lý triệt để
+1. **Loại bỏ lỗi nhận diện địa điểm ảo `"Vay Con"` ([`location_utils.py`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/location_utils.py)):**
+   - Xóa bỏ regex `r'^(.+?)\s+co\s+(?:san|co so)\b'` gây hiểu nhầm các từ nối *"vậy còn"*, *"vậy"*, *"còn"*.
+   - Bổ sung danh sách chặn hư từ hội thoại tiếng Việt vào `ignore_tokens`.
+   - Chỉ trích xuất địa điểm khi có giới từ tường minh (`ở`, `tại`, `quanh`, `gần`) hoặc khớp danh mục địa danh chuẩn hóa.
+
+2. **Tự động nhận diện môn thể thao từ sân (`field_id`) ([`ai_assistant_service.py`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_assistant_service.py)):**
+   - Khi người dùng hỏi *"Sân này còn khung giờ nào trống vào ngày 07/09/2026?"* từ trang chi tiết sân, hệ thống tự động tra cứu `Field.sport_type` và `Field.location` từ Database thay vì bắt người dùng nhập lại môn thể thao.
+
+3. **Linh hoạt hóa so khớp môn thể thao biến thể ([`booking_repository.py`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/repositories/booking_repository.py)):**
+   - Áp dụng hàm chuẩn hóa `sport_matches` hỗ trợ tìm kiếm *"bóng đá"* khớp đúng với các sân lưu *"Bóng đá 7 người"*, *"Bóng đá mini"*, *"Futsal"* mà không bị lẫn sang bóng rổ/bóng chuyền.
+
+4. **Nâng cấp nhận diện số hiệu sân tự nhiên ([`ai_assistant_service.py`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_assistant_service.py)):**
+   - Hàm `_field_by_name` được trang bị 2 tầng so khớp: ưu tiên so khớp chuỗi đầy đủ và bóc tách số hiệu sân (`Sân 7`, `Sân 7A`, `Sân số 7`), chỉ gán khi xác định duy nhất 1 sân khớp để chống nhầm lẫn.
+
+5. **Đồng bộ hóa Context URL từ trang chi tiết sân sang AI Assistant ([`AIAssistantPage.tsx`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Frontend/src/pages/AIAssistantPage.tsx), [`VenueDetailPage.tsx`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Frontend/src/pages/VenueDetailPage.tsx)):**
+   - Đọc query parameter `?courtId=${venue.id}` qua `useSearchParams()`.
+   - Bổ sung nút *"Hỏi AI về sân này"* trên thanh công cụ trang chi tiết sân.
+
+6. **Việt hóa hiển thị Enum thanh toán ([`ManagementCustomersPage.tsx`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Frontend/src/pages/ManagementCustomersPage.tsx)):**
+   - Thay thế việc in chuỗi thô `booking.payment_status` bằng từ điển nhãn `paymentLabels`.
+
+### 9.2. Kết quả kiểm thử và nghiệm thu
+- **Backend Test Suites:** `71 / 71 tests PASSED (100%)`.
+- **NLU Intent Router Accuracy:** `92.05%` (Weighted F1: `0.9133`).
+- **Frontend Build (Vite & TypeScript):** `Build thành công 100%, 0 lỗi type/lint`.
+

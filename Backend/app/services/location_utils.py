@@ -55,16 +55,22 @@ def extract_location(query: str) -> str | None:
         'day', 'toi', 'san nao', 'san', 'co so', 're hon', 'trong', 'khung gio',
         'slot', 'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen',
         'gia re', 're nhat', 're', 'dat san', 'ngay mai', 'hom nay',
+        'vay con', 'vay', 'con co', 'con san', 'con', 'lieu', 'the thi', 'vay thi',
+        'o dau', 'cho nao', 'khu nao', 'co san', 'co khong', 'san khac',
     }
     patterns = (
-        r'\b(?:o|tai|quanh|gan)\s+(.+?)(?=\s+(?:co|tim|con|ngay|luc|gia|duoi|khong)\b|$)',
-        r'^(.+?)\s+co\s+(?:san|co so)\b',
+        r'\b(?:o|tai|quanh|gan)\s+(.+?)(?=\s+(?:co|tim|con|ngay|luc|gia|duoi|khong|san|co so)\b|$)',
     )
     for pattern in patterns:
         match = re.search(pattern, normalized)
         if match:
-            candidate = re.sub(r'\b(?:san|co so|nao)$', '', match[1]).strip()
-            if candidate and candidate not in ignore_tokens and not any(tok in candidate for tok in ('re hon', 'con trong', 'bong da', 'cau long', 'pickleball', 'tennis', 'san nao')):
+            candidate = re.sub(r'\b(?:san|co so|nao|khong)$', '', match[1]).strip()
+            if (
+                candidate
+                and candidate not in ignore_tokens
+                and len(candidate) >= 2
+                and not any(tok in candidate for tok in ('re hon', 'con trong', 'bong da', 'cau long', 'pickleball', 'tennis', 'san nao', 'vay con'))
+            ):
                 return canonical_location(candidate)
     return None
 

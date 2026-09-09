@@ -825,9 +825,29 @@ class AIAssistantService:
         }
 
     def _field_by_name(self, query: str):
+        # 1. Exact or substring match in query
+        exact_matches = []
         for court, _ in self.repository.inventory():
-            if plain(court.name) in query:
-                return court.id
+            court_name_plain = plain(court.name)
+            if court_name_plain and court_name_plain in query:
+                exact_matches.append(court)
+        if exact_matches:
+            return sorted(exact_matches, key=lambda c: len(c.name), reverse=True)[0].id
+
+        # 2. Natural court identifier / code matching (e.g. "sân 7", "sân 7A", "sân A7", "sân số 7")
+        court_num_match = re.search(r'\b(?:san\s+so\s+|san\s+|so\s+)?([a-z0-9]{1,4})\b', query)
+        if court_num_match:
+            candidate_num = court_num_match[1].strip().lower()
+            # Only search if candidate token is explicitly a court number/code
+            if candidate_num and any(char.isdigit() for char in candidate_num):
+                code_matches = []
+                for court, _ in self.repository.inventory():
+                    c_plain = plain(court.name)
+                    # Check if candidate_num appears as court number in court.name
+                    if re.search(rf'\b(?:san\s+so\s+|san\s+|so\s+)?{re.escape(candidate_num)}\b', c_plain):
+                        code_matches.append(court)
+                if len(code_matches) == 1:
+                    return code_matches[0].id
         return None
 
     def _date(self, query: str) -> tuple[date | None, bool]:
