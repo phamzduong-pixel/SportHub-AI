@@ -1,11 +1,16 @@
 # Cây thư mục SportHub AI
 
-> Cập nhật ngày 16/08/2026. Cây chỉ liệt kê cấu trúc nghiệp vụ chính; bỏ qua `.venv`, `node_modules`, `dist`, cache, file runtime và model binary.
+> Cập nhật ngày 10/09/2026. Cây chỉ liệt kê cấu trúc nghiệp vụ chính; bỏ qua `.venv`, `node_modules`, `dist`, cache, file runtime và model binary.
 
 ```text
 SportHub AI/
 ├── README.md
 ├── docs/
+│   ├── AI/
+│   │   └── knowledge/                 # Static Knowledge Base Markdown files (customer.md, general.md) cho RAG
+│   ├── AI_SYSTEM.md
+│   ├── AI_ASSISTANT_ARCHITECTURE_REPORT.md
+│   ├── AI_EVALUATION.md
 │   ├── Chucnang.md
 │   ├── FUNCTIONAL_HIERARCHY.md
 │   ├── API.md
@@ -101,3 +106,4 @@ SportHub AI/
 | Payment/invoice | `payments.py`, `payment_service.py`, `invoice.py` | trang payment, receipt và booking detail |
 | Notification | `notifications.py`, `notification_service.py`, `notification.py` | `NotificationBell.tsx`, `NotificationsPage.tsx` |
 | AI/analytics | `ai/`, AI/analytics services và repositories | `AIAssistantPage.tsx`, management AI/revenue pages |
+| RAG / Knowledge Base | `rag_guardrail.py`, `knowledge_retriever.py`, `knowledge_service.py`, `knowledge_repository.py`, `docs/AI/knowledge/` | `AIAssistantPage.tsx` (static answer card/actions) |

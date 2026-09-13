@@ -194,6 +194,41 @@ class IntentRouterTests(unittest.TestCase):
         })
         self.assertEqual(result.intent, AssistantIntent.PAYMENT_SUPPORT)
 
+    def test_nlu_001_evening_time_range(self):
+        result = self.route('tối mai 7 đến 9 giờ')
+        self.assertEqual(result.entities.start_time, '19:00')
+        self.assertEqual(result.entities.end_time, '21:00')
+        self.assertEqual(result.entities.preferred_time, 'evening')
+
+    def test_nlu_002_reschedule_without_booking_code(self):
+        for phrase in ('Tôi muốn đổi lịch', 'Tôi muốn dời lịch', 'đổi lịch', 'cho tôi đổi lịch'):
+            with self.subTest(phrase=phrase):
+                result = self.route(phrase)
+                self.assertEqual(result.intent, AssistantIntent.RESCHEDULE_BOOKING)
+                self.assertGreaterEqual(result.confidence, 0.95)
+
+    def test_nlu_003_den_preposition_not_lighting(self):
+        q = 'Tìm sân cầu lông từ 7 đến 9 giờ tối'
+        result = self.route(q)
+        self.assertEqual(result.entities.start_time, '19:00')
+        self.assertEqual(result.entities.end_time, '21:00')
+        reqs = AIAssistantService._special_requirements(q.lower())
+        self.assertNotIn('đèn chiếu sáng', reqs)
+
+        q_light = 'Tìm sân cầu lông có đèn chiếu sáng'
+        reqs_light = AIAssistantService._special_requirements(q_light.lower())
+        self.assertIn('đèn chiếu sáng', reqs_light)
+
+    def test_nlu_004_cancel_booking_with_don(self):
+        for phrase in ('Hủy đơn SH-1001', 'Tôi muốn hủy đơn', 'Hủy đơn này', 'hủy đơn đặt sân'):
+            with self.subTest(phrase=phrase):
+                result = self.route(phrase)
+                self.assertEqual(result.intent, AssistantIntent.CANCEL_BOOKING)
+
+    def test_nlu_005_location_dai_hoc_quoc_gia(self):
+        result = self.route('Tìm sân bóng ở Đại học Quốc gia')
+        self.assertEqual(result.entities.location, 'Dai Hoc Quoc Gia')
+
 
 if __name__ == '__main__':
     unittest.main()

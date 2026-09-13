@@ -1,5 +1,6 @@
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -8,9 +9,9 @@ from ..models.field import Booking, BookingSlot, Field
 from ..models.facility import Facility
 from ..models.time_slot import TimeSlot
 from ..models.user import User
-from ..models.payment import Payment
+from ..models.payment import EscrowStatus, Payment, PaymentStatus, PaymentType
 from ..models.product import BookingProductItem
-from ..models.refund import BookingActivity
+from ..models.refund import BookingActivity, RefundRequest, RefundStatus
 from ..models.operations import FieldBlock
 from ..models.maintenance import FieldMaintenance
 from ..core.config import settings
@@ -23,7 +24,9 @@ class BookingRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, owner_id: int | None = None, include_legacy_unowned: bool = False):
+    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, amenities: list[str] | None = None, owner_id: int | None = None, include_legacy_unowned: bool = False):
+        from sqlalchemy import String
+        from ..models.product import FacilityProduct, ProductStatus
         field_filters = [
             Field.status == 'available',
             or_(Field.facility_id.is_(None), Field.facility.has(and_(Facility.is_active.is_(True), Facility.status == 'APPROVED'))),
@@ -50,6 +53,26 @@ class BookingRepository:
                     Facility.name.ilike(loc_term),
                 ))
             ))
+        if amenities:
+            for amenity in amenities:
+                if not amenity or not amenity.strip():
+                    continue
+                name_clean = amenity.strip()
+                prod_subquery = (
+                    select(FacilityProduct.facility_id)
+                    .where(
+                        or_(
+                            FacilityProduct.name == name_clean,
+                            func.lower(FacilityProduct.name) == name_clean.lower(),
+                            FacilityProduct.name.ilike(name_clean),
+                        ),
+                        FacilityProduct.status == ProductStatus.ACTIVE.value,
+                    )
+                )
+                field_filters.append(or_(
+                    Field.facility_id.in_(prod_subquery),
+                    func.cast(Field.amenities, String).ilike(f'%"{name_clean}"%'),
+                ))
         if owner_id is not None:
             field_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
         fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*field_filters).order_by(Field.name)).all())
@@ -66,6 +89,26 @@ class BookingRepository:
                 relaxed_filters.append(Field.id == field_id)
             if search:
                 relaxed_filters.append(Field.name.ilike(f'%{search.strip()}%'))
+            if amenities:
+                for amenity in amenities:
+                    if not amenity or not amenity.strip():
+                        continue
+                    name_clean = amenity.strip()
+                    prod_subquery = (
+                        select(FacilityProduct.facility_id)
+                        .where(
+                            or_(
+                                FacilityProduct.name == name_clean,
+                                func.lower(FacilityProduct.name) == name_clean.lower(),
+                                FacilityProduct.name.ilike(name_clean),
+                            ),
+                            FacilityProduct.status == ProductStatus.ACTIVE.value,
+                        )
+                    )
+                    relaxed_filters.append(or_(
+                        Field.facility_id.in_(prod_subquery),
+                        func.cast(Field.amenities, String).ilike(f'%"{name_clean}"%'),
+                    ))
             if owner_id is not None:
                 relaxed_filters.append(or_(Field.owner_id == owner_id, Field.owner_id.is_(None)) if include_legacy_unowned else Field.owner_id == owner_id)
             all_fields = list(self.db.scalars(select(Field).options(joinedload(Field.facility)).where(*relaxed_filters).order_by(Field.name)).all())
@@ -83,6 +126,20 @@ class BookingRepository:
                 )]
         if not fields:
             return []
+        facility_ids = [f.facility_id for f in fields if f.facility_id]
+        if facility_ids:
+            active_prods = self.db.execute(
+                select(FacilityProduct.facility_id, FacilityProduct.name).where(
+                    FacilityProduct.facility_id.in_(facility_ids),
+                    FacilityProduct.status == ProductStatus.ACTIVE.value,
+                )
+            ).all()
+            fac_prod_map = {}
+            for fac_id, prod_name in active_prods:
+                fac_prod_map.setdefault(fac_id, set()).add(prod_name)
+            for f in fields:
+                if f.facility_id and f.facility_id in fac_prod_map:
+                    f.amenities = list(set((f.amenities or []) + list(fac_prod_map[f.facility_id])))
         field_ids = [field.id for field in fields]
         slots = list(self.db.scalars(select(TimeSlot).where(TimeSlot.field_id.in_(field_ids), TimeSlot.is_active.is_(True)).order_by(TimeSlot.start_time)).all())
         now = datetime.now(timezone.utc)
@@ -162,9 +219,14 @@ class BookingRepository:
             self.db.execute(text('BEGIN IMMEDIATE'))
 
     def release_expired_holds(self) -> int:
-        expired = list(self.db.scalars(select(Booking).where(
+        now = datetime.now(timezone.utc)
+        expired = list(self.db.scalars(select(Booking).options(
+            selectinload(Booking.payments),
+            selectinload(Booking.product_items),
+            selectinload(Booking.refund_request),
+        ).where(
             Booking.status == 'pending_payment',
-            Booking.hold_expires_at <= datetime.now(timezone.utc),
+            Booking.hold_expires_at <= now,
         )).all())
         if not expired:
             # End the read transaction so SQLite can acquire BEGIN IMMEDIATE
@@ -182,6 +244,66 @@ class BookingRepository:
                 inventory.release(item)
             booking.status = 'expired'
             booking.hold_expires_at = None
+
+            # CRIT-002: Check if customer has already paid deposit or payments
+            paid_sum = sum((
+                Decimal(p.amount) for p in booking.payments
+                if p.status == PaymentStatus.PAID.value and p.payment_type != PaymentType.REFUND.value
+            ), Decimal(0))
+            if paid_sum > 0 and booking.refund_request is None:
+                # Update paid payments' escrow and refund status
+                for p in booking.payments:
+                    if p.status == PaymentStatus.PAID.value and p.payment_type != PaymentType.REFUND.value:
+                        p.refund_status = RefundStatus.REFUND_PENDING.value
+                        p.payment_status = RefundStatus.REFUND_PENDING.value
+                self.db.flush()
+                refund_pmt = Payment(
+                    booking_id=booking.id,
+                    customer_id=booking.customer_id,
+                    owner_id=booking.field.owner_id if booking.field else None,
+                    transaction_code=f'REF-{datetime.now():%y%m%d}-{uuid4().hex[:8].upper()}',
+                    amount=paid_sum,
+                    total_amount=booking.total_amount,
+                    deposit_amount=booking.deposit_amount,
+                    remaining_amount=0,
+                    paid_amount=booking.paid_amount,
+                    payment_status=RefundStatus.REFUND_PENDING.value,
+                    payment_method='bank_transfer',
+                    payment_type=PaymentType.REFUND.value,
+                    status=PaymentStatus.PENDING.value,
+                    provider='manual_refund',
+                    refund_status=RefundStatus.REFUND_PENDING.value,
+                    note='Hoàn tiền do dời lịch quá thời gian giữ chỗ thanh toán',
+                )
+                self.db.add(refund_pmt)
+                self.db.flush()
+                refund_req = RefundRequest(
+                    booking_id=booking.id,
+                    refund_payment_id=refund_pmt.id,
+                    amount=paid_sum,
+                    status=RefundStatus.REFUND_PENDING.value,
+                    reason='Quá thời gian thanh toán khi đổi lịch (hold expired)',
+                    requested_by=booking.customer_id,
+                    requested_at=now,
+                    due_at=now + timedelta(days=3),
+                )
+                self.db.add(refund_req)
+                booking.refund_status = RefundStatus.REFUND_PENDING.value
+                booking.payment_status = RefundStatus.REFUND_PENDING.value
+                booking.refund_amount = paid_sum
+                self.db.add(BookingActivity(
+                    booking_id=booking.id,
+                    actor_id=booking.customer_id,
+                    actor_role='SYSTEM',
+                    action='hold_expired_refund_initiated',
+                    from_status='pending_payment',
+                    to_status='expired',
+                    details={
+                        'reason': 'hold_expired_with_paid_deposit',
+                        'refund_amount': float(paid_sum),
+                        'refund_request_id': refund_req.id,
+                    },
+                ))
         self.db.commit()
         return len(expired)
 

@@ -50,7 +50,7 @@ class DemoSeedTests(unittest.TestCase):
             second_catalog_count = session.scalar(select(func.count(ProductCatalogItem.id)))
             self.assertEqual(first, second)
             self.assertEqual(first, (3, 3, 3, 9, 3, 3, 1, 1, 1))
-            self.assertEqual(first_catalog_count, 47)
+            self.assertEqual(first_catalog_count, 43)
             self.assertEqual(second_catalog_count, first_catalog_count)
             self.assertEqual(session.scalar(select(func.count(Field.id)).where(Field.facility_id.is_(None))), 0)
             self.assertEqual(session.scalar(select(func.count(TimeSlot.id)).where(
@@ -62,7 +62,7 @@ class DemoSeedTests(unittest.TestCase):
         with self.Session() as session:
             seed_demo_db(session)
             seed_demo_db(session)
-            self.assertEqual(session.scalar(select(func.count(ProductCatalogItem.id))), 47)
+            self.assertEqual(session.scalar(select(func.count(ProductCatalogItem.id))), 43)
             self.assertEqual(session.scalar(select(func.count(User.id))), 0)
 
     @staticmethod

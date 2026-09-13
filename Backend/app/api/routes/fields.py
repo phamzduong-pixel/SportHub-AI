@@ -22,14 +22,16 @@ def list_fields(
     search: str | None = Query(default=None, max_length=120),
     sport_type: str | None = Query(default=None, max_length=80),
     status: FieldStatus | None = None,
+    amenities: list[str] | None = Query(default=None),
+    public: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=12, ge=1, le=100),
     current_user: User | None = Depends(get_field_viewer),
     service: FieldService = Depends(get_service),
 ):
     items, total = service.list_for_user(
-        current_user, search=search, sport_type=sport_type,
-        status=status.value if status else None, page=page, page_size=page_size,
+        current_user, public=public, search=search, sport_type=sport_type,
+        status=status.value if status else None, amenities=amenities, page=page, page_size=page_size,
     )
     return FieldListResponse.from_result(items, total, page, page_size)
 

@@ -1,31 +1,83 @@
 from datetime import datetime, time, timedelta, timezone, date
+from decimal import Decimal
 import pytest
-from sqlalchemy import select
+from fastapi.testclient import TestClient
+from sqlalchemy import select, create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.database.base import Base
+from app.database.session import get_db
+from app.main import app
 from app.models.field import Booking, BookingStatus, Field, BookingSlot
 from app.models.facility import Facility
 from app.models.user import User
 from app.api.dependencies import get_current_user, require_owner
 
 @pytest.fixture
+def db():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+@pytest.fixture
+def client(db):
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+@pytest.fixture
 def owner(db):
-    user = User(email="owner_start@test.com", password_hash="hash", full_name="Owner", role="OWNER", is_active=True, phone="0999999999")
+    user = User(email="owner_start@test.com", hashed_password="hash", full_name="Owner", role="OWNER", is_active=True, phone="0999999999")
     db.add(user)
     db.commit()
     return user
 
 @pytest.fixture
 def field(db, owner):
-    facility = Facility(name="Facility Start", address="Address", owner_id=owner.id, status="APPROVED", is_active=True, city_id=1, district_id=1)
+    facility = Facility(name="Facility Start", location="Address", owner_id=owner.id, status="APPROVED", is_active=True)
     db.add(facility)
     db.flush()
-    field = Field(facility_id=facility.id, owner_id=owner.id, name="Sân Start", status="available")
+    field = Field(
+        facility_id=facility.id,
+        owner_id=owner.id,
+        name="Sân Start",
+        sport_type="Bóng đá",
+        location="Address",
+        capacity=10,
+        base_price=100000,
+        status="available",
+    )
     db.add(field)
+    db.flush()
+    from app.models.time_slot import TimeSlot
+    slot = TimeSlot(
+        id=1,
+        field_id=field.id,
+        name="Ca 1",
+        start_time=time(6, 0),
+        end_time=time(23, 0),
+        price=Decimal("100"),
+        is_active=True,
+    )
+    db.add(slot)
     db.commit()
     return field
 
 def test_early_start_requires_confirm(client, db, owner, field):
-    now = datetime.now(timezone.utc)
+    tz = timezone(timedelta(hours=7))
+    now = datetime.now(tz)
     future_time = (now + timedelta(hours=2)).time()
     
     booking = Booking(
@@ -57,7 +109,9 @@ def test_early_start_requires_confirm(client, db, owner, field):
     client.app.dependency_overrides.clear()
 
 def test_noshow_early_fails(client, db, owner, field):
-    now = datetime.now(timezone.utc)
+    tz = timezone(timedelta(hours=7))
+    now = datetime.now(tz)
+    future_time = (now + timedelta(hours=1)).time()
     
     booking = Booking(
         booking_code="NOSHOW01",
@@ -65,8 +119,8 @@ def test_noshow_early_fails(client, db, owner, field):
         field_id=field.id,
         time_slot_id=1,
         booking_date=now.date(),
-        start_time_snapshot=now.time(),
-        end_time_snapshot=(now + timedelta(hours=1)).time(),
+        start_time_snapshot=future_time,
+        end_time_snapshot=(now + timedelta(hours=2)).time(),
         price_snapshot=100, total_amount=100, deposit_amount=0, paid_amount=0, remaining_amount=100,
         status=BookingStatus.CONFIRMED.value
     )

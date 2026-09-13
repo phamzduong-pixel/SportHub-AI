@@ -11,10 +11,12 @@ class FieldService:
     def __init__(self, repository: FieldRepository):
         self.repository = repository
 
-    def list_for_user(self, user: User | None, **filters):
-        if user is None or user.role == 'CUSTOMER':
+    def list_for_user(self, user: User | None, public: bool = False, **filters):
+        if public or user is None or user.role == 'CUSTOMER':
             filters['status'] = FieldStatus.AVAILABLE.value
             filters['facility_active'] = True
+        elif user.role == 'SYSTEM_ADMIN':
+            pass
         else:
             owner_id = management_owner_id(user, self.repository.db)
             if owner_id is None:

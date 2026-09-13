@@ -1,4 +1,4 @@
-import { BarChart3, Building2, CalendarCheck2, Eye, LogOut, MoreVertical, Pencil, Plus, Search, ShieldCheck, Trash2, UserCog, Users } from 'lucide-react';
+import { BarChart3, Building2, CalendarCheck2, Eye, Lock, LogOut, MoreVertical, Pencil, Plus, Search, ShieldCheck, Trash2, Unlock, UserCog, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Badge, Button, ConfirmDialog, Dropdown, EmptyState, Input, LoadingSkeleton, Modal, useToast } from '@/components/common';
@@ -54,8 +54,60 @@ export function SystemAdminPage() {
   const signOut = () => { logout(); navigate('/login', { replace: true }); };
   if (loading) return <div className="mx-auto max-w-7xl p-6"><LoadingSkeleton lines={10} /></div>;
 
-  return <div className="min-h-screen bg-slate-50"><header className="border-b bg-slate-950 text-white"><div className="mx-auto flex min-h-16 max-w-7xl items-center gap-3 px-4 py-2 sm:px-6"><span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400"><ShieldCheck size={22} /></span><div className="min-w-0"><b className="block truncate">Quản trị SportHub</b><p className="truncate text-xs text-slate-400">{user?.full_name} · Quản trị nền tảng</p></div><Button variant="ghost" className="ml-auto !text-white" leftIcon={<LogOut size={16} />} onClick={signOut}><span className="hidden sm:inline">Đăng xuất</span></Button></div></header>
-    <div className="border-b bg-white"><nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-3 py-2 sm:px-6" aria-label="Khu vực quản trị">{tabs.map(({ id, label, icon: Icon }) => <button key={id} onClick={() => setTab(id)} className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold transition ${tab === id ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-50'}`}><Icon size={17} />{label}</button>)}<Link to="/system-admin/partner-applications" className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50 hover:text-brand-700"><UserCog size={17} />Hồ sơ đối tác{pending.length > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700">{pending.length}</span>}</Link><Link to="/system-admin/facility-applications" className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-sm font-semibold text-slate-500 hover:bg-slate-50 hover:text-brand-700"><Building2 size={17} />Duyệt cơ sở</Link></nav></div>
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b bg-slate-950 text-white">
+        <div className="mx-auto flex min-h-16 max-w-7xl items-center gap-3 px-4 py-2 sm:px-6">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400">
+            <ShieldCheck size={22} />
+          </span>
+          <div className="min-w-0">
+            <b className="block truncate">Quản trị SportHub</b>
+            <p className="truncate text-xs text-slate-400">{user?.full_name} · Quản trị nền tảng</p>
+          </div>
+          <Button variant="ghost" className="ml-auto !text-white" leftIcon={<LogOut size={16} />} onClick={signOut}>
+            <span className="hidden sm:inline">Đăng xuất</span>
+          </Button>
+        </div>
+      </header>
+
+      <div className="border-b border-slate-200 bg-white shadow-sm">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6">
+          <nav className="flex gap-1 overflow-x-auto py-2" aria-label="Khu vực quản trị">
+            {tabs.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={`inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3.5 text-sm font-semibold transition ${
+                  tab === id ? 'bg-brand-50 text-brand-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`}
+              >
+                <Icon size={17} />
+                {label}
+              </button>
+            ))}
+            <Link
+              to="/system-admin/partner-applications"
+              className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-brand-700"
+            >
+              <UserCog size={17} />
+              Hồ sơ đối tác
+              {pending.length > 0 && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+                  {pending.length}
+                </span>
+              )}
+            </Link>
+            <Link
+              to="/system-admin/facility-applications"
+              className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 hover:text-brand-700"
+            >
+              <Building2 size={17} />
+              Duyệt cơ sở
+            </Link>
+          </nav>
+        </div>
+      </div>
 
     <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 sm:py-8">
       {tab === 'overview' && <><SectionHeading title="Tổng quan hệ thống" description="Dữ liệu vận hành thật trên toàn nền tảng SportHub." /><MetricGrid summary={summary} />
@@ -71,14 +123,15 @@ export function SystemAdminPage() {
       <UserDetail user={selected} onClose={() => setSelected(undefined)} />
       <ConfirmDialog open={Boolean(deleting)} onClose={() => setDeleting(undefined)} onConfirm={() => void deleteUser()} danger title="Xóa tài khoản?" description="Tài khoản sẽ bị vô hiệu hóa, dữ liệu lịch sử vẫn được giữ nguyên." confirmLabel="Xóa tài khoản" />
     </main>
-  </div>;
+    </div>
+  );
 }
 
 function SectionHeading({ title, description }: { title: string; description: string }) { return <div><h1 className="text-2xl font-black tracking-tight text-slate-900">{title}</h1><p className="mt-1 text-sm text-slate-500">{description}</p></div>; }
 function MetricGrid({ summary }: { summary?: AdminSummary }) { if (!summary) return null; return <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7"><Metric icon={<Users />} label="Tổng người dùng" value={summary.total_users} /><Metric icon={<Users />} label="CUSTOMER" value={summary.customers} /><Metric icon={<Building2 />} label="OWNER" value={summary.owners} /><Metric icon={<Building2 />} label="Cơ sở / Sân" value={`${summary.facilities} / ${summary.fields}`} /><Metric icon={<UserCog />} label="Đối tác chờ duyệt" value={summary.pending_applications} /><Metric icon={<Building2 />} label="Cơ sở chờ duyệt" value={summary.pending_facilities} /><Metric icon={<CalendarCheck2 />} label="Booking" value={summary.bookings} /></section>; }
 function Metric({ icon, label, value }: { icon: ReactNode; label: string; value: number | string }) { return <article className="rounded-2xl border bg-white p-4 shadow-sm"><span className="text-brand-600 [&>svg]:h-5 [&>svg]:w-5">{icon}</span><p className="mt-3 text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</p><strong className="mt-1 block text-2xl text-slate-900">{value}</strong></article>; }
-function UserTable({ items, currentUserId, onStatus, onView, onEdit, onDelete }: { items: AuthUser[]; currentUserId?: number; onStatus: (item: AuthUser) => void; onView: (item: AuthUser) => void; onEdit: (item: AuthUser) => void; onDelete: (item: AuthUser) => void }) { return <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">{items.length ? <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-slate-50"><tr>{['Người dùng','Vai trò','Ngày tạo','Trạng thái',''].map((label) => <th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{items.map((item) => { const actions = item.id === currentUserId ? [{ label: 'Xem chi tiết', icon: <Eye size={15} />, onClick: () => onView(item) }] : [{ label: 'Xem chi tiết', icon: <Eye size={15} />, onClick: () => onView(item) }, { label: 'Chỉnh sửa', icon: <Pencil size={15} />, onClick: () => onEdit(item) }, { label: item.is_active ? 'Khóa tài khoản' : 'Mở khóa tài khoản', onClick: () => onStatus(item) }, { label: 'Xóa tài khoản', icon: <Trash2 size={15} />, danger: true, onClick: () => onDelete(item) }]; return <tr key={item.id} className="border-t"><td className="px-5 py-3"><b>{item.full_name}</b><small className="block text-slate-500">{item.email}</small></td><td className="px-5 py-3"><Badge>{roleLabel[item.role]}</Badge></td><td className="px-5 py-3">{new Date(item.created_at).toLocaleDateString('vi-VN')}</td><td className="px-5 py-3"><Badge variant={item.is_active ? 'success' : 'danger'}>{item.is_active ? 'Hoạt động' : 'Đã khóa'}</Badge></td><td className="px-5 py-3 text-right"><Dropdown trigger={<MoreVertical size={18} />} items={actions} /></td></tr>; })}</tbody></table></div> : <EmptyState title="Không có người dùng phù hợp" description="Hãy thay đổi bộ lọc tìm kiếm." />}</section>; }
+function UserTable({ items, currentUserId, onStatus, onView, onEdit, onDelete }: { items: AuthUser[]; currentUserId?: number; onStatus: (item: AuthUser) => void; onView: (item: AuthUser) => void; onEdit: (item: AuthUser) => void; onDelete: (item: AuthUser) => void }) { return <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">{items.length ? <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-slate-50"><tr>{['Người dùng','Vai trò','Ngày tạo','Trạng thái',''].map((label) => <th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{items.map((item) => { const actions = item.id === currentUserId ? [{ label: 'Xem chi tiết', icon: <Eye size={15} />, onClick: () => onView(item) }] : [{ label: 'Xem chi tiết', icon: <Eye size={15} />, onClick: () => onView(item) }, { label: 'Chỉnh sửa', icon: <Pencil size={15} />, onClick: () => onEdit(item) }, { label: item.is_active ? 'Khóa tài khoản' : 'Mở khóa tài khoản', icon: item.is_active ? <Lock size={15} /> : <Unlock size={15} />, onClick: () => onStatus(item) }, { label: 'Xóa tài khoản', icon: <Trash2 size={15} />, danger: true, onClick: () => onDelete(item) }]; return <tr key={item.id} className="border-t"><td className="px-5 py-3"><b>{item.full_name}</b><small className="block text-slate-500">{item.email}</small></td><td className="px-5 py-3"><Badge>{roleLabel[item.role]}</Badge></td><td className="px-5 py-3">{new Date(item.created_at).toLocaleDateString('vi-VN')}</td><td className="px-5 py-3"><Badge variant={item.is_active ? 'success' : 'danger'}>{item.is_active ? 'Hoạt động' : 'Đã khóa'}</Badge></td><td className="px-5 py-3 text-right"><Dropdown trigger={<MoreVertical size={18} />} items={actions} /></td></tr>; })}</tbody></table></div> : <EmptyState title="Không có người dùng phù hợp" description="Hãy thay đổi bộ lọc tìm kiếm." />}</section>; }
 function UserDetail({ user, onClose }: { user?: AuthUser; onClose: () => void }) { return <Modal open={Boolean(user)} onClose={onClose} title="Chi tiết tài khoản">{user && <div className="space-y-3 text-sm"><p><b>Họ tên:</b> {user.full_name}</p><p><b>Email:</b> {user.email}</p><p><b>Điện thoại:</b> {user.phone || 'Chưa cập nhật'}</p><p><b>Vai trò:</b> {roleLabel[user.role]}</p><p><b>Trạng thái:</b> {user.is_active ? 'Hoạt động' : 'Đã khóa'}</p></div>}</Modal>; }
 function UserForm({ open, user, onClose, onSave }: { open: boolean; user?: AuthUser; onClose: () => void; onSave: (payload: Record<string, unknown>) => void }) { const [form, setForm] = useState({ full_name:'', email:'', phone:'', password:'', role:'CUSTOMER' }); useEffect(() => setForm({ full_name:user?.full_name || '', email:user?.email || '', phone:user?.phone || '', password:'', role:user?.role === 'OWNER' ? 'OWNER' : 'CUSTOMER' }), [user, open]); return <Modal open={open} onClose={onClose} title={user ? 'Chỉnh sửa tài khoản' : 'Thêm tài khoản'}><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); const payload: Record<string, unknown> = { full_name:form.full_name, email:form.email, phone:form.phone, role:form.role }; if (!user) payload.password=form.password; onSave(payload); }}><Input required label="Họ tên" value={form.full_name} onChange={(e) => setForm({...form, full_name:e.target.value})}/><Input required type="email" label="Email" value={form.email} onChange={(e) => setForm({...form, email:e.target.value})}/><Input required label="Số điện thoại" value={form.phone} onChange={(e) => setForm({...form, phone:e.target.value})}/>{!user && <Input required type="password" minLength={8} label="Mật khẩu ban đầu" value={form.password} onChange={(e) => setForm({...form, password:e.target.value})}/>}<label className="block text-sm">Vai trò<select className="field mt-1 w-full" value={form.role} onChange={(e) => setForm({...form, role:e.target.value})}><option value="CUSTOMER">CUSTOMER</option><option value="OWNER">OWNER</option></select></label><div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose}>Hủy</Button><Button type="submit">Lưu</Button></div></form></Modal>; }
-function OwnerTable({ items, onStatus }: { items: AdminOwner[]; onStatus: (item: AdminOwner) => void }) { return <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">{items.length ? <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-slate-50"><tr>{['Đối tác', 'Ngày duyệt', 'Cơ sở', 'Sân', 'Trạng thái', ''].map((label) => <th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t"><td className="px-5 py-3"><b>{item.full_name}</b><small className="block text-slate-500">{item.email}</small></td><td className="px-5 py-3 text-slate-500">{item.approved_at ? new Date(item.approved_at).toLocaleDateString('vi-VN') : 'Tài khoản OWNER khởi tạo'}</td><td className="px-5 py-3 font-semibold">{item.facility_count}</td><td className="px-5 py-3 font-semibold">{item.field_count}</td><td className="px-5 py-3"><Badge variant={item.is_active ? 'success' : 'danger'}>{item.is_active ? 'Hoạt động' : 'Đã khóa'}</Badge></td><td className="px-5 py-3 text-right"><Button size="sm" variant={item.is_active ? 'danger' : 'outline'} onClick={() => onStatus(item)}>{item.is_active ? 'Khóa' : 'Mở khóa'}</Button></td></tr>)}</tbody></table></div> : <EmptyState title="Chưa có OWNER" description="OWNER xuất hiện sau khi hồ sơ đối tác được duyệt." />}</section>; }
+function OwnerTable({ items, onStatus }: { items: AdminOwner[]; onStatus: (item: AdminOwner) => void }) { return <section className="overflow-hidden rounded-2xl border bg-white shadow-sm">{items.length ? <div className="overflow-x-auto"><table className="w-full min-w-[780px] text-left text-sm"><thead className="bg-slate-50"><tr>{['Đối tác', 'Ngày duyệt', 'Cơ sở', 'Sân', 'Trạng thái', ''].map((label) => <th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{items.map((item) => <tr key={item.id} className="border-t"><td className="px-5 py-3"><b>{item.full_name}</b><small className="block text-slate-500">{item.email}</small></td><td className="px-5 py-3 text-slate-500">{item.approved_at ? new Date(item.approved_at).toLocaleDateString('vi-VN') : 'Tài khoản OWNER khởi tạo'}</td><td className="px-5 py-3 font-semibold">{item.facility_count}</td><td className="px-5 py-3 font-semibold">{item.field_count}</td><td className="px-5 py-3"><Badge variant={item.is_active ? 'success' : 'danger'}>{item.is_active ? 'Hoạt động' : 'Đã khóa'}</Badge></td><td className="px-5 py-3 text-right"><Button size="sm" variant={item.is_active ? 'danger' : 'outline'} leftIcon={item.is_active ? <Lock size={14} /> : <Unlock size={14} />} onClick={() => onStatus(item)}>{item.is_active ? 'Khóa' : 'Mở khóa'}</Button></td></tr>)}</tbody></table></div> : <EmptyState title="Chưa có OWNER" description="OWNER xuất hiện sau khi hồ sơ đối tác được duyệt." />}</section>; }
 function StatPanel({ title, rows }: { title: string; rows: [string, number][] }) { const total = rows.reduce((sum, [, value]) => sum + value, 0); return <section className="rounded-2xl border bg-white p-5 shadow-sm"><h2 className="font-bold text-slate-900">{title}</h2><div className="mt-5 space-y-4">{rows.map(([label, value]) => <div key={label}><div className="mb-1 flex justify-between text-sm"><span className="text-slate-600">{label}</span><b>{value}</b></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-brand-500" style={{ width: `${total ? Math.max(4, value / total * 100) : 0}%` }} /></div></div>)}</div></section>; }

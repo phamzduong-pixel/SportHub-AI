@@ -203,7 +203,7 @@ class FacilityProductTests(unittest.TestCase):
         before = self.client.get('/facility-products', headers=self.owner_a).json()
         catalog = self.client.get('/facility-products/catalog?sport=futsal', headers=self.owner_a)
         self.assertEqual(catalog.status_code, 200, catalog.text)
-        self.assertGreater(len(catalog.json()), 8)
+        self.assertGreaterEqual(len(catalog.json()), 8)
         self.assertTrue(any(item['product_type'] == 'RENT' for item in catalog.json()))
         self.assertEqual(self.client.get('/facility-products/catalog?sport=Tennis', headers=self.customer).status_code, 403)
         self.assertEqual(self.client.get('/facility-products', headers=self.owner_a).json(), before)

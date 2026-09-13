@@ -39,9 +39,24 @@ của mình; OWNER chỉ thấy cơ sở thuộc mình; SYSTEM_ADMIN chỉ xem d
 
 
 OUT_OF_SCOPE_REPLY = (
-    'Xin lỗi, tôi là trợ lý chuyên biệt của SportHub AI nên chỉ có thể hỗ trợ các vấn đề '
-    'liên quan đến tìm sân, đặt sân, lịch trống, giá, thanh toán và các chức năng trong hệ '
-    'thống. Bạn có thể hỏi tôi về sân hoặc lịch đặt mà bạn đang quan tâm.'
+    "Xin lỗi bạn, tôi là trợ lý chuyên biệt của SportHub AI nên chỉ hỗ trợ các thông tin liên quan đến:\n"
+    "- Tìm kiếm sân và kiểm tra lịch trống\n"
+    "- Giá sân và tiện ích đi kèm\n"
+    "- Hướng dẫn đặt sân, đổi lịch, hủy lịch\n"
+    "- Quy trình thanh toán và tài khoản SportHub\n"
+    "- Hướng dẫn dành cho chủ sân (Owner)\n\n"
+    "Bạn có thể thử các câu hỏi như:\n"
+    "- 'Tìm sân cầu lông tối nay ở Cầu Giấy'\n"
+    "- 'Sân bóng đá nào còn trống sau 18h?'\n"
+    "- 'Làm thế nào để đổi lịch đặt sân?'\n\n"
+    "Tôi có thể giúp gì cho bạn về các dịch vụ trên?"
+)
+
+COMBINED_OUT_OF_SCOPE_REPLY = (
+    "Xin lỗi bạn, tôi là trợ lý chuyên biệt của SportHub AI nên chỉ có thể hỗ trợ bạn tìm sân và dịch vụ thể thao trong hệ thống. "
+    "Tôi không thể hỗ trợ các nội dung ngoài phạm vi này. "
+    "Bạn có muốn tôi kiểm tra lại lịch sân hoặc gợi ý sân gần bạn không?"
 )
 
 NO_DATA_REPLY = 'Hiện tôi chưa tìm thấy dữ liệu phù hợp với yêu cầu này trong SportHub AI.'
+

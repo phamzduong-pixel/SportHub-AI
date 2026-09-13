@@ -21,7 +21,10 @@ class TimeSlotTests(unittest.TestCase):
         self.TestingSession = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
         Base.metadata.create_all(self.engine)
         with self.TestingSession() as db:
+            owner = User(full_name='Owner', email='slotowner@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value)
+            db.add(owner); db.flush()
             field = Field(
+                owner_id=owner.id,
                 name='Sân kiểm thử', sport_type='Bóng đá', location='Quận 1',
                 capacity=22, base_price=Decimal('300000'), status=FieldStatus.AVAILABLE.value,
                 amenities=[],
@@ -29,7 +32,6 @@ class TimeSlotTests(unittest.TestCase):
             operator = User(full_name='Slot Operator', email='slotoperator@test.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value)
             db.add_all([
                 field,
-                User(full_name='Owner', email='slotowner@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value),
                 operator,
                 User(full_name='No Permission', email='nopermission@test.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value),
                 User(full_name='Customer', email='slotcustomer@test.local', hashed_password=get_password_hash('Customer@123'), role=UserRole.CUSTOMER.value),

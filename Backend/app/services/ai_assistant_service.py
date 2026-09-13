@@ -12,8 +12,11 @@ from ..repositories.ai_repository import AIRepository
 from ..schemas.ai import SlotRecommendationRequest
 from .ai_feature_service import AIFeatureService
 from .inventory_service import InventoryService
-from .ai_domain_policy import NO_DATA_REPLY, OUT_OF_SCOPE_REPLY, ScopeClassification
+from .ai_domain_policy import COMBINED_OUT_OF_SCOPE_REPLY, NO_DATA_REPLY, OUT_OF_SCOPE_REPLY, ScopeClassification
 from .ai_intent_router import AssistantIntent, IntentRoute, IntentRouter
+from .rag_guardrail import RAGGuardrail
+from .rag_response_validator import validate_response
+from .ai_system_knowledge import match_system_knowledge
 
 
 SPORT_ALIASES = {
@@ -29,7 +32,8 @@ WEEKDAYS = {
 SPECIAL_REQUIREMENTS = {
     'mai che': 'mái che', 'trong nha': 'trong nhà', 'ngoai troi': 'ngoài trời',
     'bai xe': 'bãi xe', 'giu xe': 'bãi xe', 'phong thay do': 'phòng thay đồ',
-    'den': 'đèn chiếu sáng', 'dieu hoa': 'điều hòa', 'tam': 'phòng tắm',
+    'den chieu sang': 'đèn chiếu sáng', 'he thong den': 'đèn chiếu sáng',
+    'dieu hoa': 'điều hòa', 'tam': 'phòng tắm',
 }
 logger = logging.getLogger(__name__)
 
@@ -84,31 +88,70 @@ class AIAssistantService:
         logger.info('Assistant intent=%s confidence=%.2f', route.intent.value, route.confidence)
 
         if route.intent == AssistantIntent.OUT_OF_SCOPE:
+            reply_text = COMBINED_OUT_OF_SCOPE_REPLY if getattr(route, 'is_combined_out_of_scope', False) else OUT_OF_SCOPE_REPLY
             return self._response(
-                OUT_OF_SCOPE_REPLY, SearchCriteria(), [], needs_clarification=False,
+                reply_text, SearchCriteria(), [], needs_clarification=False,
                 classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
             )
         if route.intent == AssistantIntent.GREETING:
             return self._response(
-                'Chào bạn! Tôi là trợ lý chuyên biệt của SportHub AI. Bạn muốn tìm sân, kiểm tra lịch trống hay xem booking nào?',
+                'Xin chào! Tôi là trợ lý chuyên biệt của SportHub AI. Tôi có thể giúp bạn tìm sân, kiểm tra lịch trống hoặc hướng dẫn sử dụng hệ thống. Bạn đang quan tâm đến môn thể thao nào?',
                 SearchCriteria(), [],
             )
         if route.intent == AssistantIntent.UNCLEAR:
+            if any(term in query for term in ('muon dat', 'toi dat', 'dat cho', 'muon dat cho')):
+                clarification_msg = 'Bạn muốn đặt sân môn thể thao nào và ở khu vực nào ạ?'
+            elif any(term in query for term in ('gia the nao', 'gia sao', 'bao nhieu tien')):
+                clarification_msg = 'Bạn muốn tham khảo giá của sân nào hoặc môn thể thao nào?'
+            elif any(term in query for term in ('con khong', 'con cho khong')):
+                clarification_msg = 'Bạn muốn kiểm tra lịch trống của sân nào và vào thời gian nào?'
+            else:
+                clarification_msg = 'Bạn muốn tìm sân, kiểm tra lịch trống hay xem thông tin gì trên SportHub AI? Hãy cho mình biết môn thể thao, khu vực hoặc ngày bạn muốn chơi nhé.'
             return self._response(
-                'Bạn muốn tìm sân, kiểm tra lịch trống hay xem thông tin gì trên SportHub AI? Hãy cho mình biết môn thể thao, khu vực hoặc ngày bạn muốn chơi nhé.',
+                clarification_msg,
                 SearchCriteria(), [], needs_clarification=True, classification=ScopeClassification.UNCLEAR,
                 status='NEED_MORE_DATA',
             )
         if route.intent == AssistantIntent.PARTNER_APPLICATION_SUPPORT:
             return self._answer_partner_application(query)
-        information_intents = {
-            AssistantIntent.GET_BOOKING: 'booking_status',
-            AssistantIntent.PAYMENT_SUPPORT: 'payment',
-            AssistantIntent.ACCOUNT_SUPPORT: 'profile',
-            AssistantIntent.SYSTEM_GUIDE: 'system_help',
+        # Static knowledge intents that can be answered from the Knowledge Base via RAG
+        static_intents = {
+            AssistantIntent.SYSTEM_GUIDE,
+            AssistantIntent.ACCOUNT_SUPPORT,
+            AssistantIntent.PARTNER_APPLICATION_SUPPORT,
+            AssistantIntent.PAYMENT_SUPPORT,
         }
-        if route.intent in information_intents:
-            return self._answer_information(query, information_intents[route.intent])
+        if route.intent in static_intents:
+            role = self.current_user.role if self.current_user else 'CUSTOMER'
+            guardrail = RAGGuardrail()
+            retrieved = guardrail.retrieve_context(query, role, route.intent.name)
+            if retrieved:
+                # Concatenate retrieved answers
+                answer_text = ' '.join(entry.answer for entry, _ in retrieved)
+                answer_text = validate_response(answer_text)
+                # Use suggested_action from the first entry if present
+                first_entry = retrieved[0][0]
+                action = getattr(first_entry, 'suggested_action', None)
+                return self._response(
+                    answer_text,
+                    SearchCriteria(),
+                    [],
+                    classification=ScopeClassification.OUT_OF_SCOPE,
+                    status='OK',
+                    action=action,
+                )
+            # Fallback to existing system knowledge handling
+            information_intents = {
+                AssistantIntent.GET_BOOKING: 'booking_status',
+                AssistantIntent.PAYMENT_SUPPORT: 'payment',
+                AssistantIntent.ACCOUNT_SUPPORT: 'profile',
+                AssistantIntent.SYSTEM_GUIDE: 'system_help',
+            }
+            intent_key = information_intents.get(route.intent)
+            if intent_key:
+                return self._answer_information(query, intent_key)
+        if route.intent == AssistantIntent.GET_BOOKING:
+            return self._answer_information(query, 'booking_status')
         if route.intent in (AssistantIntent.CANCEL_BOOKING, AssistantIntent.RESCHEDULE_BOOKING):
             return self._answer_booking_action(query, route.intent)
         if route.intent == AssistantIntent.OCCUPANCY_INSIGHT:
@@ -461,6 +504,11 @@ class AIAssistantService:
 
     def _answer_partner_application(self, query: str):
         criteria = SearchCriteria()
+        current_role = self.current_user.role if self.current_user else None
+        entry, static_reply, action_dict = match_system_knowledge(query, current_role)
+        if entry and not any(term in query for term in ('cua toi', 'ho so cua')):
+            return self._response(static_reply, criteria, [], action=action_dict)
+
         process = (
             'Quy trình gồm: mở hồ sơ đối tác, nhập thông tin người đại diện (họ tên, điện thoại, email), '
             'thông tin cơ sở dự kiến (tên, địa chỉ/khu vực, mô tả), xác nhận thông tin rồi gửi để SYSTEM_ADMIN xét duyệt. '
@@ -517,6 +565,10 @@ class AIAssistantService:
         booking_code = self._active_route.entities.booking_code if self._active_route else None
         action = 'hủy' if intent == AssistantIntent.CANCEL_BOOKING else 'đổi lịch'
         if not booking_code:
+            current_role = self.current_user.role if self.current_user else None
+            _, static_reply, action_dict = match_system_knowledge(query, current_role)
+            if static_reply:
+                return self._response(static_reply, criteria, [], action=action_dict)
             return self._response(
                 f'Bạn muốn {action} booking nào? Vui lòng cung cấp mã booking SportHub.',
                 criteria, [], needs_clarification=True,
@@ -540,6 +592,13 @@ class AIAssistantService:
 
     def _answer_information(self, query: str, intent: str):
         criteria = SearchCriteria()
+        current_role = self.current_user.role if self.current_user else None
+
+        # Check static knowledge first for system_help, general workflows, or guides
+        entry, static_reply, action_dict = match_system_knowledge(query, current_role)
+        if static_reply:
+            return self._response(static_reply, criteria, [], intent=intent, action=action_dict)
+
         if intent == 'system_help':
             return self._response(
                 'Tôi là trợ lý AI chuyên biệt của SportHub. Tôi có thể giúp bạn: \n• Tìm sân thể thao và kiểm tra lịch trống thực tế theo ngày, giờ, khu vực.\n• Gợi ý khung giờ phù hợp và báo giá niêm yết.\n• Xem thông tin đặt sân và hướng dẫn thanh toán/hủy sân.\n• Phân tích công suất vận hành (dành cho chủ sân OWNER) và hỗ trợ hồ sơ đối tác.',
@@ -637,6 +696,8 @@ class AIAssistantService:
 
     @staticmethod
     def _requests_account_data(query: str) -> bool:
+        if any(term in query for term in ('lam the nao', 'cach', 'huong dan', 'la gi', 'quy trinh')):
+            return False
         return bool(re.search(r'\bSH[- ]?[A-Z0-9-]{3,}\b', query.upper())) or any(
             term in query for term in ('cua toi', 'booking', 'ma dat', 'giao dich gan nhat', 'hoa don cua')
         )
@@ -702,7 +763,7 @@ class AIAssistantService:
             location=extracted_location,
             max_price=self._price(query),
             people=self._people(query),
-            special_requirements=[value for key, value in SPECIAL_REQUIREMENTS.items() if key in query],
+            special_requirements=self._special_requirements(query),
             requested_field_id=requested,
             allow_alternatives=any(term in query for term in ('khong co thi', 'gio khac', 'san khac', 'gan nhat', 'con san nao')),
             prefer_cheap=any(term in query for term in ('re mot chut', 'gia re', 're nhat', 're hon', 'tiet kiem')),
@@ -785,8 +846,14 @@ class AIAssistantService:
             if understood.get(key) is None and self._conversation_context.get(key) is not None:
                 understood[key] = self._conversation_context[key]
         understood['last_intent'] = route.intent.value if route else intent
+        final_reply = reply
+        if route and getattr(route, 'is_combined_out_of_scope', False) and route.intent != AssistantIntent.OUT_OF_SCOPE:
+            disclaimer = "(Lưu ý: SportHub AI chỉ hỗ trợ các dịch vụ sân thể thao và hệ thống, không hỗ trợ nội dung ngoài phạm vi như thời tiết/nấu ăn).\n\n"
+            if disclaimer not in final_reply:
+                final_reply = disclaimer + final_reply
+
         return {
-            'reply': reply,
+            'reply': final_reply,
             'understood': understood,
             'suggestions': suggestions,
             'venue_results': venue_results or [],
@@ -888,8 +955,8 @@ class AIAssistantService:
 
     @staticmethod
     def _time_range(query: str):
-        evening = bool(re.search(
-            r'\b(?:buoi toi|toi (?:nay|mai|luc|khoang|tu|\d{1,2})|\d{1,2}(?::\d{2})?\s*(?:h|gio)\s*toi)\b',
+        evening = any(term in query for term in ('toi nay', 'toi mai', 'buoi toi', 'gio toi')) or bool(re.search(
+            r'\b(?:toi\s+(?:thu|ngay|\d|luc|khoang)|\d{1,2}(?::\d{2})?\s*(?:h|gio)?\s*toi)\b',
             query,
         ))
         range_match = re.search(r'\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:-|–|den|toi)\s*([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:h|gio)?\b', query)
@@ -899,7 +966,7 @@ class AIAssistantService:
             matches = list(re.finditer(r'\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:h|gio)\b', query))
             values = [int(item[1]) * 60 + int(item[2] or 0) for item in matches[:2]]
         if values:
-            if evening and 'den' not in query:
+            if evening:
                 values = [value + 12 * 60 if value < 12 * 60 else value for value in values]
             return values[0], values[1] if len(values) > 1 else None
         if 'sang' in query:
@@ -920,7 +987,10 @@ class AIAssistantService:
             (int(item[1]) * 60 + int(item[2] or 0), int(item[3]) * 60 + int(item[4] or 0))
             for item in matches
         ]
-        evening = bool(re.search(r'\b(?:buoi toi|toi nay|toi mai)\b', query))
+        evening = any(term in query for term in ('toi nay', 'toi mai', 'buoi toi', 'gio toi')) or bool(re.search(
+            r'\b(?:toi\s+(?:thu|ngay|\d|luc|khoang)|\d{1,2}(?::\d{2})?\s*(?:h|gio)?\s*toi)\b',
+            query,
+        ))
         if len(ranges) == 1 and evening and ranges[0][0] < 12 * 60 and ranges[0][1] <= 12 * 60:
             ranges = [(ranges[0][0] + 12 * 60, ranges[0][1] + 12 * 60)]
         return [(start, end) for start, end in ranges if end > start]
@@ -936,6 +1006,22 @@ class AIAssistantService:
     def _people(query: str):
         match = re.search(r'\b(\d{1,3})\s*(?:nguoi|thanh vien)\b', query)
         return int(match[1]) if match else None
+
+    @staticmethod
+    def _special_requirements(query: str) -> list[str]:
+        norm = plain(query)
+        found = [value for key, value in SPECIAL_REQUIREMENTS.items() if key in norm]
+        if any(term in norm for term in ('den chieu sang', 'he thong den', 'den sang', 'co den', 'dan den', 'bat den')):
+            found.append('đèn chiếu sáng')
+        elif re.search(r'\bden\b', norm):
+            is_preposition = (
+                bool(re.search(r'(?:\d{1,2}(?::\d{2})?(?:h|gio)?|sang|chieu|toi|ngay)\s+den\b', norm))
+                or bool(re.search(r'\bden\s+(?:\d{1,2}(?::\d{2})?(?:h|gio)?|sang|chieu|toi|ngay)\b', norm))
+                or ('tu ' in norm and 'den' in norm)
+            )
+            if not is_preposition:
+                found.append('đèn chiếu sáng')
+        return list(dict.fromkeys(found))
 
     @staticmethod
     def _format_minutes(value):

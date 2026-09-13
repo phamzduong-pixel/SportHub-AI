@@ -23,6 +23,7 @@ import {
 import { RefundStatusPanel } from "@/components/refunds/RefundStatusPanel";
 import { createReview, getReviewByBooking, updateReview, type Review } from "@/services/reviewService";
 import { TransactionHistory } from "@/components/payments/TransactionHistory";
+import { getLocalTodayString } from "@/utils/cn";
 import { apiRequest } from "@/services/apiClient";
 import {
   cancelMyBooking,
@@ -638,7 +639,7 @@ export function CustomerBookingDetailPage() {
           <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <Input
               type="date"
-              min={new Date().toISOString().slice(0, 10)}
+              min={getLocalTodayString()}
               value={newDate}
               onChange={(event) => {
                 setNewDate(event.target.value);

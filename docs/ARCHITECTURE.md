@@ -114,12 +114,13 @@ flowchart LR
 
 ## AI
 
-- Intent router phân loại câu hỏi và trích entity.
+- Intent router phân loại câu hỏi (19 intents) và trích entity bằng luật xác định (NLU).
 - Domain policy chặn câu hỏi ngoài phạm vi hoặc mutation không được phép.
+- Guardrailed RAG tra cứu tri thức tĩnh (FAQ, hướng dẫn, chính sách) có phân quyền (RBAC) cho 4 static intents.
 - Repository/service áp lại owner/customer scope trước khi đọc dữ liệu.
 - Giá và tồn kho sản phẩm lấy từ database thực tế.
-- Demand prediction dùng pipeline/metrics lưu sẵn; không train model trong request.
-- Provider ngoài phụ thuộc environment và có fallback an toàn.
+- Demand prediction dùng pipeline/metrics lưu sẵn (Random Forest); không train model trong request.
+- Provider ngoài phụ thuộc environment (Strict JSON Schema) và có fallback an toàn.
 
 ## Tính toàn vẹn và bảo mật
 

@@ -47,6 +47,14 @@ def available_products(
     return service.public_available(facility_id, sport)
 
 
+@router.get('/sport-options', response_model=list[str])
+def product_sport_options(
+    sport: str = Query(min_length=1, max_length=80),
+    service: ProductService = Depends(get_service),
+):
+    return service.sport_product_names(sport)
+
+
 @router.get('', response_model=list[ProductResponse])
 def list_products(
     facility_id: int | None = Query(default=None, gt=0),

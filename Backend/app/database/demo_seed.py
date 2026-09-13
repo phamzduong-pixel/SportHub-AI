@@ -164,6 +164,48 @@ DEMO_FACILITY_PRODUCTS = {
         ('Pickleball', 'Nước thể thao', 'SELL', 'chai', 25000, 20, True),
         ('Pickleball', 'Khăn thể thao', 'SELL', 'khăn', 20000, 15, True),
     ],
+    'Green Court Riverside': [
+        ('Tennis', 'Thuê vợt', 'RENT', 'cây', 50000, 10, True),
+        ('Tennis', 'Bóng tennis', 'SELL', 'ống', 80000, 30, True),
+        ('Tennis', 'Máy bắn bóng', 'RENT', 'máy', 150000, 2, True),
+        ('Tennis', 'Thuê giày', 'RENT', 'đôi', 40000, 8, True),
+        ('Tennis', 'Quấn cán', 'SERVICE', 'lần', 25000, 0, False),
+        ('Tennis', 'Nước suối', 'SELL', 'chai', 15000, 50, True),
+        ('Tennis', 'Khăn', 'SELL', 'khăn', 25000, 20, True),
+        ('Tennis', 'Huấn luyện viên', 'SERVICE', 'giờ', 350000, 0, False),
+    ],
+    'Tennis Club Hồ Tây': [
+        ('Tennis', 'Thuê vợt', 'RENT', 'cây', 50000, 8, True),
+        ('Tennis', 'Bóng tennis', 'SELL', 'ống', 80000, 25, True),
+        ('Tennis', 'Thuê giày', 'RENT', 'đôi', 40000, 6, True),
+        ('Tennis', 'Nước suối', 'SELL', 'chai', 15000, 40, True),
+        ('Tennis', 'Khăn', 'SELL', 'khăn', 25000, 15, True),
+    ],
+    'Saigon Hoops Arena': [
+        ('Bóng rổ', 'Thuê bóng', 'RENT', 'quả', 40000, 12, True),
+        ('Bóng rổ', 'Áo bib', 'RENT', 'áo', 15000, 25, True),
+        ('Bóng rổ', 'Nước suối', 'SELL', 'chai', 15000, 50, True),
+        ('Bóng rổ', 'Khăn', 'SELL', 'khăn', 20000, 30, True),
+    ],
+    'Nhà thi đấu Tân Bình': [
+        ('Bóng chuyền', 'Thuê bóng', 'RENT', 'quả', 40000, 10, True),
+        ('Bóng chuyền', 'Băng bảo vệ đầu gối', 'SELL', 'đôi', 50000, 20, True),
+        ('Bóng chuyền', 'Nước suối', 'SELL', 'chai', 15000, 40, True),
+        ('Bóng chuyền', 'Khăn', 'SELL', 'khăn', 20000, 25, True),
+    ],
+    'Pickleball Sala Club': [
+        ('Pickleball', 'Thuê paddle', 'RENT', 'cây', 40000, 15, True),
+        ('Pickleball', 'Bóng pickleball', 'SELL', 'quả', 30000, 30, True),
+        ('Pickleball', 'Quấn cán', 'SERVICE', 'lần', 20000, 0, False),
+        ('Pickleball', 'Nước suối', 'SELL', 'chai', 15000, 50, True),
+        ('Pickleball', 'Khăn thể thao', 'SELL', 'khăn', 20000, 20, True),
+    ],
+    'Sân bóng Thống Nhất Mini': [
+        ('Bóng đá', 'Thuê bóng', 'RENT', 'quả', 50000, 6, True),
+        ('Bóng đá', 'Áo bib', 'RENT', 'áo', 10000, 20, True),
+        ('Bóng đá', 'Nước uống', 'SELL', 'chai', 15000, 40, True),
+        ('Bóng đá', 'Khăn thể thao', 'SELL', 'khăn', 20000, 25, True),
+    ],
 }
 
 
@@ -189,7 +231,12 @@ def seed_demo_db(session):
 
 def seed_facility_products(session, fields: list):
     """Idempotent: upsert demo FacilityProducts for each demo field."""
-    for field in fields:
+    existing_field_names = set(DEMO_FACILITY_PRODUCTS.keys())
+    db_fields = list(session.scalars(select(Field).where(Field.name.in_(existing_field_names))).all())
+    field_map = {f.id: f for f in fields}
+    for f in db_fields:
+        field_map.setdefault(f.id, f)
+    for field in field_map.values():
         definitions = DEMO_FACILITY_PRODUCTS.get(field.name)
         if not definitions:
             continue

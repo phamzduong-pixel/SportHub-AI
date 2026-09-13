@@ -1,9 +1,10 @@
+import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from ..core.config import settings
 
 connect_args = {'check_same_thread': False} if settings.DATABASE_URL.startswith('sqlite') else {}
-engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
+engine = create_engine(os.getenv('PYTEST_CURRENT_TEST') and 'sqlite:///:memory:' or settings.DATABASE_URL, connect_args=connect_args)
 
 if settings.DATABASE_URL.startswith('sqlite'):
     @event.listens_for(engine, 'connect')

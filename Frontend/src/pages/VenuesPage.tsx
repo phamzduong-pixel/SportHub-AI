@@ -26,12 +26,28 @@ export function VenuesPage() {
   const [selectedMapId, setSelectedMapId] = useState<number>();
 
   useEffect(() => {
+    const nextSport = params.get('sport') ?? '';
+    const nextDate = params.get('date') ?? '';
+    const nextQ = params.get('q') ?? '';
+    const rawTime = params.get('time') ?? '';
+    const nextTime = rawTime.includes('Sáng') ? 'morning' : rawTime.includes('Chiều') ? 'afternoon' : rawTime.includes('Tối') ? 'evening' : '';
+    setQuery(nextQ);
+    setFilters((prev) => ({
+      ...prev,
+      sport: nextSport,
+      date: nextDate,
+      time: nextTime,
+      amenities: nextSport !== prev.sport ? [] : prev.amenities,
+    }));
+  }, [params]);
+
+  useEffect(() => {
     let active = true; setLoading(true); setLoadError('');
     const timer = window.setTimeout(() => {
-      listVenues({ date: filters.date, search: query, sportType: filters.sport }).then((items) => { if (active) setVenues(items); }).catch((error) => { if (active) setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu sân.'); }).finally(() => { if (active) setLoading(false); });
+      listVenues({ date: filters.date, search: query, sportType: filters.sport, amenities: filters.amenities }).then((items) => { if (active) setVenues(items); }).catch((error) => { if (active) setLoadError(error instanceof Error ? error.message : 'Không tải được dữ liệu sân.'); }).finally(() => { if (active) setLoading(false); });
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [query, filters.date, filters.sport]);
+  }, [query, filters.date, filters.sport, filters.amenities]);
   useEffect(() => setPage(1), [query, filters, sort]);
 
   const filtered = useMemo(() => {
@@ -39,17 +55,32 @@ export function VenuesPage() {
     const selectedDate = filters.date ? new Date(`${filters.date}T12:00:00`) : null;
     return venues.filter((venue) => {
       const matchesQuery = !normalized || `${venue.name} ${venue.address} ${venue.district} ${venue.sports.join(' ')}`.toLowerCase().includes(normalized);
-      const matchesCity = !filters.city || venue.city === filters.city;
-      const matchesSport = !filters.sport || venue.sports.some((sport) => sport.toLowerCase() === filters.sport.toLowerCase());
+      const matchesCity = !filters.city || (() => {
+        const selected = filters.city.toLowerCase().trim();
+        const vCity = (venue.city || '').toLowerCase().trim();
+        const vAddr = (venue.address || '').toLowerCase().trim();
+        if (selected.includes('hồ chí minh') || selected.includes('hcm')) {
+          return vCity.includes('hcm') || vCity.includes('hồ chí minh') || vCity.includes('thủ đức') || vAddr.includes('hcm') || vAddr.includes('hồ chí minh');
+        }
+        if (selected.includes('hà nội')) {
+          return vCity.includes('hà nội') || vAddr.includes('hà nội');
+        }
+        return vCity.includes(selected) || vAddr.includes(selected);
+      })();
+      const matchesSport = !filters.sport || (venue.sports || []).some((sport) => {
+        const s = sport.toLowerCase().trim();
+        const f = filters.sport.toLowerCase().trim();
+        return s === f || s.includes(f) || f.includes(s);
+      });
       const matchesPrice = !filters.maxPrice || venue.price <= Number(filters.maxPrice);
       const matchesRating = !filters.rating || venue.rating >= Number(filters.rating);
-      const matchesAmenities = filters.amenities.every((item) => venue.amenities.includes(item));
+      const matchesAmenities = filters.amenities.length === 0 || filters.amenities.every((item) => (venue.amenities || []).includes(item));
       const allSlots = venue.courts.flatMap((court) => court.operatingSlots);
       const matchesTime = !filters.time || allSlots.some((slot) => { const hour = slotHour(slot); return filters.time === 'morning' ? hour < 12 : filters.time === 'afternoon' ? hour >= 12 && hour < 18 : hour >= 18; });
       const matchesDate = !selectedDate || venue.available;
-      return matchesQuery && matchesCity && matchesSport && matchesPrice && matchesRating && matchesAmenities && matchesTime && matchesDate && venue.available;
+      return matchesQuery && matchesCity && matchesSport && matchesPrice && matchesRating && matchesAmenities && matchesTime && matchesDate;
     }).sort((a, b) => sort === 'price' ? a.price - b.price : sort === 'distance' ? a.distance - b.distance : sort === 'rating' ? b.rating - a.rating : b.reviewCount - a.reviewCount);
-  }, [query, filters, sort]);
+  }, [venues, query, filters, sort]);
 
   const applied = [
     filters.city && { key: 'city', label: filters.city }, filters.sport && { key: 'sport', label: filters.sport }, filters.date && { key: 'date', label: new Date(`${filters.date}T12:00:00`).toLocaleDateString('vi-VN') },

@@ -32,13 +32,25 @@ Frontend/dist/
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs & Test outputs
 *.log
+test_output.txt
+single_test.txt
 
-# Cache
+# Scratch / Root test artifacts
+/conftest.py
+/sitecustomize.py
+/run_tests.py
+/app/
+/tests/
+
+# Cache & Coverage
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 
 # Uploaded documents and runtime media
 Backend/data/private/
 Backend/data/public/
+Backend/app/ai/saved_models/checkpoints/

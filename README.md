@@ -181,7 +181,7 @@ Các hạng mục đã hoàn thành trong đợt này:
 - Sửa alias “đá bóng” → “bóng đá” và lỗi từ đại từ “tôi” bị nhận nhầm thành buổi “tối”.
 - Search chỉ đọc inventory hiện tại từ database, kiểm tra `Field/SportType → TimeSlot/Pricing → Booking`, loại booking chồng giờ và không tạo booking/thanh toán.
 - Nếu không có kết quả khớp hoàn toàn, service xếp hạng phương án gần nhất theo sân, thời gian, khu vực, ngân sách, khoảng cách, rating và tiện ích; response giới hạn tối đa 5 card.
-- Bổ sung log theo luồng request ở frontend/backend để chẩn đoán vị trí lỗi. Endpoint hiện dùng database search, không gọi Gemini và không dùng streaming.
+- Bổ sung log theo luồng request ở frontend/backend để chẩn đoán vị trí lỗi. Hệ thống tích hợp OpenAI Provider (với strict JSON schema cho xếp hạng slot, phân tích công suất và thông báo), kết hợp Guardrailed RAG cho câu hỏi tri thức tĩnh (FAQ, hướng dẫn, chính sách) và database search cho lịch trống thời gian thực.
 
 Luồng hiện tại:
 
@@ -189,17 +189,18 @@ Luồng hiện tại:
 AIAssistantPage
   → POST /api/ai/assistant
   → Vite proxy /ai/assistant
-  → intent extraction + context merge
-  → database availability search
-  → exact filter / fallback ranking
-  → JSON response
-  → chat message + suggestion cards
+  → intent extraction (IntentRouter) + context merge
+  → rẽ nhánh theo intent:
+      ├─ static intent (hướng dẫn, tài khoản, đối tác, thanh toán) → Guardrailed RAG (ai_system_knowledge / docs)
+      └─ dynamic intent (tìm sân, lịch trống, slot) → database search + ranking (LLM / Rule fallback)
+  → JSON response (structured text + suggestion cards)
 ```
 
 AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Schema hiện có thực thể `Facility` riêng; `Field` là từng sân/court thuộc cơ sở. AI không tự tạo dữ liệu thay thế khi database không có kết quả.
 
 ## Tài liệu
 
+- [Báo cáo tiến độ phiên 13/09/2026 — Chuẩn hóa Bộ lọc, Đồng bộ Hệ thống & Tối ưu Giao diện](docs/SESSION_PROGRESS_2026-09-13.md)
 - [Bàn giao OWNER Facility, Mobile UX và Booking Service — 16/08/2026](docs/SECTION_HANDOFF_2026-08-16_OWNER_FACILITY_MOBILE_BOOKING_SERVICE.md)
 - [Bàn giao AI hỗ trợ CUSTOMER đăng ký OWNER — 14/08/2026](docs/SECTION_HANDOFF_2026-08-14_AI_PARTNER_SUPPORT.md)
 - [Báo cáo tiến độ phiên 10/08/2026](docs/SESSION_PROGRESS_2026-08-10.md)

@@ -1,9 +1,9 @@
 # Báo Cáo Đánh Giá Thực Nghiệm Hệ Thống AI (SportHub AI Evaluation)
 
-> **Thời điểm thực nghiệm:** 02/09/2026  
-> **Môi trường thực thi:** Python 3.12, Pytest 9.1.1, Scikit-Learn  
-> **Bộ dữ liệu đánh giá:** [`Backend/app/ai/datasets/nlu_eval_dataset.json`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/ai/datasets/nlu_eval_dataset.json)  
-> **Mục tiêu:** Đo lường định lượng và định tính hiệu năng thực tế của Intent Router (NLU), Khả năng quản lý Context/Follow-up, An toàn dữ liệu & 3 tác vụ GenAI (Guardrails & Fallback).
+> **Thời điểm thực nghiệm:** 02/09/2026 (Cập nhật Final Audit toàn diện: 10/09/2026)  
+> **Môi trường thực thi:** Python 3.12, Pytest 9.1.1, Scikit-Learn 1.9.0, Sentence-Transformers  
+> **Bộ dữ liệu đánh giá:** [`Backend/app/ai/datasets/nlu_eval_dataset.json`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/ai/datasets/nlu_eval_dataset.json), 19 AI test suites (>151 test functions)  
+> **Mục tiêu:** Đo lường định lượng và định tính hiệu năng thực tế của Intent Router (NLU), Khả năng quản lý Context/Follow-up, Guardrailed RAG, An toàn dữ liệu & 3 tác vụ GenAI (Guardrails & Fallback).
 
 ---
 
@@ -15,6 +15,7 @@ Toàn bộ các chỉ số dưới đây được **tính toán tự động t�
 |---|:---:|:---:|:---:|
 | **NLU Intent Router (19 Intents)** | 88 mẫu câu | **Accuracy: 92.05%** \| **Weighted F1: 0.9133** | ✅ Đạt chuẩn xuất sắc |
 | **Multi-turn Context & Follow-up** | 7 kịch bản | **100% Pass (7/7)** | ✅ Hoạt động chính xác |
+| **Static Knowledge & Guardrailed RAG** | 23 kịch bản (`test_ai_system_knowledge` & `test_knowledge_retrieval`) | **100% Pass (23/23)** | ✅ Trả lời chuẩn xác, bảo vệ quyền vai trò |
 | **GenAI Schema & Anti-Hallucination** | 4 kịch bản | **100% Pass (4/4)** | ✅ Khóa cứng nghiệp vụ |
 | **Deterministic Rule-based Fallback** | 3 kịch bản | **100% Pass (3/3)** | ✅ Chống sập hệ thống |
 
@@ -101,17 +102,26 @@ Thực nghiệm kiểm tra cơ chế truyền nhận và xử lý Context giữa
 - **Thử nghiệm:** Giả lập mất mạng / OpenAI API timeout (`AIProviderError`).
 - **Kết quả:** Hệ thống tự động chuyển sang thuật toán xếp hạng theo luật (`sorted by time delta, price, rating`), đảm bảo **hệ thống không bao giờ bị gián đoạn hay trả về lỗi 500 cho người dùng**.
 
+### 4.5. Đánh giá tầng Guardrailed RAG & Tra cứu tri thức tĩnh (Static Knowledge Retrieval)
+- **Cơ chế:** Phối hợp giữa `RAGGuardrail`, `KnowledgeService`, `KnowledgeRetriever`, file tri thức in-code `ai_system_knowledge.py` (27 mục chuẩn hóa) và bộ nạp Markdown `KnowledgeRepository` từ thư mục `docs/AI/knowledge/`.
+- **Cơ chế đối sánh kép & Top-K Retrieval:** `KnowledgeRetriever` kết hợp tỷ lệ tương đồng chuỗi mờ `difflib.SequenceMatcher.ratio()` và tương đồng ngữ nghĩa dầy `all-MiniLM-L6-v2` (Bi-Encoder) đo bằng cosine similarity, tính điểm trung bình và thực hiện trích xuất **Top-K Retrieval** (`DEFAULT_TOP_K = 5`) kèm bộ lọc ngưỡng `relevance_threshold = 0.60`. (Top-K là bước selection theo score ban đầu, không phải Reranker).
+- **Hạn chế phạm vi kích hoạt:** RAG chỉ kích hoạt đối với 4 intent tĩnh (`SYSTEM_GUIDE`, `ACCOUNT_SUPPORT`, `PARTNER_APPLICATION_SUPPORT`, `PAYMENT_SUPPORT`), ngăn chặn hoàn toàn việc can thiệp vào các truy vấn dữ liệu động (lịch trống, giá sân, mã booking cụ thể).
+- **Phân quyền truy cập tri thức (Role-gated Knowledge):** Các thông tin quản trị nâng cao của OWNER và SYSTEM_ADMIN được gắn `allowed_roles` và thông báo chặn vi phạm quyền (`role_restricted_message`), ngăn chặn rò rỉ hướng dẫn nội bộ sang người dùng CUSTOMER.
+- **Kết quả kiểm thử:** Toàn bộ 23 test case tại `test_ai_system_knowledge.py` và `test_knowledge_retrieval.py` đều vượt qua 100%, bảo đảm câu trả lời chuẩn xác và không bịa đặt các cam kết chính sách (SLA xét duyệt, phí hoa hồng).
+
 ---
 
 ## 5. Kết Luận & Đóng Góp Cho Đồ Án
 
 1. **Hiệu năng cao & Ổn định:** NLU Intent Router đạt độ chính xác **92.05%** với $F1 = 0.9133$, đáp ứng xuất sắc các nhu cầu tìm kiếm, đặt sân, đổi lịch và tra cứu tài khoản bằng tiếng Việt.
 2. **An toàn nghiệp vụ tuyệt đối (Zero Hallucination on Business Data):** Không để LLM tự quyết định tính khả dụng của sân, không để LLM tự đổi giá, tự tạo booking hay tự sửa đổi dữ liệu database.
-3. **Kiến trúc bền vững:** Mô hình **Deterministic Rule-based Pipeline kết hợp Guardrailed LLM** vừa tận dụng được khả năng hành văn tự nhiên của GenAI, vừa đảm bảo tính chính xác 100% của phần mềm quản lý thể thao chuyên nghiệp.
+3. **Tri thức tĩnh có bảo vệ (Guardrailed RAG):** Áp dụng mô hình RAG có kiểm soát kết hợp tra cứu tri thức hệ thống, đảm bảo giải đáp quy trình chính xác, tuân thủ chặt chẽ phân quyền tài khoản (RBAC).
+4. **Kiến trúc bền vững:** Mô hình **Deterministic Rule-based Pipeline kết hợp Guardrailed RAG & LLM** vừa tận dụng được khả năng hành văn tự nhiên của GenAI, vừa đảm bảo tính chính xác 100% của phần mềm quản lý thể thao chuyên nghiệp.
 
 ---
 
 ## 6. Hướng Phát Triển Tiếp Theo
 
 - [ ] Thu thập thêm dữ liệu hội thoại thực tế từ người dùng production để làm giàu thêm từ điển tiếng lóng địa phương (ví dụ: *"đá banh"*, *"dợt banh"*, *"đánh kèo"*).
-- [ ] Tích hợp mô hình nhúng ngữ nghĩa (Semantic Embedding / Vector Search) ở tầng dự phòng cho Intent Router đối với các câu hỏi phức tạp dài trên 30 từ.
+- [ ] Mở rộng Vector Database chuyên dụng quy mô lớn (Milvus / Qdrant / pgvector) khi số lượng bài viết cẩm nang và chính sách thể thao vượt trên 1.000 bài viết (hiện tại `all-MiniLM-L6-v2` + `KnowledgeRepository` đã đáp ứng tối ưu cho quy mô hiện hành).
+

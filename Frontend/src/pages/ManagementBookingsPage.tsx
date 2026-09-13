@@ -30,6 +30,7 @@ import {
   type RefundRequest,
 } from "@/services/customerApi";
 import { getBookingProductOptions, type FacilityProduct } from "@/services/productService";
+import { getLocalTodayString } from "@/utils/cn";
 
 const money = (value: number) => `${value.toLocaleString("vi-VN")}đ`;
 const statusLabel: Record<string, string> = {
@@ -115,7 +116,7 @@ export function ManagementBookingsPage() {
   const rows = useMemo(
     () =>
       items.filter((item) => {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = getLocalTodayString();
         const grouped =
           group === "today"
             ? item.booking_date === today
@@ -149,7 +150,7 @@ export function ManagementBookingsPage() {
   );
 
   const counts = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalTodayString();
     const result: Record<string, number> = {
       today: 0,
       upcoming: 0,

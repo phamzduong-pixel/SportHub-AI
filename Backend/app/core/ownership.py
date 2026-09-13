@@ -9,4 +9,4 @@ def management_owner_id(user: User, db) -> int | None:
 
 def owns_field(user: User, field, db) -> bool:
     owner_id = management_owner_id(user, db)
-    return owner_id is not None and (field.owner_id == owner_id or field.owner_id is None)
+    return owner_id is not None and field.owner_id is not None and field.owner_id == owner_id

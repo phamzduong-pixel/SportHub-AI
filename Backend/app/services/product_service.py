@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import unicodedata
 
 from sqlalchemy import func, select
@@ -55,6 +57,34 @@ class ProductService:
                 'sport': 'Dùng chung' if is_common else sport.strip(),
             })
         return result
+
+    def sport_product_names(self, sport: str) -> list[str]:
+        if not sport or not sport.strip():
+            return []
+        normalized_sport = ProductService.sport_key(sport)
+        common_key = ProductService.sport_key('Dùng chung')
+        query = (
+            select(FacilityProduct)
+            .join(Facility)
+            .options(selectinload(FacilityProduct.sport_links))
+            .where(
+                FacilityProduct.status == ProductStatus.ACTIVE.value,
+                Facility.status == 'APPROVED',
+                Facility.is_active.is_(True),
+            )
+        )
+        products = self.db.scalars(query).unique().all()
+        matching_names = set()
+        for p in products:
+            sport_keys = {ProductService.sport_key(link.sport_name) for link in p.sport_links}
+            if normalized_sport in sport_keys or common_key in sport_keys:
+                if not p.track_inventory or p.available_quantity > 0:
+                    matching_names.add(p.name.strip())
+        if matching_names:
+            return sorted(list(matching_names), key=lambda x: x.lower())
+        # Fallback to system catalog if no active facility products exist yet for this sport
+        catalog_items = self.catalog(sport)
+        return sorted(list({item['name'].strip() for item in catalog_items if item['name'].strip()}), key=lambda x: x.lower())
 
     @staticmethod
     def sport_key(value: str):

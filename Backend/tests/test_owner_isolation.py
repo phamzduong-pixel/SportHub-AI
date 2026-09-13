@@ -26,4 +26,28 @@ class OwnerIsolationTests(unittest.TestCase):
     def test_owner_a_cannot_access_owner_b_data(self):
         a=self.headers(self.a); b=self.headers(self.b); self.assertEqual([x['name'] for x in self.client.get('/fields?page_size=100',headers=a).json()['items']],['Court A']); self.assertEqual(self.client.get(f'/fields/{self.fb}',headers=a).status_code,404); self.assertEqual(self.client.get('/bookings',headers=a).json()['total'],0); self.assertEqual(self.client.get('/bookings',headers=b).json()['total'],1)
 
+    def test_owns_field_matrix_and_unowned_field_denied(self):
+        from app.core.ownership import owns_field
+        with self.Session() as db:
+            owner_a = db.get(User, self.a)
+            owner_b = db.get(User, self.b)
+            field_a = db.get(Field, db.query(Field).filter(Field.owner_id == self.a).first().id)
+            field_b = db.get(Field, self.fb)
+            unowned = Field(owner_id=None, name='Unowned Court', sport_type='football', location='C', capacity=10, base_price=100, amenities=[])
+            db.add(unowned); db.flush()
+
+            # OWNER A -> Field A: PASS
+            self.assertTrue(owns_field(owner_a, field_a, db))
+            # OWNER A -> Field B: DENY
+            self.assertFalse(owns_field(owner_a, field_b, db))
+            # OWNER B -> Field A: DENY
+            self.assertFalse(owns_field(owner_b, field_a, db))
+            # owner_id = None: DENY for normal OWNER
+            self.assertFalse(owns_field(owner_a, unowned, db))
+            self.assertFalse(owns_field(owner_b, unowned, db))
+
+            # Endpoint check: OWNER A cannot access unowned field
+            a_headers = self.headers(self.a)
+            self.assertEqual(self.client.get(f'/fields/{unowned.id}', headers=a_headers).status_code, 404)
+
 if __name__=='__main__': unittest.main()

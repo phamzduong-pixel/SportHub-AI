@@ -30,7 +30,7 @@ def migrate_empty_legacy_booking_schema(engine):
             connection.execute(text(f'ALTER TABLE bookings ADD COLUMN hold_expires_at {column_type} NULL'))
         connection.execute(text("UPDATE bookings SET status='pending_confirmation' WHERE status='pending'"))
         connection.execute(text('DROP INDEX IF EXISTS uq_open_booking_slot_date'))
-        condition = "status IN ('pending_payment', 'pending_confirmation', 'confirmed')"
+        condition = "status IN ('pending_payment', 'pending_confirmation', 'confirmed', 'in_progress')"
         connection.execute(text(
             'CREATE UNIQUE INDEX IF NOT EXISTS uq_open_booking_slot_date '
             f'ON bookings (field_id, booking_date, time_slot_id) WHERE {condition}'

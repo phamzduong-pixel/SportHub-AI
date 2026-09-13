@@ -25,7 +25,8 @@ class AvailabilityService:
 
     def list(self, *, booking_date: date, field_id: int | None = None,
              search: str | None = None, sport_type: str | None = None,
-             location: str | None = None, start_time=None, end_time=None,
+             location: str | None = None, amenities: list[str] | None = None,
+             start_time=None, end_time=None,
              max_price: float | None = None, sort_by: str = 'relevance',
              owner_id: int | None = None, include_legacy_unowned: bool = False):
         self.repository.release_expired_holds()
@@ -34,8 +35,8 @@ class AvailabilityService:
             raise HTTPException(status_code=422, detail='Không thể tìm lịch trống trong quá khứ')
         result = self.repository.availability(
             booking_date=booking_date, field_id=field_id, search=search,
-            sport_type=sport_type, location=location, owner_id=owner_id,
-            include_legacy_unowned=include_legacy_unowned,
+            sport_type=sport_type, location=location, amenities=amenities,
+            owner_id=owner_id, include_legacy_unowned=include_legacy_unowned,
         )
         if not result:
             return []

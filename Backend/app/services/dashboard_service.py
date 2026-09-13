@@ -52,7 +52,10 @@ class DashboardService:
         values: dict[str, dict[str, int]] = {}
         for booking_date, status, count in self.repository.booking_series(start, end, field_id):
             key = self._period(booking_date, granularity)
-            status = 'pending' if status in ('pending_payment', 'pending_confirmation') else status
+            if status in ('pending_payment', 'pending_confirmation'):
+                status = 'pending'
+            elif status in ('cancelled_by_customer', 'cancelled_by_owner'):
+                status = 'cancelled'
             values.setdefault(key, {})[status] = values.setdefault(key, {}).get(status, 0) + int(count)
         items = []
         for period in self._periods(start, end, granularity):

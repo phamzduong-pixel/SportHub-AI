@@ -34,11 +34,11 @@ class BookingService:
         self.notifications = NotificationService(repository.db)
         self.inventory = InventoryService(repository.db)
 
-    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, start_time=None, max_price: float | None = None, sort_by: str = 'relevance'):
+    def availability(self, *, booking_date: date, field_id: int | None, search: str | None, sport_type: str | None, location: str | None = None, amenities: list[str] | None = None, start_time=None, max_price: float | None = None, sort_by: str = 'relevance'):
         return self.availability_service.list(
             booking_date=booking_date, field_id=field_id, search=search,
-            sport_type=sport_type, location=location, start_time=start_time,
-            max_price=max_price, sort_by=sort_by,
+            sport_type=sport_type, location=location, amenities=amenities,
+            start_time=start_time, max_price=max_price, sort_by=sort_by,
         )
 
     def create(self, payload, current_user: User) -> BookingResponse:
@@ -286,8 +286,6 @@ class BookingService:
         )
         self._apply_service_amount(values, booking.service_amount or 0)
         slot_details = values.pop('_slot_details')
-        if self.repository.committed_payment_amount(booking.id) > values['total_amount']:
-            raise HTTPException(status_code=409, detail='Không thể đổi sang khung giờ có giá thấp hơn tổng giao dịch đã thanh toán hoặc đang chờ')
         values['note'] = payload.note
         self._replace_booking_slots(booking, slot_details)
         try:
@@ -664,7 +662,7 @@ class BookingService:
             raise HTTPException(status_code=409, detail='Chỉ booking đã xác nhận mới có thể đánh dấu khách vắng mặt')
         grace_period = timedelta(minutes=15)
         if self._scheduled_at(booking) + grace_period > datetime.now(self.timezone):
-            raise HTTPException(status_code=409, detail='Chưa đủ điều kiện đánh dấu vắng mặt (chỉ được thực hiện sau giờ bắt đầu ít nhất 15 phút)')
+            raise HTTPException(status_code=409, detail='Chưa đến giờ no-show (chỉ được thực hiện sau giờ bắt đầu ít nhất 15 phút)')
         return self._transition(booking_id, {BookingStatus.CONFIRMED.value}, BookingStatus.NO_SHOW.value, note, user)
 
     def complete(self, booking_id: int, note: str | None, user: User) -> BookingResponse:
@@ -926,7 +924,7 @@ class BookingService:
             'start_time': item.start_time_snapshot, 'end_time': item.end_time_snapshot,
             'price': item.price_snapshot,
         } for item in slot_snapshots] or [{
-            'time_slot_id': booking.time_slot_id, 'name': booking.time_slot.name,
+            'time_slot_id': booking.time_slot_id, 'name': (booking.time_slot.name if booking.time_slot else ''),
             'start_time': booking.start_time_snapshot, 'end_time': booking.end_time_snapshot,
             'price': booking.price_snapshot,
         }]

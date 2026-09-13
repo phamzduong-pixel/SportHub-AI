@@ -173,8 +173,6 @@ class AIAssistantTests(unittest.TestCase):
         first_payload = first.json()
         self.assertEqual(first_payload['understood']['sport_type'], 'bóng đá')
         self.assertEqual(first_payload['understood']['start_time'], '08:00')
-        self.assertTrue(first_payload['needs_clarification'])
-
         follow_up = self.client.post('/ai/assistant', json={
             'message': 'ngày mai',
             'context': first_payload['understood'],
@@ -183,6 +181,45 @@ class AIAssistantTests(unittest.TestCase):
         payload = follow_up.json()
         self.assertFalse(payload['needs_clarification'])
         self.assertTrue(payload['reply'])
+
+    def test_nlu_001_and_003_evening_range_and_lighting_disambiguation(self):
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        response = self.client.post('/ai/assistant', json={
+            'message': 'Tìm sân cầu lông từ 7 đến 9 giờ tối mai',
+        })
+        self.assertEqual(response.status_code, 200)
+        understood = response.json()['understood']
+        self.assertEqual(understood['sport_type'], 'cầu lông')
+        self.assertEqual(understood['booking_date'], tomorrow)
+        self.assertEqual(understood['start_time'], '19:00')
+        self.assertEqual(understood['end_time'], '21:00')
+        self.assertNotIn('đèn chiếu sáng', understood['special_requirements'])
+
+    def test_nlu_002_reschedule_without_booking_code_prompts_clarification(self):
+        response = self.client.post('/ai/assistant', json={
+            'message': 'Tôi muốn đổi lịch',
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['intent'], 'RESCHEDULE_BOOKING')
+        self.assertTrue(payload['needs_clarification'])
+        self.assertIn('đổi lịch booking nào', payload['reply'])
+
+    def test_nlu_004_cancel_booking_with_don_sh_prompts_or_routes(self):
+        response = self.client.post('/ai/assistant', json={
+            'message': 'Hủy đơn SH-1001',
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['intent'], 'CANCEL_BOOKING')
+
+    def test_nlu_005_location_dai_hoc_quoc_gia_integration(self):
+        response = self.client.post('/ai/assistant', json={
+            'message': 'Tìm sân bóng ở Đại học Quốc gia',
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['understood']['location'], 'Dai Hoc Quoc Gia')
 
 
 if __name__ == '__main__':

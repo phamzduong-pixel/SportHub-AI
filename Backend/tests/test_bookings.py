@@ -21,18 +21,19 @@ class BookingWorkflowTests(unittest.TestCase):
         self.Session = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
         Base.metadata.create_all(self.engine)
         with self.Session() as db:
-            field = Field(name='Sân Booking', sport_type='Bóng đá', location='Quận 3', capacity=22, base_price=300000, status='available', amenities=[])
+            owner = User(full_name='Owner', email='bookingowner@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value)
+            operator = User(full_name='Booking Operator', email='bookingoperator@test.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value)
+            db.add_all([owner, operator])
+            db.flush()
+            field = Field(name='Sân Booking', owner_id=owner.id, sport_type='Bóng đá', location='Quận 3', capacity=22, base_price=300000, status='available', amenities=[])
             db.add(field); db.flush()
             slot = TimeSlot(field_id=field.id, name='Ca sáng', start_time=time(8), end_time=time(10), price=Decimal('450000'), is_active=True)
             second_slot = TimeSlot(field_id=field.id, name='Ca trưa', start_time=time(10), end_time=time(12), price=Decimal('550000'), is_active=True)
-            other_field = Field(name='Sân Booking B', sport_type='Bóng đá', location='Quận 3', capacity=14, base_price=300000, status='available', amenities=[])
+            other_field = Field(name='Sân Booking B', owner_id=owner.id, sport_type='Bóng đá', location='Quận 3', capacity=14, base_price=300000, status='available', amenities=[])
             db.add(other_field); db.flush()
             other_slot = TimeSlot(field_id=other_field.id, name='Ca sáng B', start_time=time(8), end_time=time(10), price=Decimal('450000'), is_active=True)
-            operator = User(full_name='Booking Operator', email='bookingoperator@test.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value)
             db.add_all([
                 slot, second_slot, other_slot,
-                User(full_name='Owner', email='bookingowner@test.local', hashed_password=get_password_hash('Owner@123456'), role=UserRole.OWNER.value),
-                operator,
                 User(full_name='No Permission', email='bookingnone@test.local', hashed_password=get_password_hash('Operator@123'), role=UserRole.CUSTOMER.value),
                 User(full_name='Customer One', email='customer1@test.local', hashed_password=get_password_hash('Customer@123'), role=UserRole.CUSTOMER.value),
                 User(full_name='Customer Two', email='customer2@test.local', hashed_password=get_password_hash('Customer@123'), role=UserRole.CUSTOMER.value),

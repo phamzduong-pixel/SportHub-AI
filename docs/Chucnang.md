@@ -1,6 +1,6 @@
 # Sơ đồ chức năng SportHub AI
 
-> Cập nhật theo source code và kiểm thử ngày **16/08/2026**. Tài liệu chi tiết: [`FUNCTIONAL_HIERARCHY.md`](FUNCTIONAL_HIERARCHY.md).
+> Cập nhật theo source code và kiểm thử ngày **13/09/2026**. Tài liệu chi tiết: [`FUNCTIONAL_HIERARCHY.md`](FUNCTIONAL_HIERARCHY.md), [`SESSION_PROGRESS_2026-09-13.md`](SESSION_PROGRESS_2026-09-13.md).
 
 ## Ký hiệu
 
@@ -19,6 +19,9 @@ mindmap
         Tìm kiếm, lọc, phân trang
         Lưới và danh sách
         Chỉ hiện cơ sở và sân hợp lệ
+        Lọc Môn thể thao (Primary) & Tiện ích động (Secondary)
+        Mặc định hiển thị tất cả sân khả dụng
+        SPA Smooth Scroll đến Môn thể thao và Ưu đãi
       ✅ Chi tiết sân
         Cơ sở, sân, tiện ích, ảnh
         Hotline và giờ hoạt động
@@ -183,9 +186,10 @@ mindmap
         Chưa có trang riêng
     8. Quản trị SYSTEM_ADMIN
       ✅ Dashboard toàn hệ thống
+        Menu điều hướng căn chỉnh chuẩn container max-w-7xl
       ✅ Người dùng
         Tìm kiếm và lọc
-        Khóa và mở khóa
+        Khóa và mở khóa có icon ổ khóa trực quan
       ✅ OWNER và hồ sơ đối tác
         Xét duyệt đăng ký OWNER
       ✅ Hồ sơ cơ sở

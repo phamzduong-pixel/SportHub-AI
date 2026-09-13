@@ -125,3 +125,5 @@ export const adjustInventory = (
   });
 export const getInventoryHistory = (id: number) =>
   apiRequest<StockMovement[]>(`/facility-products/${id}/inventory-history`);
+export const getSportProductOptions = (sport: string) =>
+  apiRequest<string[]>(`/facility-products/sport-options?sport=${encodeURIComponent(sport)}`);

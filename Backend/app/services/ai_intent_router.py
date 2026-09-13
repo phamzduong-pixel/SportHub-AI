@@ -47,18 +47,23 @@ ENTITY_KEYS = (
 )
 
 OUT_OF_SCOPE_TERMS = (
-    'python', 'lap trinh', 'code', 'toan hoc', 'giai bai', 'lich su viet', 'chinh tri',
-    'suc khoe', 'benh', 'thuoc', 'tai chinh', 'chung khoan', 'phap luat', 'luat su',
-    'viet bai', 'bai tho', 'dich thuat', 'dich sang', 'thoi tiet', 'tin tuc',
-    'thit cho', 'mon an', 'nau an', 'phim', 'am nhac', 'du lich', 'chuyen cuoi', 'ke chuyen',
-    'dich doan', 'dich cau', 'tieng anh',
+    'python', 'lap trinh', 'viet code', 'sua code', 'toan hoc', 'giai toan', 'giai bai', 'bai toan',
+    'lich su viet', 'chinh tri', 'suc khoe', 'benh', 'thuoc',
+    'tai chinh', 'chung khoan', 'bitcoin', 'crypto', 'tien ao', 'phap luat', 'luat su',
+    'viet bai', 'bai tho', 'viet cv', 'tao cv', 'dich thuat', 'dich sang', 'dich tieng anh', 'tieng anh',
+    'thoi tiet', 'tin tuc', 'thit cho', 'mon an', 'nau an', 'cach nau', 'cong thuc', 'lam banh',
+    'phim', 'am nhac', 'du lich', 'chuyen cuoi', 'ke chuyen',
+    'tu van tinh cam', 'tinh yeu', 'sua may tinh', 'cai win',
+    'dich doan', 'dich cau',
 )
 DOMAIN_TERMS = (
     'san', 'the thao', 'sporthub', 'co so', 'dia diem', 'tien ich', 'khung gio',
     'lich trong', 'booking', 'ma dat', 'dat lich', 'dat coc', 'thanh toan', 'hoan tien',
     'hoa don', 'bien lai', 'huy', 'doi lich', 'doi gio', 'tai khoan', 'ho so',
     'owner', 'chu san', 'doi tac', 'quan ly', 'gia', 'choi', 'cong suat', 'thap diem', 'cao diem', 'it khach', 'uu dai',
-    'san pham', 'dich vu', 'cho thue', 'con hang', 'so luong con', 'ton kho', 'tim', 'giup', 'tro ly', 'lap day',
+    'san pham', 'dich vu', 'cho thue', 'thue san', 'thue', 'con hang', 'so luong con', 'ton kho', 'tim', 'giup', 'tro ly', 'lap day',
+    'admin', 'quan tri', 'phe duyet', 'xet duyet', 'tu choi', 'dang ky', 'dang nhap', 'mat khau', 'danh gia', 'review',
+    'chuc nang', 'tinh nang', 'vai tro', 'customer', 'system_admin',
 )
 
 
@@ -95,6 +100,7 @@ class IntentRoute:
     needs_clarification: bool = False
     is_follow_up: bool = False
     context_reset: bool = False
+    is_combined_out_of_scope: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
@@ -123,8 +129,23 @@ class IntentRouter:
             or fresh_entities.sport_type is not None or fresh_entities.court_type is not None
         )
 
-        if any(term in query for term in OUT_OF_SCOPE_TERMS):
+        has_out_of_scope = any(term in query for term in OUT_OF_SCOPE_TERMS)
+        has_domain_term = any(term in query for term in (
+            'cho san', 'dat san', 'tim san', 'xem san', 'thue san', 'san con trong',
+            'lich trong', 'booking', 'sporthub', 'chu san', 'san nao', 'co san',
+            'san the thao', 'san bong', 'san cau long', 'san tennis', 'san pickleball',
+            'khung gio', 'slot'
+        )) or bool(re.search(r'\bsan\b', query)) or fresh_entities.sport_type is not None or fresh_entities.venue_name is not None
+
+        if has_out_of_scope:
+            if has_domain_term:
+                domain_intent, domain_conf = self._match_intent(query, follow_up, effective_context, fresh_entities)
+                if domain_intent is not None and domain_conf >= 0.55:
+                    needs_clarification = self._needs_clarification(domain_intent, entities, has_context)
+                    return IntentRoute(domain_intent, domain_conf, entities, needs_clarification, follow_up, context_reset, is_combined_out_of_scope=True)
+                return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.95, fresh_entities, context_reset=False, is_combined_out_of_scope=True)
             return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.99, fresh_entities, context_reset=True)
+
         if self._is_greeting(query):
             return IntentRoute(AssistantIntent.GREETING, 0.99, entities)
 
@@ -184,22 +205,35 @@ class IntentRouter:
             or context.get('last_intent') in {'GET_BOOKING', 'CANCEL_BOOKING', 'RESCHEDULE_BOOKING'}
             or any(term in query for term in ('booking', 'lich dat', 'ma dat', 'dat san'))
         )
-        if has_booking_context and any(term in query for term in ('doi lich', 'doi gio', 'doi ngay', 'doi san', 'dời lịch', 'doi ca', 'reschedule')):
+        is_search_follow_up = bool(
+            context.get('last_intent') in {'SEARCH_VENUE', 'RECOMMEND_VENUE', 'CHECK_AVAILABILITY', 'RECOMMEND_SLOT'}
+            or (context.get('sport_type') and not has_booking_context)
+        )
+        reschedule_terms = ('doi lich', 'doi gio', 'doi ngay', 'doi san', 'dời lịch', 'doi ca', 'reschedule')
+        if any(term in query for term in reschedule_terms) and (not is_search_follow_up or has_booking_context):
             return AssistantIntent.RESCHEDULE_BOOKING, 0.97
-        if re.search(r'\b(huy|huỷ)\b', query) and any(term in query for term in ('san', 'booking', 'lich dat', 'ma dat', 'chinh sach')):
+        if re.search(r'\b(huy|huỷ)\b', query) and any(term in query for term in ('san', 'booking', 'lich dat', 'ma dat', 'chinh sach', 'don', 'don dat')):
             return AssistantIntent.CANCEL_BOOKING, 0.96
         if any(term in query for term in ('trang thai booking', 'booking cua toi', 'lich su dat', 'lich dat cua toi', 'xem booking', 'ma dat', 'bao nhieu booking', 'booking hom nay')) or (
             'booking' in query and ('the nao' in query or 'trang thai' in query)
         ):
             return AssistantIntent.GET_BOOKING, 0.95
-        if any(term in query for term in ('tai khoan', 'ho so', 'thong tin cua toi', 'doi mat khau', 'dang nhap', 'bao nhieu owner', 'bao nhieu customer', 'owner dang hoat dong')):
+        if any(term in query for term in ('tai khoan', 'ho so', 'thong tin cua toi', 'doi mat khau', 'dang nhap', 'dang ky tai khoan', 'dang ky sporthub', 'sua thong tin ca nhan', 'chinh sua ho so', 'bao nhieu owner', 'bao nhieu customer', 'owner dang hoat dong')):
             return AssistantIntent.ACCOUNT_SUPPORT, 0.94
         if any(term in query for term in (
-            'huong dan', 'cach su dung', 'cach dat san', 'sporthub lam duoc gi',
-            'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi',
-            'giup toi nhung gi', 'giup duoc gi', 'hoat dong nhu the nao',
+            'huong dan', 'cach su dung', 'cach dat san', 'lam the nao de dat san', 'lam sao de dat san',
+            'sporthub lam duoc gi', 'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi',
+            'giup toi nhung gi', 'giup duoc gi', 'hoat dong nhu the nao', 'sporthub la gi',
+            'vai tro', 'phan quyen', 'cac buoc dat san', 'danh gia san', 'lam the nao de danh gia',
+            'lam the nao de tim san', 'cach tim san', 'lam sao de tim san',
+            'dieu kien dang ky chu san', 'yeu cau dang ky owner', 'can gi de dang ky lam chu san',
+            'chu san duoc quan ly', 'owner quan ly', 'chu san them san', 'tao san moi', 'them san moi',
+            'chu san quan ly khung gio', 'cai dat khung gio', 'tao slot', 'bang gia', 'gia gio vang',
+            'chu san quan ly san pham', 'thue vot bong', 'san pham phu tro', 'xem doanh thu chu san',
+            'admin quan ly', 'duyet ho so chu san', 'duyet co so', 'phe duyet co so',
+            'bao lau thi duyet', 'thoi gian duyet', 'phi dang ky chu san', 'phi duy tri',
         )):
-            return AssistantIntent.SYSTEM_GUIDE, 0.93
+            return AssistantIntent.SYSTEM_GUIDE, 0.95
         if any(term in query for term in ('bao nhieu co so', 'co bao nhieu co so', 'so luong co so')):
             return AssistantIntent.SEARCH_VENUE, 0.96
 
@@ -227,7 +261,7 @@ class IntentRouter:
             follow_up and (fresh_entities.start_time is not None or fresh_entities.preferred_time is not None)
         ):
             return AssistantIntent.RECOMMEND_SLOT, 0.94
-        if any(term in query for term in ('goi y', 'de xuat', 'phu hop', 'nen chon', 'tot nhat')) and not any(term in query for term in ('gio', 'khung gio', 'slot')):
+        if any(term in query for term in ('goi y', 'de xuat', 'phu hop', 'nen chon', 'tot nhat', 'san ngon', 'vai san ngon')) and not any(term in query for term in ('gio', 'khung gio', 'slot')):
             return AssistantIntent.RECOMMEND_VENUE, 0.93
         if any(term in query for term in (
             'dia chi', 'tien ich', 'thong tin san', 'chi tiet san', 'gia bao nhieu', 'gia san',
@@ -241,7 +275,8 @@ class IntentRouter:
         has_search_terms = any(term in query for term in (
             'co san', 'san nao', 'tim san', 'tim co so', 'kiem san', 'cho toi san',
             'toi muon san', 'muon san', 'muon tim', 'giup toi tim', 'co tim san', 'tim giup', 'giup tim',
-        )) or query.startswith('co san') or query.startswith('tim ') or query.startswith('san ')
+            'thue san', 'muon thue', 'can thue', 'cho thue san',
+        )) or query.startswith('co san') or query.startswith('tim ') or query.startswith('san ') or query.startswith('thue ')
 
         if has_search_entities or has_search_terms:
             if has_date_or_time or any(term in query for term in ('hom nay', 'ngay mai', 'toi nay', 'toi mai', 'ngay kia')):
@@ -253,7 +288,10 @@ class IntentRouter:
     @staticmethod
     def _is_greeting(query: str) -> bool:
         cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
-        return cleaned in {'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'xin chao sporthub', 'hello sporthub', 'hi sporthub'}
+        return cleaned in {
+            'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'alo', 'chao tro ly',
+            'xin chao sporthub', 'hello sporthub', 'hi sporthub'
+        }
 
     @staticmethod
     def _has_continuation_detail(query: str) -> bool:
@@ -276,7 +314,9 @@ class IntentRouter:
 
     @staticmethod
     def _looks_ambiguous(query: str) -> bool:
-        return len(query.split()) <= 4 and any(term in query for term in ('bao nhieu', 'the nao', 'con khong', 'cai nao', 'gi vay'))
+        return len(query.split()) <= 4 and any(term in query for term in (
+            'bao nhieu', 'the nao', 'con khong', 'cai nao', 'gi vay', 'dat', 'muon dat', 'gia the nao', 'co duoc khong'
+        ))
 
     @staticmethod
     def _needs_clarification(intent: AssistantIntent, entities: IntentEntities, has_context: bool) -> bool:
@@ -356,7 +396,7 @@ class IntentRouter:
             return 'morning'
         if 'buoi chieu' in query:
             return 'afternoon'
-        if any(term in query for term in ('buoi toi', 'gio toi', 'toi nay', 'toi mai')) or re.search(r'\btoi\s+(?:thu|ngay)', query):
+        if any(term in query for term in ('buoi toi', 'gio toi', 'toi nay', 'toi mai')) or re.search(r'\b(?:toi\s+(?:thu|ngay|\d|luc|khoang)|\d{1,2}(?::\d{2})?\s*(?:h|gio)?\s*toi)\b', query):
             return 'evening'
         return None
 
@@ -386,14 +426,20 @@ class IntentRouter:
 
     @staticmethod
     def _times(query: str) -> tuple[str | None, str | None]:
+        is_evening = any(term in query for term in ('toi nay', 'toi mai', 'buoi toi', 'gio toi')) or bool(re.search(r'\b(?:toi\s+(?:thu|ngay|\d|luc|khoang)|\d{1,2}(?::\d{2})?\s*(?:h|gio)?\s*toi)\b', query))
         range_match = re.search(r'\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:-|–|den|toi)\s*([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:h|gio)?\b', query)
         if range_match:
-            return f'{int(range_match[1]):02d}:{int(range_match[2] or 0):02d}', f'{int(range_match[3]):02d}:{int(range_match[4] or 0):02d}'
+            h1, m1 = int(range_match[1]), int(range_match[2] or 0)
+            h2, m2 = int(range_match[3]), int(range_match[4] or 0)
+            if is_evening and h1 < 12 and h2 <= 12:
+                h1 += 12
+                h2 += 12
+            return f'{h1:02d}:{m1:02d}', f'{h2:02d}:{m2:02d}'
         match = re.search(r'\b([01]?\d|2[0-3])(?::([0-5]\d))?\s*(?:h|gio)\b', query)
         if not match:
             return None, None
         hour = int(match[1])
-        if any(term in query for term in ('toi nay', 'toi mai', 'buoi toi', 'gio toi')) and hour < 12:
+        if is_evening and hour < 12:
             hour += 12
         return f'{hour:02d}:{int(match[2] or 0):02d}', None
 
@@ -409,12 +455,21 @@ class IntentRouter:
             days = (5 - today.weekday()) % 7
             return (today + timedelta(days=days)).isoformat()
         iso = re.search(r'\b(20\d{2})-(\d{1,2})-(\d{1,2})\b', query)
-        short = re.search(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](20\d{2}))?\b', query)
+        short = re.search(r'\b(\d{1,2})[/-](\d{1,2})(?:[/-](20\d{2}))?\b(?!\s*(?:h|gio|pm|am))\b', query)
         try:
             if iso:
                 return date(int(iso[1]), int(iso[2]), int(iso[3])).isoformat()
             if short:
-                return date(int(short[3] or today.year), int(short[2]), int(short[1])).isoformat()
+                # If separator is '-' and there is no year and no explicit 'ngay/thang' keyword,
+                # check if this is likely a time range (e.g., 8-9) or preceded by time markers
+                sep = query[short.start(0):short.end(0)]
+                is_hyphen_range = '-' in sep and not short.group(3)
+                has_date_context = bool(re.search(r'\b(?:ngay|thang|date)\s*' + re.escape(sep), query))
+                is_time_marked = bool(re.search(r'\b(?:tu|luc|khoang|tam|tu\s+khoang)\s*' + re.escape(sep), query))
+                if is_hyphen_range and (is_time_marked or not has_date_context and not ('/' in sep)):
+                    pass
+                else:
+                    return date(int(short[3] or today.year), int(short[2]), int(short[1])).isoformat()
         except ValueError:
             return None
         for label, weekday in WEEKDAYS.items():

@@ -29,12 +29,13 @@ def availability(
     search: str | None = Query(default=None, max_length=120),
     sport_type: str | None = Query(default=None, max_length=80),
     location: str | None = Query(default=None, max_length=120),
+    amenities: list[str] | None = Query(default=None),
     start_time: time | None = Query(default=None),
     max_price: float | None = Query(default=None, ge=0, le=1_000_000_000),
     sort_by: str = Query(default='relevance', pattern='^(relevance|price|rating)$'),
     service: BookingService = Depends(get_service),
 ):
-    return service.availability(booking_date=booking_date, field_id=field_id, search=search, sport_type=sport_type, location=location, start_time=start_time, max_price=max_price, sort_by=sort_by)
+    return service.availability(booking_date=booking_date, field_id=field_id, search=search, sport_type=sport_type, location=location, amenities=amenities, start_time=start_time, max_price=max_price, sort_by=sort_by)
 
 @router.post('/bookings', response_model=BookingResponse, status_code=201)
 def create_booking(

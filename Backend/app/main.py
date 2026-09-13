@@ -21,22 +21,26 @@ from .models import AuditLog, Booking, BookingActivity, BookingComplaint, Bookin
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    migrate_empty_legacy_booking_schema(engine)
-    migrate_field_recommendation_columns(engine)
-    migrate_user_profile_columns(engine)
-    migrate_ownership_columns(engine)
-    migrate_system_roles(engine)
-    migrate_deposit_payment_schema(engine)
-    migrate_professional_booking_schema(engine)
-    migrate_partner_application_schema(engine)
-    migrate_facility_approval_schema(engine)
-    Base.metadata.create_all(bind=engine)
-    migrate_product_inventory_schema(engine)
-    migrate_booking_slots(engine)
-    migrate_system_roles(engine)
-    migrate_professional_booking_schema(engine)
-    migrate_refund_workflow_schema(engine)
-    migrate_cancelled_booking_balances(engine)
+    if not settings.DATABASE_URL.startswith("sqlite:///:memory:"):
+        migrate_empty_legacy_booking_schema(engine)
+        migrate_field_recommendation_columns(engine)
+        migrate_user_profile_columns(engine)
+        migrate_ownership_columns(engine)
+        migrate_system_roles(engine)
+        migrate_deposit_payment_schema(engine)
+        migrate_professional_booking_schema(engine)
+        migrate_partner_application_schema(engine)
+        migrate_facility_approval_schema(engine)
+        Base.metadata.create_all(bind=engine)
+        migrate_product_inventory_schema(engine)
+        migrate_booking_slots(engine)
+        migrate_system_roles(engine)
+        migrate_professional_booking_schema(engine)
+        migrate_refund_workflow_schema(engine)
+        migrate_cancelled_booking_balances(engine)
+    else:
+        # In-memory SQLite DB for tests – models are imported at module load.
+        Base.metadata.create_all(bind=engine)
     with SessionLocal() as session:
         seed_demo_db(session)
     # A newly seeded OWNER may not have existed during the schema migration above.

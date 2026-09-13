@@ -225,13 +225,14 @@ flowchart TD
 
 ### 4.9. AI, recommendation và analytics
 
-1. Assistant phân loại intent, trích entity, giữ context và giới hạn domain — **Hoàn thành**.
-2. Truy vấn riêng tư áp dụng JWT/tenant scope tại service và repository — **Hoàn thành**.
-3. Assistant không tự mutation booking/payment, chỉ hướng dẫn — **Hoàn thành**.
-4. Thông tin sản phẩm, giá và số lượng đọc từ backend hiện tại — **Hoàn thành**.
-5. Recommendation dùng lịch sử, rating, khoảng cách, giá và availability — **Hoàn thành**.
-6. Pipeline ML offline, metrics, dự báo nhu cầu và recommendation OWNER — **Hoàn thành**.
-7. LLM ngoài phụ thuộc cấu hình runtime và có fallback an toàn — **Hoàn thành một phần**.
+1. Assistant phân loại intent (19 intents), trích entity, giữ multi-turn context và giới hạn domain — **Hoàn thành**.
+2. Guardrailed RAG & Knowledge Base tra cứu tri thức tĩnh (FAQ, hướng dẫn, chính sách) có phân quyền (RBAC) — **Hoàn thành**.
+3. Truy vấn riêng tư áp dụng JWT/tenant scope tại service và repository — **Hoàn thành**.
+4. Assistant không tự mutation booking/payment, chỉ hướng dẫn — **Hoàn thành**.
+5. Thông tin sản phẩm, giá và số lượng đọc từ backend hiện tại — **Hoàn thành**.
+6. Recommendation dùng lịch sử, rating, khoảng cách, giá và availability — **Hoàn thành**.
+7. Pipeline ML offline, metrics, dự báo nhu cầu (Random Forest) và recommendation OWNER — **Hoàn thành**.
+8. LLM ngoài phụ thuộc cấu hình runtime và có fallback an toàn — **Hoàn thành một phần**.
 
 ### 4.10. Nền tảng, dữ liệu và bảo mật — **Hạ tầng**
 

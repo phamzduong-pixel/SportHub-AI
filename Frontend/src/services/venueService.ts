@@ -53,21 +53,35 @@ function toVenue(field: ApiField, slots: ApiSlot[], facility?: PublicCourtDetail
   };
 }
 
-export async function listVenues(input: { date?: string; search?: string; sportType?: string } = {}): Promise<Venue[]> {
+export async function listVenues(input: { date?: string; search?: string; sportType?: string; amenities?: string[] } = {}): Promise<Venue[]> {
   if (input.date) {
     const params = new URLSearchParams({ date: input.date });
     if (input.search?.trim()) params.set('search', input.search.trim());
     if (input.sportType) params.set('sport_type', input.sportType);
+    if (input.amenities && input.amenities.length > 0) {
+      input.amenities.forEach((a) => {
+        if (a && a.trim()) params.append('amenities', a.trim());
+      });
+    }
     const rows = await apiRequest<Availability[]>(`/availability?${params}`);
     return rows.map((row) => toVenue(row.field, row.available_slots));
   }
-  const params = new URLSearchParams({ page_size: '100', status: 'available' });
+  const params = new URLSearchParams({ page_size: '100', status: 'available', public: 'true' });
   if (input.search?.trim()) params.set('search', input.search.trim());
   if (input.sportType) params.set('sport_type', input.sportType);
+  if (input.amenities && input.amenities.length > 0) {
+    input.amenities.forEach((a) => {
+      if (a && a.trim()) params.append('amenities', a.trim());
+    });
+  }
   const response = await apiRequest<{ items: ApiField[] }>(`/fields?${params}`);
   return Promise.all(response.items.map(async (field) => {
-    const slots = await apiRequest<ApiSlot[]>(`/fields/${field.id}/time-slots`);
-    return toVenue(field, slots);
+    try {
+      const slots = await apiRequest<ApiSlot[]>(`/fields/${field.id}/time-slots`);
+      return toVenue(field, slots);
+    } catch {
+      return toVenue(field, []);
+    }
   }));
 }
 

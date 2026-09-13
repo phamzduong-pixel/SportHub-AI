@@ -117,12 +117,14 @@ export function BookingPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const courtId = Number(venueId);
+  const rawCourtId = Number(venueId);
+  const courtId = Number.isInteger(rawCourtId) && rawCourtId > 0 ? rawCourtId : 0;
   const date = params.get("date") || "";
-  const slotId = Number(params.get("slot")) || 0;
-  const slotIds = (params.get("slots") || String(slotId))
+  const rawSlotId = Number(params.get("slot"));
+  const slotId = Number.isInteger(rawSlotId) && rawSlotId > 0 ? rawSlotId : 0;
+  const slotIds = (params.get("slots") || (slotId ? String(slotId) : ""))
     .split(",")
-    .map(Number)
+    .map((item) => Number(item.trim()))
     .filter((id) => Number.isInteger(id) && id > 0);
   const saved = storedContext();
   const context: BookingContext =
