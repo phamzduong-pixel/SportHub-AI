@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..core.config import settings
+from ..models.knowledge_entry import KnowledgeEntry
 from ..models.user import User
 from ..repositories.ai_repository import AIRepository
 from ..schemas.ai import SlotRecommendationRequest
@@ -48,14 +49,14 @@ class SearchCriteria:
     sport_type: str | None = None
     court_type: str | None = None
     booking_date: date | None = None
+    location: str | None = None
     start_minute: int | None = None
     end_minute: int | None = None
-    duration_minutes: int | None = None
-    time_ranges: list[tuple[int, int]] = field(default_factory=list)
-    location: str | None = None
+    duration_minutes: int = 60
     max_price: float | None = None
     people: int | None = None
     special_requirements: list[str] = field(default_factory=list)
+    time_ranges: list[tuple[int, int]] = field(default_factory=list)
     requested_field_id: int | None = None
     requested_time_slot_id: int | None = None
     allow_alternatives: bool = False
@@ -66,12 +67,13 @@ class SearchCriteria:
 
 
 class AIAssistantService:
-    def __init__(self, repository: AIRepository, current_user: User | None = None):
+    def __init__(self, repository: AIRepository, current_user: User | None = None, guardrail: RAGGuardrail | None = None):
         self.repository = repository
         self.current_user = current_user
         self.repository.scope_for_user(current_user)
         self.tz = ZoneInfo(settings.TIMEZONE)
         self.intent_router = IntentRouter()
+        self.guardrail = guardrail or RAGGuardrail()
         self._active_route: IntentRoute | None = None
         self._conversation_context: dict[str, Any] = {}
 
@@ -114,6 +116,8 @@ class AIAssistantService:
             )
         if route.intent == AssistantIntent.PARTNER_APPLICATION_SUPPORT:
             return self._answer_partner_application(query)
+        if route.intent == AssistantIntent.SPORTS_KNOWLEDGE:
+            return self._answer_sports_knowledge(query, route)
         # Static knowledge intents that can be answered from the Knowledge Base via RAG
         static_intents = {
             AssistantIntent.SYSTEM_GUIDE,
@@ -502,6 +506,204 @@ class AIAssistantService:
         reply += ' Tôi không tự thay đổi giá hoặc tạo chương trình khuyến mại.'
         return self._response(reply, criteria, [])
 
+    def _answer_sports_knowledge(self, query: str, route: IntentRoute):
+        criteria = SearchCriteria()
+        role = self.current_user.role if self.current_user else 'CUSTOMER'
+        sport = route.entities.sport_type
+        target_entities = route.entities.sports_entities or ([route.entities.sports_entity] if route.entities.sports_entity else [])
+        guardrail = self.guardrail
+
+        # If no specific entities detected, perform broad sports retrieval
+        if not target_entities:
+            retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=None)
+            eval_res = guardrail.evaluate_freshness_and_sufficiency(query, retrieved)
+            if eval_res.needs_fresh_web:
+                web_evidences = guardrail.retrieve_web_context(query, route.intent.name, sport=sport, entity=None)
+                retrieved = guardrail.merge_and_prefer_evidence(query, retrieved, web_evidences)
+            if not retrieved:
+                entity_label = f" về môn {sport}" if sport else ""
+                reply = (
+                    f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
+                    "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
+                )
+                response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
+                if route.entities.sport_type:
+                    response['understood']['sport_type'] = route.entities.sport_type
+                response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+                return response
+            target_entities = [None]
+            entity_retrievals = {None: retrieved}
+        else:
+            entity_retrievals = {}
+            for ent in target_entities:
+                retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=ent)
+                if not retrieved and ent:
+                    search_query = f"{ent} {query}"
+                    retrieved = guardrail.retrieve_context(search_query, role, route.intent.name, sport=sport, entity=ent)
+                if not retrieved:
+                    retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=None)
+                eval_res = guardrail.evaluate_freshness_and_sufficiency(query, retrieved)
+                if eval_res.needs_fresh_web:
+                    web_evidences = guardrail.retrieve_web_context(query, route.intent.name, sport=sport, entity=ent)
+                    retrieved = guardrail.merge_and_prefer_evidence(query, retrieved, web_evidences)
+                entity_retrievals[ent] = retrieved
+
+        # Check if ALL retrievals failed
+        all_empty = all(not r for r in entity_retrievals.values())
+        if all_empty:
+            entity_label = f" về {', '.join(e for e in target_entities if e)}" if any(target_entities) else (f" về môn {sport}" if sport else "")
+            reply = (
+                f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
+                "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
+            )
+            response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
+            if route.entities.sports_entities:
+                response['understood']['sports_entities'] = route.entities.sports_entities
+            if route.entities.sports_entity:
+                response['understood']['sports_entity'] = route.entities.sports_entity
+            if route.entities.sport_type:
+                response['understood']['sport_type'] = route.entities.sport_type
+            response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+            return response
+
+        norm_q = plain(query)
+        requested_topics = {}
+        topic_labels = {
+            'identity': 'thông tin giới thiệu',
+            'birth_date': 'ngày sinh',
+            'birth_place': 'nơi sinh/quê quán',
+            'current_club': 'CLB/đội bóng hiện tại',
+            'status': 'trạng thái thi đấu',
+            'career': 'quá trình thi đấu',
+            'achievements': 'thành tích',
+        }
+
+        if any(p in norm_q for p in ('la ai', 'gioi thieu', 'tieu su', 'profil')):
+            requested_topics['identity'] = topic_labels['identity']
+        if any(p in norm_q for p in ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh vao ngay', 'sinh ngay bao nhieu', 'sinh ngay nao')):
+            requested_topics['birth_date'] = topic_labels['birth_date']
+        if any(p in norm_q for p in ('sinh o dau', 'noi sinh', 'que o dau', 'que quan', 'sinh tai', 'que o')):
+            requested_topics['birth_place'] = topic_labels['birth_place']
+        if any(p in norm_q for p in ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'clb nao', 'doi nao', 'dang da', 'thi dau o dau', 'choi o dau')):
+            requested_topics['current_club'] = topic_labels['current_club']
+        if any(p in norm_q for p in ('trang thai', 'giai nghe', 'con thi dau', 'da gia tu', 'giai nghe chua', 'da giai nghe')):
+            requested_topics['status'] = topic_labels['status']
+        if any(p in norm_q for p in ('qua trinh thi dau', 'su nghiep', 'tung thi dau', 'cac clb')):
+            requested_topics['career'] = topic_labels['career']
+        if any(p in norm_q for p in ('thanh tich', 'danh hieu', 'giai thuong', 'qua bong vang', 'huy chuong', 'cup', 'vo dich')):
+            requested_topics['achievements'] = topic_labels['achievements']
+        if any(p in norm_q for p in ('chieu cao', 'cao bao nhieu')):
+            requested_topics['height'] = 'chiều cao'
+        if any(p in norm_q for p in ('can nang', 'nang bao nhieu')):
+            requested_topics['weight'] = 'cân nặng'
+
+        TOPIC_ALIASES = {
+            'cầu thủ': 'identity',
+            'vận động viên': 'identity',
+            'profile': 'identity',
+            'tiểu sử': 'identity',
+        }
+
+        all_answers = []
+        all_citations = []
+        seen_sources = set()
+        first_entry = None
+
+        is_multi = len([e for e in target_entities if e]) > 1
+
+        for ent in target_entities:
+            retrieved = entity_retrievals.get(ent, [])
+            if not retrieved:
+                if ent:
+                    all_answers.append(f"Hiện tại SportHub AI chưa có thông tin kiểm chứng về {ent} trong cơ sở dữ liệu.")
+                continue
+
+            seen_answers = set()
+            selected_entries = []
+            for entry, score in retrieved:
+                norm_ans = plain(entry.answer)
+                if norm_ans not in seen_answers:
+                    seen_answers.add(norm_ans)
+                    selected_entries.append(entry)
+
+            if not first_entry and selected_entries:
+                first_entry = selected_entries[0]
+
+            retrieved_topics = set()
+            for e in selected_entries:
+                top_key = (e.topic or "").lower()
+                top_key = TOPIC_ALIASES.get(top_key, top_key)
+                retrieved_topics.add(top_key)
+
+            missing_labels = []
+            if requested_topics:
+                for top_key, label in requested_topics.items():
+                    if top_key not in retrieved_topics:
+                        ans_combined = plain(" ".join(e.answer for e in selected_entries))
+                        if top_key == 'birth_date' and any(k in ans_combined for k in ('sinh ngay', 'thang', 'nam 19', 'nam 20')):
+                            continue
+                        if top_key == 'birth_place' and any(k in ans_combined for k in ('sinh ra tai', 'que o', 'huyen', 'tinh', 'thanh pho')):
+                            continue
+                        if top_key == 'current_club' and any(k in ans_combined for k in ('clb', 'cau lac bo', 'thi dau cho', 'khoac ao')):
+                            continue
+                        if top_key == 'identity' and len(selected_entries) > 0:
+                            continue
+                        missing_labels.append(label)
+
+            ent_answers = [validate_response(e.answer) for e in selected_entries]
+            if missing_labels:
+                entity_name = ent or (selected_entries[0].entity if selected_entries else "")
+                entity_str = f" của {entity_name}" if entity_name else ""
+                missing_text = f"(Lưu ý: Hiện tại SportHub AI chưa có thông tin kiểm chứng về {', '.join(missing_labels)}{entity_str} trong cơ sở dữ liệu)."
+                ent_answers.append(missing_text)
+
+            ent_citations = []
+            ent_seen_sources = set()
+            for e in selected_entries:
+                src_name = getattr(e, 'source_name', None) or getattr(e, 'source', None)
+                src_url = getattr(e, 'source_url', None)
+                updated = getattr(e, 'collected_at', None)
+                if src_name and src_name not in ent_seen_sources:
+                    ent_seen_sources.add(src_name)
+                    cit = f"Nguồn: {src_name}"
+                    if src_url:
+                        cit += f", {src_url}"
+                    if updated:
+                        cit += f", cập nhật {updated}"
+                    ent_citations.append(cit)
+
+            if is_multi and ent:
+                section_text = f"**{ent}**:\n" + "\n\n".join(ent_answers)
+                if ent_citations:
+                    section_text += f"\n\n({'; '.join(ent_citations)})"
+                all_answers.append(section_text)
+            else:
+                all_answers.extend(ent_answers)
+                all_citations.extend(ent_citations)
+
+        answer_text = "\n\n".join(all_answers)
+        if not is_multi and all_citations:
+            answer_text += f"\n\n({'; '.join(all_citations)})"
+
+        response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
+        if route.entities.sports_entities:
+            response['understood']['sports_entities'] = route.entities.sports_entities
+        if first_entry and first_entry.entity:
+            response['understood']['sports_entity'] = first_entry.entity
+        elif route.entities.sports_entity:
+            response['understood']['sports_entity'] = route.entities.sports_entity
+
+        if first_entry and first_entry.sport:
+            response['understood']['sport_type'] = first_entry.sport
+        elif route.entities.sport_type:
+            response['understood']['sport_type'] = route.entities.sport_type
+
+        if first_entry and getattr(first_entry, 'topic', None):
+            response['understood']['entity_type'] = first_entry.topic
+
+        response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+        return response
+
     def _answer_partner_application(self, query: str):
         criteria = SearchCriteria()
         current_role = self.current_user.role if self.current_user else None
@@ -823,7 +1025,7 @@ class AIAssistantService:
         entities = route.to_dict()['entities'] if route else {
             'sport_type': None, 'court_type': None, 'venue_name': None, 'location': None, 'date': None,
             'start_time': None, 'end_time': None, 'preferred_time': None, 'max_price': None, 'price_max': None,
-            'number_of_players': None, 'booking_code': None,
+            'number_of_players': None, 'booking_code': None, 'sports_entity': None,
         }
         criteria_entities = {
             'sport_type': criteria.sport_type,
@@ -841,7 +1043,7 @@ class AIAssistantService:
         for key in (
             'sport_type', 'court_type', 'booking_date', 'start_time', 'end_time', 'location', 'field_id',
             'time_slot_id', 'max_price', 'people', 'result_field_ids', 'result_time_slot_ids',
-            'result_prices', 'reference_price',
+            'result_prices', 'reference_price', 'sports_entity', 'entity_type',
         ):
             if understood.get(key) is None and self._conversation_context.get(key) is not None:
                 understood[key] = self._conversation_context[key]

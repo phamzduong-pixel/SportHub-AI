@@ -1,15 +1,19 @@
-from datetime import date
+from datetime import date, datetime, timezone
 import logging
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from ...ai.inference.prediction_service import DemandPredictionService
 from ...database.session import get_db
+from ...models.ai_conversation import AIConversation, AIMessage
 from ...models.user import User
 from ...repositories.ai_repository import AIRepository
 from ...schemas.ai import (
-    AssistantRequest, AssistantResponse, CustomerRecommendationResponse,
+    AIConversationDetailResponse, AIConversationListItem, AIConversationListResponse,
+    AIMessageItem, AssistantRequest, AssistantResponse, CustomerRecommendationResponse,
     BookingMessageRequest, BookingMessageResponse, OccupancySummaryResponse,
     SlotRecommendationRequest, SlotRecommendationResponse,
     DemandOverviewResponse, DemandPredictionRequest, DemandPredictionResponse,
@@ -66,25 +70,165 @@ def customer_recommendations(
     return CustomerRecommendationService(db).recommend(customer_id, limit)
 
 
+@router.get('/conversations', response_model=AIConversationListResponse)
+def list_conversations(
+    limit: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    conversations = (
+        db.query(AIConversation)
+        .filter(AIConversation.user_id == current_user.id)
+        .order_by(AIConversation.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = []
+    for conv in conversations:
+        last_msg = conv.messages[-1].content if conv.messages else None
+        items.append(
+            AIConversationListItem(
+                id=conv.id,
+                conversation_id=conv.conversation_id,
+                title=conv.title,
+                created_at=conv.created_at,
+                updated_at=conv.updated_at,
+                message_count=len(conv.messages),
+                last_message=last_msg,
+            )
+        )
+    return AIConversationListResponse(items=items)
+
+
+@router.get('/conversations/{conversation_id}', response_model=AIConversationDetailResponse)
+def get_conversation(
+    conversation_id: str,
+    current_user: User | None = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    conv = (
+        db.query(AIConversation)
+        .filter(AIConversation.conversation_id == conversation_id)
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail='Không tìm thấy cuộc trò chuyện.')
+
+    if conv.user_id is not None:
+        if not current_user:
+            raise HTTPException(status_code=401, detail='Yêu cầu đăng nhập để truy cập cuộc trò chuyện này.')
+        if conv.user_id != current_user.id:
+            raise HTTPException(status_code=403, detail='Bạn không có quyền truy cập cuộc trò chuyện này.')
+
+    messages = [
+        AIMessageItem(
+            id=msg.id,
+            role=msg.role,
+            content=msg.content,
+            payload=msg.payload,
+            created_at=msg.created_at,
+        )
+        for msg in conv.messages
+    ]
+    return AIConversationDetailResponse(
+        id=conv.id,
+        conversation_id=conv.conversation_id,
+        title=conv.title,
+        context_snapshot=conv.context_snapshot,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+        messages=messages,
+    )
+
+
 @router.post('/assistant', response_model=AssistantResponse)
 def assistant(
     payload: AssistantRequest,
     current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
-    """Read-only, domain-scoped assistant backed exclusively by SportHub data."""
+    """Domain-scoped assistant backed by SportHub data with persistent conversation history."""
     logger.info('AI assistant request received')
+
+    # 1. Resolve or create conversation
+    conv = None
+    if payload.conversation_id:
+        conv = (
+            db.query(AIConversation)
+            .filter(AIConversation.conversation_id == payload.conversation_id)
+            .first()
+        )
+        if conv:
+            if conv.user_id is not None:
+                if not current_user or conv.user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail='Bạn không có quyền truy cập cuộc trò chuyện này.')
+            elif current_user:
+                conv.user_id = current_user.id
+        else:
+            conv = AIConversation(
+                conversation_id=payload.conversation_id,
+                user_id=current_user.id if current_user else None,
+                title=payload.message[:60].strip(),
+            )
+            db.add(conv)
+            db.flush()
+    else:
+        new_cid = str(uuid.uuid4())
+        conv = AIConversation(
+            conversation_id=new_cid,
+            user_id=current_user.id if current_user else None,
+            title=payload.message[:60].strip(),
+        )
+        db.add(conv)
+        db.flush()
+
+    if not conv.title:
+        conv.title = payload.message[:60].strip()
+
+    # 2. Save user message immediately
+    user_msg = AIMessage(
+        conversation_id=conv.id,
+        role='user',
+        content=payload.message,
+        payload=None,
+    )
+    db.add(user_msg)
+    conv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # 3. Context fallback from snapshot if not explicitly provided
+    effective_context = payload.context or conv.context_snapshot
+
+    # 4. Process with AI Assistant Service
     try:
         result = AIAssistantService(AIRepository(db), current_user=current_user).ask(
             payload.message,
             context_field_id=payload.context_field_id,
-            context=payload.context,
+            context=effective_context,
         )
-        logger.info('AI response ready: %d suggestions', len(result['suggestions']))
-        return result
+        logger.info('AI response ready: %d suggestions', len(result.get('suggestions', [])))
+    except HTTPException:
+        raise
     except Exception as error:
         logger.exception('AI assistant failed')
-        raise HTTPException(status_code=500, detail='Không thể xử lý yêu cầu tìm sân từ dữ liệu SportHub.') from error
+        raise HTTPException(status_code=500, detail='Không thể xử lý yêu cầu từ AI assistant.') from error
+
+    # 5. Save assistant message after AI response
+    serializable_result = jsonable_encoder(result)
+    assistant_msg = AIMessage(
+        conversation_id=conv.id,
+        role='assistant',
+        content=result.get('reply', ''),
+        payload=serializable_result,
+    )
+    db.add(assistant_msg)
+    conv.context_snapshot = jsonable_encoder(result.get('understood'))
+    conv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    # 6. Inject conversation_id into response
+    result['conversation_id'] = conv.conversation_id
+    return result
 
 
 def get_service(db: Session = Depends(get_db)) -> DemandPredictionService:

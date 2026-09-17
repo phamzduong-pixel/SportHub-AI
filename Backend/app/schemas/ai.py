@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from enum import Enum
 from typing import Any, Literal
 
@@ -95,6 +95,7 @@ class AssistantRequest(RequestModel):
     message: str = Field(min_length=2, max_length=500)
     context_field_id: int | None = Field(default=None, gt=0)
     context: dict[str, Any] | None = None
+    conversation_id: str | None = None
 
 
 class AssistantSuggestion(BaseModel):
@@ -144,6 +145,7 @@ class AssistantAction(BaseModel):
 
 
 class AssistantResponse(BaseModel):
+    conversation_id: str | None = None
     reply: str
     understood: dict[str, Any]
     suggestions: list[AssistantSuggestion]
@@ -159,6 +161,38 @@ class AssistantResponse(BaseModel):
     context_reset: bool = False
     partner_application_status: Literal['NONE', 'PENDING', 'APPROVED', 'REJECTED'] | None = None
     action: AssistantAction | None = None
+
+
+class AIMessageItem(BaseModel):
+    id: int
+    role: str
+    content: str
+    payload: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class AIConversationDetailResponse(BaseModel):
+    id: int
+    conversation_id: str
+    title: str | None = None
+    context_snapshot: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+    messages: list[AIMessageItem] = []
+
+
+class AIConversationListItem(BaseModel):
+    id: int
+    conversation_id: str
+    title: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    message_count: int = 0
+    last_message: str | None = None
+
+
+class AIConversationListResponse(BaseModel):
+    items: list[AIConversationListItem]
 
 
 class CustomerRecommendation(BaseModel):

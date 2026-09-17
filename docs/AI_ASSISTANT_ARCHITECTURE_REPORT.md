@@ -334,3 +334,21 @@ flowchart TD
    - Top-K là bước lựa chọn ứng viên theo điểm số ban đầu, **không phải Reranker**. Hệ thống **không sử dụng Vector Database** (embeddings lưu trên RAM), **không có BM25/Sparse Vector** và **không dùng Cross-Encoder**.
 5. **Kiến trúc hiện tại nên được gọi chính xác là gì?**
    - **"Deterministic Rule-based Pipeline with Guardrailed RAG (Dual Matching & Top-K Retrieval), Scoped LLM Structured Output & Scikit-Learn Demand Prediction"** (Hệ thống đường ống theo luật xác định kết hợp RAG tri thức có bảo vệ ứng dụng đối sánh kép & Top-K retrieval, LLM sinh dữ liệu có cấu trúc kiểm soát nghiêm ngặt và Machine Learning dự báo nhu cầu).
+6. **Mở rộng Phân hệ External Sports Knowledge RAG & Entity Alias Engine (Cập nhật 09/2026)**:
+   - Hỗ trợ tra cứu tri thức 6 môn thể thao thuộc Whitelist với thứ tự ưu tiên địa lý (Thái Nguyên $\rightarrow$ Việt Nam $\rightarrow$ Quốc tế).
+   - Chuẩn hóa 52 entries tri thức cho 8 VĐV tiêu biểu (MVP Player Scope) theo 7 chủ đề thuộc tính (`birth_date`, `birth_place`, `current_club`, `career`, `status`, `achievements`, overview).
+   - Tích hợp động cơ khớp thuộc tính `TOPIC_PATTERNS` (ưu tiên score 0.95 cho thuộc tính đúng, dìm score 0.20 cho thuộc tính sai).
+   - Tích hợp động cơ quy đổi alias `ENTITY_ALIASES` tại Intent Router (`KNOWN_SPORTS_ENTITIES`) và Retriever (`_resolve_entity_alias()`): tự động nhận diện tên viết tắt, biệt danh, không dấu (`Leo Messi`, `CR7`, `Quang Hải`, `Tiến Linh`, `Axelsen`...) về đúng canonical entity mà không làm thay đổi nội dung minh chứng (evidence).
+   - Kiểm thử nghiệm thu đạt `100% PASSED` trên toàn bộ 488 test suites.
+7. **Nâng cấp Multi-Attribute Sports Knowledge RAG & Multi-Evidence Aggregation (17/09/2026)**:
+   - Xử lý câu hỏi tự nhiên gộp nhiều thuộc tính (ví dụ: *"Quang Hải là ai, sinh ngày nào, quê ở đâu, đá cho CLB nào?"*).
+   - `KnowledgeRetriever` gom danh sách `query_matched_topics`, không đánh phạt điểm khi query có nhiều topic.
+   - `AIAssistantService` gom và ghép toàn bộ evidence hợp lệ, loại bỏ trùng lặp và tự động gắn thông báo an toàn đối với các thuộc tính bị thiếu dữ liệu kiểm chứng.
+8. **Phân hệ Controlled Web Retrieval & Grounded Context (AI-WEB-01 ➔ AI-WEB-04)**:
+   - Tách biệt tuyệt đối Luồng Nghiệp Vụ (Business Flow) và Luồng Tri Thức Thể Thao (Sports Knowledge Flow). Business Intents luôn truy vấn Database (Ground Truth) và **không bao giờ gọi Web Search**.
+   - Kích hoạt Web Retrieval có kiểm soát qua danh sách Whitelist chính thức (`DEFAULT_SPORTS_SOURCE_WHITELIST`) và bộ lọc từ khóa theo môn thể thao (`SPORT_SPECIFIC_KEYWORDS`).
+   - Đánh giá Freshness và mức độ biến động (`volatility`): Thông tin thời sự/chuyển nhượng kích hoạt Web Retrieval; thông tin web mới hơn và uy tín sẽ thay thế thông tin nội bộ cũ (Freshness Superseding).
+   - Grounded LLM Response: LLM chỉ trả lời dựa trên Grounded Evidence được tổng hợp và đính kèm đầy đủ nguồn trích dẫn (Title, Domain, URL, Publication Date).
+   - Vượt qua 100% (8/8) kịch bản kiểm thử nghiệm thu cuối cùng (`test_final_sports_web_validation.py`).
+
+

@@ -25,6 +25,8 @@ class KnowledgeService:
         query: str,
         role: Optional[str] = None,
         intent: Optional[str] = None,
+        sport: Optional[str] = None,
+        entity: Optional[str] = None,
         top_k: int = KnowledgeRetriever.DEFAULT_TOP_K,
         relevance_threshold: float = KnowledgeRetriever.RELEVANCE_THRESHOLD,
     ) -> List[Tuple[KnowledgeEntry, float]]:
@@ -38,6 +40,10 @@ class KnowledgeService:
             Caller role (e.g., ``CUSTOMER``, ``OWNER``, ``ADMIN``).
         intent: str | None
             Intent enum name. If ``OUT_OF_SCOPE`` the method short‑circuits.
+        sport: str | None
+            Sport name to filter entries by.
+        entity: str | None
+            Entity name to prioritize.
         top_k: int
             Number of candidates to consider.
         relevance_threshold: float
@@ -49,6 +55,8 @@ class KnowledgeService:
             query=query,
             role=role,
             intent=intent,
+            sport=sport,
+            entity=entity,
             top_k=top_k,
             relevance_threshold=relevance_threshold,
         )

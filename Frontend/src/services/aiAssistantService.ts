@@ -15,6 +15,7 @@ export interface AssistantVenueResult {
 export interface AssistantAction { label: string; route: string; kind: 'link' }
 
 export interface AssistantResponse {
+  conversation_id?: string;
   reply: string;
   understood: Record<string, unknown>;
   suggestions: AssistantSuggestion[];
@@ -40,11 +41,54 @@ export interface AssistantEntities {
   number_of_players: number | null; booking_code: string | null;
 }
 
+export interface AIMessageItem {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  payload?: AssistantResponse | null;
+  created_at: string;
+}
+
+export interface AIConversationDetail {
+  id: number;
+  conversation_id: string;
+  title?: string | null;
+  context_snapshot?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  messages: AIMessageItem[];
+}
+
+export interface AIConversationListItem {
+  id: number;
+  conversation_id: string;
+  title?: string | null;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  last_message?: string | null;
+}
+
+export interface AIConversationListResponse {
+  items: AIConversationListItem[];
+}
+
 export class AssistantTimeoutError extends Error {}
 export class AssistantApiError extends Error {}
 
-export async function askSportHubAssistant(message: string, contextFieldId?: number, context?: Record<string, unknown>, signal?: AbortSignal): Promise<AssistantResponse> {
-  const payload = { message, context_field_id: contextFieldId || null, context: context || null };
+export async function askSportHubAssistant(
+  message: string,
+  contextFieldId?: number,
+  context?: Record<string, unknown>,
+  conversationId?: string,
+  signal?: AbortSignal
+): Promise<AssistantResponse> {
+  const payload = {
+    message,
+    context_field_id: contextFieldId || null,
+    context: context || null,
+    conversation_id: conversationId || null,
+  };
   const controller = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => controller.abort();
@@ -71,4 +115,38 @@ export async function askSportHubAssistant(message: string, contextFieldId?: num
     window.clearTimeout(timeout);
     signal?.removeEventListener('abort', abortFromCaller);
   }
+}
+
+export async function getAIConversation(conversationId: string, signal?: AbortSignal): Promise<AIConversationDetail> {
+  const token = readToken();
+  const response = await fetch(buildApiUrl(`/ai/conversations/${encodeURIComponent(conversationId)}`), {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new AssistantApiError(body?.detail || `Không thể tải cuộc trò chuyện (${response.status})`);
+  }
+  return (await response.json()) as AIConversationDetail;
+}
+
+export async function listAIConversations(limit = 20, signal?: AbortSignal): Promise<AIConversationListResponse> {
+  const token = readToken();
+  const response = await fetch(buildApiUrl(`/ai/conversations?limit=${limit}`), {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new AssistantApiError(body?.detail || `Không thể tải danh sách cuộc trò chuyện (${response.status})`);
+  }
+  return (await response.json()) as AIConversationListResponse;
 }

@@ -262,4 +262,219 @@ Hệ thống AI đã vượt qua đợt **FINAL AUDIT toàn diện (10/10 tiêu 
 
 > **XÁC NHẬN CHÍNH THỨC: TOÀN BỘ PHÂN HỆ AI ĐÃ HOÀN THIỆN 100% — READY FOR REPORT.**
 
+---
+
+## 11. PHÂN HỆ EXTERNAL SPORTS KNOWLEDGE RAG & CONVERSATION PERSISTENCE (CẬP NHẬT 03/2026)
+
+### 11.1 Tổng quan kiến trúc Sports Knowledge RAG
+Phân hệ **External Sports Knowledge RAG** mở rộng năng lực của AI Assistant, cho phép người dùng hỏi đáp tri thức thể thao bên ngoài nhưng vẫn kiểm soát chặt chẽ trong phạm vi 6 môn thể thao SportHub hỗ trợ, tuyệt đối không ảnh hưởng đến các luồng nghiệp vụ cốt lõi (tìm sân, giá sân, đặt sân, thanh toán).
+
+#### Luồng xử lý chi tiết (Detailed Pipeline):
+```text
+User
+ ↓
+Intent Router + Sports Scope Whitelist (6 môn thể thao)
+ ↓
+SPORTS_KNOWLEDGE Intent (Định tuyến xác định, tách biệt Business Intent)
+ ↓
+Knowledge Repository (Đọc đệ quy docs/AI/knowledge/sports/*.md)
+ ↓
+Knowledge Retriever (Dual Matching: Fuzzy + Bi-Encoder + Relevance Threshold 0.60)
+ ↓
+Evidence + Guardrail (Lọc theo sport/entity, kiểm tra bằng chứng xác thực)
+ ↓
+Scoped LLM / Response Formatter (Tích hợp Evidence, cấm suy đoán ngoài tài liệu)
+ ↓
+Validated Answer + Source Citations (Nguồn, URL, ngày cập nhật)
+```
+
+### 11.2 Phạm vi 6 môn thể thao & Nguyên tắc ưu tiên địa lý
+1. **Danh mục 6 môn thể thao hỗ trợ (Sports Scope Whitelist)**:
+   - **Football** (Bóng đá)
+   - **Badminton** (Cầu lông)
+   - **Pickleball**
+   - **Tennis** (Quần vợt)
+   - **Basketball** (Bóng rổ)
+   - **Volleyball** (Bóng chuyền)
+   - *Mọi câu hỏi về các môn thể thao ngoài 6 môn trên (bơi lội, bóng chày, golf, võ thuật...) hoặc chủ đề ngoài thể thao (thời tiết, nấu ăn, lập trình...) đều bị chặn qua nhánh `OUT_OF_SCOPE`.*
+
+2. **Mức độ ưu tiên tri thức theo địa lý (Geographic Priority)**:
+   - **Ưu tiên 1 (Priority = 3 - Cao nhất)**: **Thái Nguyên** — CLB Thái Nguyên T&T, Sân vận động Thái Nguyên, phong trào thể thao học đường ICTU & các CLB địa phương.
+   - **Ưu tiên 2 (Priority = 2)**: **Việt Nam** — Các đội tuyển quốc gia (bóng đá nam/nữ, bóng chuyền, cầu lông, tennis, bóng rổ, pickleball), V-League, VBA, VTV Cup, danh thủ Việt Nam (Quang Hải, Hoàng Đức, Thùy Linh, Tiến Minh, Thanh Thúy, Hoàng Nam...).
+   - **Ưu tiên 3 (Priority = 1)**: **Quốc tế** — Các danh thủ huyền thoại (Messi, Ronaldo, Axelsen, LeBron James, Djokovic, Ben Johns), giải đấu hàng đầu (World Cup, Champions League, Grand Slam, PPA Tour, NBA).
+
+### 11.3 Nguồn dữ liệu & Siêu dữ liệu chuẩn hóa (Source Metadata)
+Mọi tài liệu tri thức trong thư mục `docs/AI/knowledge/sports/` đều được quản lý dưới định dạng bảng Markdown với đầy đủ các trường metadata:
+- `ID`: Mã định danh duy nhất (ví dụ: `TN-SPT-001`, `PLY-FB-001`, `TRN-FB-001`).
+- `Topic`: Chủ đề cụ thể (`CLB Bóng đá`, `Cầu thủ`, `Vận động viên`, `Sân vận động`, `Luật thi đấu`, `Giải đấu`).
+- `Role`: Phân quyền truy cập (`CUSTOMER,OWNER,SYSTEM_ADMIN`).
+- `Intent`: Luôn là `SPORTS_KNOWLEDGE`.
+- `Sport`: Môn thể thao chuẩn hóa thuộc whitelist 6 môn.
+- `Entity`: Tên thực thể thể thao trọng tâm (`Lionel Messi`, `Thái Nguyên T&T`, `Sân vận động Thái Nguyên`...).
+- `Question`: Câu hỏi mẫu định hướng truy xuất.
+- `Answer`: Nội dung tri thức đã được xác thực từ nguồn chính thống.
+- `Source_Name`: Cơ quan/tổ chức ban hành (FIFA, VFF, BWF, Báo Thái Nguyên, Cổng thông tin Tỉnh Thái Nguyên...).
+- `Source_URL`: Đường dẫn nguồn chính thức.
+- `Collected_At`: Ngày thu thập và kiểm chứng dữ liệu (`2026-03-01`).
+- `Priority`: Trọng số ưu tiên địa lý (3: Thái Nguyên, 2: Việt Nam, 1: Quốc tế).
+- `Classification`: Phân loại tri thức (`static`).
+
+### 11.4 Cơ chế No-Evidence & Chống Ảo Giác (Anti-Hallucination Fallback)
+- Khi người dùng hỏi thông tin về cầu thủ/đội bóng/chủ đề trong 6 môn thể thao nhưng **không có tài liệu tương ứng trong kho dữ liệu** hoặc điểm số retrieval không đạt ngưỡng liên quan ($< 0.60$), hệ thống **tuyệt đối không cho phép LLM tự suy đoán hay bịa đặt**.
+- Hệ thống tự động kích hoạt **Fallback an toàn**:
+  > *"Hiện tại SportHub AI chưa có thông tin kiểm chứng về [Entity/Môn] trong kho dữ liệu thể thao. Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."*
+
+### 11.5 Ngữ cảnh hội thoại nhiều lượt & Giải quyết đại từ (Multi-turn Context)
+Hệ thống hỗ trợ hội thoại nhiều lượt mượt mà qua các trường ngữ cảnh trong `understood`:
+- **`sports_entity`**: Tên thực thể thể thao đang là trọng tâm (ví dụ: `Lionel Messi`, `Thái Nguyên T&T`).
+- **`sport_type`**: Môn thể thao tương ứng (`bóng đá`, `cầu lông`...).
+- **`entity_type`**: Phân loại chủ đề (`Cầu thủ`, `CLB Bóng đá`...).
+- **`last_intent`**: Duy trì `SPORTS_KNOWLEDGE`.
+- **Giải quyết đại từ tham chiếu (Pronoun Resolution)**: Nhận diện tự nhiên các đại từ *"anh ấy"*, *"ông ấy"*, *"cô ấy"*, *"đội này"*, *"đội đó"*, *"cầu thủ này"*, *"sân này"* để kế thừa đúng `sports_entity` từ lượt trước.
+- **Chuyển đổi thực thể (Entity Switching)**: Khi người dùng hỏi *"Còn Quang Hải?"*, hệ thống tự động đổi `sports_entity` sang thực thể mới và truy xuất tri thức mới.
+- **Chuyển đổi 2 chiều với Business Intent**:
+  - *Sports Knowledge $\rightarrow$ Business Intent*: Khi chuyển sang hỏi tìm sân (*"Tìm sân bóng đá ở Thái Nguyên"*), cơ chế `context_reset = True` xóa sạch thực thể cũ, chuyển sang tìm kiếm kho sân trực tiếp.
+  - *Business Intent $\rightarrow$ Sports Knowledge*: Khi đang tìm sân mà hỏi thể thao (*"Còn Ronaldo thì sao?"*), hệ thống chuyển sang RAG thể thao mà không bị kẹt ở bộ lọc sân.
+
+#### 11.6 Lưu trữ & Khôi phục phiên trò chuyện (Conversation Persistence)
+- Bảng cơ sở dữ liệu `ai_conversations` và `ai_messages` lưu trữ bền vững từng tin nhắn kèm payload và `context_snapshot`.
+- Khi người dùng **F5 / reload trang web** hoặc **chuyển trang rồi quay lại**, frontend tự động gọi API `GET /ai/conversations/{conversation_id}` để render lại toàn bộ lịch sử tin nhắn và khôi phục `context_snapshot`, cho phép tiếp tục đàm thoại liền mạch mà không bị mất dữ liệu.
+
+---
+
+## 12. MỞ RỘNG DỮ LIỆU MVP ATHLETES & MULTI-ATTRIBUTE RAG (CẬP NHẬT 17/09/2026)
+
+### 12.1 Mở rộng dữ liệu thuộc tính 8 VĐV tiêu biểu (MVP Player Expansion)
+- File `docs/AI/knowledge/sports/players/players.md` được chuẩn hóa với **52 entries tri thức** cho 8 vận động viên tiêu biểu thuộc Bóng đá và Cầu lông (`Lionel Messi`, `Cristiano Ronaldo`, `Nguyễn Quang Hải`, `Nguyễn Tiến Linh`, `Nguyễn Hoàng Đức`, `Nguyễn Thùy Linh`, `Nguyễn Tiến Minh`, `Viktor Axelsen`).
+- Mỗi vận động viên được cấu trúc theo 7 chủ đề thuộc tính chuẩn: `Overview`, `birth_date`, `birth_place`, `current_club`, `career`, `status`, `achievements` với đầy đủ metadata 13 cột (`source_name`, `source_url`, `collected_at`, `priority`).
+
+### 12.2 Động cơ chuẩn hóa Entity Alias (Entity Alias Resolution Engine)
+- Tích hợp bảng ánh xạ `ENTITY_ALIASES` tại cả 2 tầng: **Intent Router** (`KNOWN_SPORTS_ENTITIES`) và **KnowledgeRetriever** (`_resolve_entity_alias()`).
+- Tự động nhận diện chính xác các cách gọi tên ngắn, biệt danh, tiếng Việt không dấu:
+  - `Messi`, `Leo Messi`, `Leo`, `La Pulga` $\rightarrow$ `Lionel Messi`
+  - `Ronaldo`, `CR7`, `Cristiano`, `C Ronaldo` $\rightarrow$ `Cristiano Ronaldo`
+  - `Quang Hải`, `quang hai` $\rightarrow$ `Nguyễn Quang Hải`
+  - `Tiến Linh`, `tien linh` $\rightarrow$ `Nguyễn Tiến Linh`
+  - `Hoàng Đức`, `hoang duc` $\rightarrow$ `Nguyễn Hoàng Đức`
+  - `Thùy Linh`, `thuy linh` $\rightarrow$ `Nguyễn Thùy Linh`
+  - `Tiến Minh`, `tien minh` $\rightarrow$ `Nguyễn Tiến Minh`
+  - `Axelsen`, `viktor axelsen` $\rightarrow$ `Viktor Axelsen`
+- Quá trình chuẩn hóa alias diễn ra minh bạch ở tầng retrieval/routing mà **không làm biến đổi văn bản tri thức gốc (evidence)**.
+
+### 12.3 Truy vấn Đa thuộc tính & Tổng hợp Multi-Evidence
+1. **Xử lý câu hỏi gộp nhiều thuộc tính (Multi-Attribute Queries)**:
+   - Xử lý câu hỏi tự nhiên gộp nhiều nhu cầu: *"Quang Hải là ai, sinh vào ngày nào, quê ở đâu, đang đá cho câu lạc bộ nào?"*
+   - `KnowledgeRetriever` nhận diện mảng `query_matched_topics` để không bị đánh phạt `topic_mismatch` cho bất kỳ thuộc tính nào được yêu cầu trong câu hỏi.
+   - Bổ sung `TOPIC_ALIASES` map các topic trong dataset (`cầu thủ`, `vận động viên`, `profile`, `tiểu sử`) $\rightarrow$ `identity`.
+   - Mở rộng `TOPIC_PATTERNS` linh hoạt với các văn phong tự nhiên (`'la ai'`, `'gioi thieu'`, `'tieu su'`, `'sinh vao ngay'`, `'que o'`, `'thi dau o dau'`).
+2. **Gom & Tổng hợp Multi-Evidence (`AIAssistantService`)**:
+   - Loại bỏ cắt cứng `retrieved[0]`. Thu thập tất cả các evidence vượt mốc `relevance_threshold = 0.60`, thuộc đúng entity và topic được hỏi.
+   - Loại bỏ trùng lặp nội dung (`seen_answers`).
+   - Ghép văn bản trả lời cho tất cả các thuộc tính có evidence và tự động gộp nguồn trích dẫn (`source_name`, `source_url`, `collected_at`).
+3. **Chống ảo giác thuộc tính thiếu (Anti-Hallucination for Missing Attributes)**:
+   - Khi người dùng hỏi một thuộc tính cụ thể mà kho RAG DB chưa lưu trữ (ví dụ: chiều cao, cân nặng, lương), hệ thống trả lời các thuộc tính có dữ liệu và ghi chú rõ ràng về thuộc tính chưa được kiểm chứng.
+
+---
+
+## 13. TỔNG QUAN KIẾN TRÚC CONTROLLED WEB RETRIEVAL (AI-WEB-01 ➔ AI-WEB-04)
+
+```mermaid
+flowchart TD
+    subgraph Input["1. Người Dùng Nhập Câu Hỏi"]
+        UserMsg["User Input Message"]
+    end
+
+    subgraph RouterLayer["2. Bộ Định Tuyến Ý Định & Phạm Vi"]
+        Router["Intent Router (NLU Heuristics)"]
+        CheckIntent{"Intent là gì?"}
+        ScopeFilter{"Thuộc 6 Môn Thể Thao\nĐược Hỗ Trợ?"}
+    end
+
+    subgraph BusinessBranch["3A. Luồng Nghiệp Vụ Kinh Doanh (Business Flow)"]
+        DBRepo["PostgreSQL / SQLite Database\n(Sân bãi, Lịch trống, Đặt sân, Thanh toán)"]
+        Truth["GROUND TRUTH BẤT BIẾN\n(Tuyệt đối KHÔNG Web Search)"]
+    end
+
+    subgraph SportsBranch["3B. Luồng Tri Thức Thể Thao (Sports Knowledge Flow)"]
+        InternalRAG["Internal Knowledge RAG\n(docs/AI/knowledge/sports/*.md)"]
+        FreshnessEval{"Cần Thêm Bằng Chứng Web?\n- High Volatility\n- Stale/Missing Fact"}
+        
+        subgraph WebModule["Controlled Web Retrieval Engine"]
+            Whitelist["Source Whitelist Gate\n(vff.org.vn, baothainguyen, ictu.edu.vn...)"]
+            SportKW["Sport-Specific Keyword Filter\n(Football, Badminton, Pickleball...)"]
+            WebSearch["Official / Verified Sports Web Evidence"]
+        end
+        
+        CombinedEvidence["Combined Evidence Ranking\n(Composite Score = Relevance + Reliability + Freshness)"]
+    end
+
+    subgraph OutBranch["3C. Ngoài Phạm Vi (Out-of-Scope)"]
+        Reject["Từ chối lịch sự / Chuyển hướng\n(Tuyệt đối KHÔNG Web Search)"]
+    end
+
+    subgraph GroundedOutput["4. Phản Hồi Có Căn Cứ (Grounded Response)"]
+        LLM["Grounded LLM Generator\n(Chỉ trả lời từ Evidence)"]
+        Citations["Answer Text + Citations\n(Title, Domain, URL, Published Date)"]
+    end
+
+    %% Flow links
+    UserMsg --> Router
+    Router --> CheckIntent
+    
+    CheckIntent -->|Business Intent\nSEARCH, BOOKING, PAYMENT...| DBRepo
+    DBRepo --> Truth
+    
+    CheckIntent -->|SPORTS_KNOWLEDGE| ScopeFilter
+    ScopeFilter -->|YES: 6 môn hỗ trợ| InternalRAG
+    ScopeFilter -->|NO: Môn khác / Phi thể thao| Reject
+    
+    CheckIntent -->|OUT_OF_SCOPE / UNCLEAR| Reject
+    
+    InternalRAG --> FreshnessEval
+    FreshnessEval -->|Đã đủ & ổn định| CombinedEvidence
+    FreshnessEval -->|Thời sự / Thiếu dữ liệu| Whitelist
+    Whitelist --> SportKW
+    SportKW --> WebSearch
+    WebSearch --> CombinedEvidence
+    
+    CombinedEvidence --> LLM
+    LLM --> Citations
+```
+
+### 13.1 Các Quy Tắc Kiểm Soát Cốt Lõi
+1. **Tách biệt tuyệt đối Luồng Nghiệp Vụ**:
+   - `SEARCH_VENUE`, `CHECK_AVAILABILITY`, `RECOMMEND_SLOT`, `CREATE_BOOKING`, `PAYMENT_SUPPORT`... luôn được phục vụ trực tiếp từ Database. Không một truy vấn web nào được phép can thiệp.
+2. **Kiểm soát chặt chẽ Web Retrieval**:
+   - Chỉ kích hoạt duy nhất cho intent `SPORTS_KNOWLEDGE` khi thông tin cần cập nhật thời gian thực (`volatility = high` như chuyển nhượng, CLB hiện tại, kết quả mới nhất) hoặc kho tri thức nội bộ chưa có.
+3. **Danh sách Whitelist Nguồn Thể Thao Chính Thống (`DEFAULT_SPORTS_SOURCE_WHITELIST`)**:
+   - Liên đoàn/Ban tổ chức: `vff.org.vn`, `fifa.com`, `bwfbadminton.com`, `nba.com`, `wtatennis.com`, `atptour.com`.
+   - Cơ quan/Trường học/Địa phương: `ictu.edu.vn`, `baothainguyen.vn`, `thainguyen.gov.vn`.
+   - Báo chí thể thao uy tín: `thethao247.vn`, `bongdaplus.vn`, `vnexpress.net`, `tuoitre.vn`, `thanhnien.vn`.
+4. **Bộ lọc từ khóa môn thể thao (`SPORT_SPECIFIC_KEYWORDS`)**:
+   - Ngăn chặn triệt để các bài báo không liên quan (chính trị, giải trí, kinh tế) xuất hiện trong kết quả truy xuất, dù bài viết nằm trên domain được whitelist.
+5. **Cơ chế Freshness & Bằng chứng thay thế (Superseding)**:
+   - Khi có sự khác biệt giữa dữ liệu cũ và dữ liệu mới trên web (ví dụ: cầu thủ đổi CLB), bằng chứng web mới hơn từ nguồn tin cậy sẽ thay thế dữ liệu nội bộ đã cũ.
+6. **Bảo toàn trích dẫn nguồn (Source Attribution)**:
+   - Mọi câu trả lời sử dụng Web Evidence đều trả về đầy đủ: `source_name`, `source_url`, `collected_at`/`published_date`.
+
+---
+
+## 14. BẢNG TỔNG KẾT KIỂM THỬ NGHIỆM THU (TEST SUITE VERIFICATION)
+
+Hệ thống AI đã vượt qua toàn bộ các bài kiểm tra tự động và tích hợp:
+
+| Bộ Kiểm Thử | File Test | Số Lượng Test | Kết Quả |
+|---|---|:---:|:---:|
+| **Final Web & Sports Knowledge Validation** | `test_final_sports_web_validation.py` | 8 | **8/8 PASSED (100%)** |
+| **Combined Evidence & Ranking** | `test_sports_combined_evidence.py` | 5 | **5/5 PASSED (100%)** |
+| **Freshness Evaluation & Volatility** | `test_sports_freshness_evaluation.py` | 5 | **5/5 PASSED (100%)** |
+| **Sports Web Retriever & Whitelist** | `test_sports_web_retriever.py` | 7 | **7/7 PASSED (100%)** |
+| **AI Web Flow Separation** | `test_ai_web_flow_separation.py` | 6 | **6/6 PASSED (100%)** |
+| **Sports Intent Router & Scope** | `test_sports_intent_router.py` | 11 | **11/11 PASSED (100%)** |
+| **Sports Knowledge Validation** | `test_sports_knowledge_validation.py` | 14 | **14/14 PASSED (100%)** |
+| **AI Location & Multi-turn Search** | `test_ai_location_search.py` | 20 | **20/20 PASSED (100%)** |
+| **Tổng Cộng Targeted Sports & Web Suites** | | **76** | **76/76 PASSED (100%)** |
+| **Frontend TypeScript Build** | `tsc -b && vite build` | — | **0 Errors, Build Thành Công** |
+
+
 

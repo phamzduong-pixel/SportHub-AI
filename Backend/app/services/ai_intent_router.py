@@ -28,22 +28,352 @@ class AssistantIntent(str, Enum):
     FOLLOW_UP = 'FOLLOW_UP'
     UNCLEAR = 'UNCLEAR'
     OUT_OF_SCOPE = 'OUT_OF_SCOPE'
+    SPORTS_KNOWLEDGE = 'SPORTS_KNOWLEDGE'
 
 
 SPORT_ALIASES = {
-    'bong da': 'bóng đá', 'da bong': 'bóng đá', 'san bong': 'bóng đá', 'football': 'bóng đá',
+    'bong da': 'bóng đá', 'da bong': 'bóng đá', 'san bong': 'bóng đá', 'football': 'bóng đá', 'soccer': 'bóng đá',
     'cau long': 'cầu lông', 'badminton': 'cầu lông', 'danh cau long': 'cầu lông', 'choi cau long': 'cầu lông',
     'pickleball': 'pickleball', 'pickle ball': 'pickleball', 'danh pickleball': 'pickleball', 'choi pickleball': 'pickleball',
-    'tennis': 'tennis', 'danh tennis': 'tennis', 'choi tennis': 'tennis',
-    'bong ro': 'bóng rổ', 'bong chuyen': 'bóng chuyền',
+    'tennis': 'tennis', 'quan vot': 'tennis', 'danh tennis': 'tennis', 'choi tennis': 'tennis',
+    'bong ro': 'bóng rổ', 'choi bong ro': 'bóng rổ', 'basketball': 'bóng rổ',
+    'bong chuyen': 'bóng chuyền', 'choi bong chuyen': 'bóng chuyền', 'volleyball': 'bóng chuyền',
 }
+SUPPORTED_SPORTS = {'bóng đá', 'cầu lông', 'pickleball', 'tennis', 'bóng rổ', 'bóng chuyền'}
+
+BUSINESS_INTENTS = {
+    AssistantIntent.SEARCH_VENUE,
+    AssistantIntent.RECOMMEND_VENUE,
+    AssistantIntent.CHECK_AVAILABILITY,
+    AssistantIntent.RECOMMEND_SLOT,
+    AssistantIntent.GET_VENUE_DETAIL,
+    AssistantIntent.CREATE_BOOKING,
+    AssistantIntent.GET_BOOKING,
+    AssistantIntent.CANCEL_BOOKING,
+    AssistantIntent.RESCHEDULE_BOOKING,
+    AssistantIntent.PAYMENT_SUPPORT,
+    AssistantIntent.ACCOUNT_SUPPORT,
+    AssistantIntent.PARTNER_APPLICATION_SUPPORT,
+    AssistantIntent.OCCUPANCY_INSIGHT,
+    AssistantIntent.GET_PRODUCTS,
+    AssistantIntent.SYSTEM_GUIDE,
+}
+
+
+def is_business_intent(intent: AssistantIntent | None) -> bool:
+    return intent in BUSINESS_INTENTS
+
+
+def is_supported_sport(sport: str | None) -> bool:
+    if not sport:
+        return False
+    norm = normalize_text(sport)
+    resolved = SPORT_ALIASES.get(norm, norm)
+    return resolved in SUPPORTED_SPORTS or any(
+        norm == s or norm in s or s in norm
+        for s in ('bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'football', 'soccer', 'badminton', 'basketball', 'volleyball', 'quan vot')
+    )
+
+
+UNSUPPORTED_SPORTS_TERMS = (
+    'golf', 'bong chay', 'baseball', 'boi loi', 'boi', 'dua xe', 'f1', 'formula 1',
+    'bi a', 'bi-a', 'billiards', 'bida', 'vo thuat', 'boxing', 'mma', 'bong ban', 'table tennis',
+    'dien kinh', 'cu ta', 'co vua', 'co tuong', 'dua thuyen', 'cheo thuyen', 'rugby', 'bong bau duc',
+    'faker', 't1', 'chovy', 'valorant', 'esport', 'esports', 'e-sport', 'e-sports', 'lien minh',
+    'lien minh huyen thoai', 'lol', 'csgo', 'cs:go', 'cs2', 'dota', 'dota 2', 'pubg', 'free fire',
+    'lien quan', 'arena of valor',
+)
+
+KNOWN_SPORTS_ENTITIES = {
+    # 1. Thái Nguyên Scope (Bóng đá, Cầu lông, Pickleball, Tennis, Bóng rổ, Bóng chuyền)
+    'thai nguyen t&t': ('bóng đá', 'Thái Nguyên T&T'),
+    'thai nguyen tt': ('bóng đá', 'Thái Nguyên T&T'),
+    'clb nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+    'doi nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+    'bong da nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+    'doi bong nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+    'doi bong da nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+    'clb bong da nu thai nguyen': ('bóng đá', 'Thái Nguyên T&T'),
+
+    'bong da nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'doi bong nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'doi bong da nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'doi nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'clb bong da nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'cau lac bo bong da nam thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+    'fc thai nguyen': ('bóng đá', 'Bóng đá nam Thái Nguyên'),
+
+    'bong da thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'doi thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'doi bong thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'clb bong da thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'cau lac bo bong da thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'clb thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'cau lac bo thai nguyen': ('bóng đá', 'Bóng đá Thái Nguyên'),
+    'san van dong thai nguyen': ('bóng đá', 'Sân vận động Thái Nguyên'),
+    'svd thai nguyen': ('bóng đá', 'Sân vận động Thái Nguyên'),
+    'clb cau long thai nguyen': ('cầu lông', 'CLB Cầu lông Thái Nguyên'),
+    'phong trao cau long thai nguyen': ('cầu lông', 'Cầu lông Thái Nguyên'),
+    'clb pickleball thai nguyen': ('pickleball', 'CLB Pickleball Thái Nguyên'),
+    'pickleball thai nguyen': ('pickleball', 'Pickleball Thái Nguyên'),
+    'clb tennis thai nguyen': ('tennis', 'CLB Tennis Thái Nguyên'),
+    'tennis thai nguyen': ('tennis', 'Tennis Thái Nguyên'),
+    'clb bong ro thai nguyen': ('bóng rổ', 'CLB Bóng rổ Thái Nguyên'),
+    'bong ro thai nguyen': ('bóng rổ', 'Bóng rổ Thái Nguyên'),
+    'clb bong chuyen thai nguyen': ('bóng chuyền', 'CLB Bóng chuyền Thái Nguyên'),
+    'bong chuyen thai nguyen': ('bóng chuyền', 'Bóng chuyền Thái Nguyên'),
+
+    # ICTU (Trường Đại học CNTT & TT Thái Nguyên)
+    'truong dai hoc cong nghe thong tin va truyen thong': ('bóng đá', 'Bóng đá ICTU'),
+    'dai hoc cong nghe thong tin va truyen thong': ('bóng đá', 'Bóng đá ICTU'),
+    'truong cntt va truyen thong thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'cntt va truyen thong thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'truong dh cntt&tt': ('bóng đá', 'Bóng đá ICTU'),
+    'truong dh cntt va tt': ('bóng đá', 'Bóng đá ICTU'),
+    'dh cntt&tt thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'dh cntt va tt thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'dh cntt&tt': ('bóng đá', 'Bóng đá ICTU'),
+    'dh cntt va tt': ('bóng đá', 'Bóng đá ICTU'),
+    'doi tuyen bong da nam sinh vien ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'doi bong sinh vien ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'bong da sinh vien ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'doi bong ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'bong da ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'giai bong da sinh vien ictu cup': ('bóng đá', 'ICTU CUP'),
+    'ictu cup': ('bóng đá', 'ICTU CUP'),
+    'doi bong khoa cntt ictu': ('bóng đá', 'Khoa CNTT ICTU'),
+    'bong da khoa cntt ictu': ('bóng đá', 'Khoa CNTT ICTU'),
+    'khoa cntt ictu': ('bóng đá', 'Khoa CNTT ICTU'),
+    'khoa ky thuat va cong nghe ictu': ('bóng đá', 'Khoa Kỹ thuật và Công nghệ ICTU'),
+    'fit ictu': ('bóng đá', 'Khoa CNTT ICTU'),
+    'fet ictu': ('bóng đá', 'Khoa Kỹ thuật và Công nghệ ICTU'),
+    'ictu': (None, 'ICTU'),
+    'truong ictu': (None, 'ICTU'),
+    'doi bong ictu': ('bóng đá', 'Bóng đá ICTU'),
+    'doi bong sinh vien thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'doi bong sinh vien o thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'bong da sinh vien thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'bong da sinh vien o thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'cac doi bong sinh vien thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+    'cac doi bong sinh vien o thai nguyen': ('bóng đá', 'Bóng đá ICTU'),
+
+    # ICTU Multi-sports
+    'cau long ictu': ('cầu lông', 'Cầu lông ICTU'),
+    'clb cau long ictu': ('cầu lông', 'Cầu lông ICTU'),
+    'phong trao cau long ictu': ('cầu lông', 'Cầu lông ICTU'),
+    'cau long truong cntt thai nguyen': ('cầu lông', 'Cầu lông ICTU'),
+    'cau long truong dh cntt&tt': ('cầu lông', 'Cầu lông ICTU'),
+    'cau long truong dh cntt va tt': ('cầu lông', 'Cầu lông ICTU'),
+
+    'bong chuyen ictu': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'bong chuyen hoi ictu': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'doi bong chuyen ictu': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'clb bong chuyen ictu': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'phong trao bong chuyen ictu': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'bong chuyen truong cntt thai nguyen': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'bong chuyen truong cntt va truyen thong': ('bóng chuyền', 'Bóng chuyền ICTU'),
+    'bong chuyen truong dh cntt&tt': ('bóng chuyền', 'Bóng chuyền ICTU'),
+
+    'bong ban ictu': ('bóng bàn', 'Bóng bàn ICTU'),
+    'clb bong ban ictu': ('bóng bàn', 'Bóng bàn ICTU'),
+    'phong trao bong ban ictu': ('bóng bàn', 'Bóng bàn ICTU'),
+    'bong ban truong cntt thai nguyen': ('bóng bàn', 'Bóng bàn ICTU'),
+    'bong ban truong dh cntt&tt': ('bóng bàn', 'Bóng bàn ICTU'),
+
+    'pickleball ictu': ('pickleball', 'Pickleball ICTU'),
+    'pickle ball ictu': ('pickleball', 'Pickleball ICTU'),
+    'clb pickleball ictu': ('pickleball', 'Pickleball ICTU'),
+    'san pickleball ictu': ('pickleball', 'Pickleball ICTU'),
+    'pickleball truong cntt thai nguyen': ('pickleball', 'Pickleball ICTU'),
+    'pickleball truong dh cntt&tt': ('pickleball', 'Pickleball ICTU'),
+
+    'the thao ictu': (None, 'Thể thao ICTU'),
+    'phong trao the thao ictu': (None, 'Thể thao ICTU'),
+    'clb the thao ictu': (None, 'Thể thao ICTU'),
+    'clb the thao o ictu': (None, 'Thể thao ICTU'),
+    'cac mon the thao ictu': (None, 'Thể thao ICTU'),
+    'mon the thao ictu': (None, 'Thể thao ICTU'),
+    'the thao truong cntt thai nguyen': (None, 'Thể thao ICTU'),
+    'the thao truong dh cntt&tt': (None, 'Thể thao ICTU'),
+    'the thao truong dai hoc cong nghe thong tin va truyen thong': (None, 'Thể thao ICTU'),
+    'the thao thai nguyen': (None, 'Thể thao Thái Nguyên'),
+    'phong trao the thao thai nguyen': (None, 'Thể thao Thái Nguyên'),
+    'cac mon the thao thai nguyen': (None, 'Thể thao Thái Nguyên'),
+    'cac doi the thao thai nguyen': (None, 'Thể thao Thái Nguyên'),
+
+    # 2. Hà Nội Scope
+    'ha noi fc': ('bóng đá', 'Hà Nội FC'),
+    'clb ha noi': ('bóng đá', 'Hà Nội FC'),
+    'the cong viettel': ('bóng đá', 'Thể Công Viettel'),
+    'viettel fc': ('bóng đá', 'Thể Công Viettel'),
+    'clb the cong': ('bóng đá', 'Thể Công Viettel'),
+    'cong an ha noi': ('bóng đá', 'Công an Hà Nội'),
+    'clb cong an ha noi': ('bóng đá', 'Công an Hà Nội'),
+    'cahn': ('bóng đá', 'Công an Hà Nội'),
+    'hanoi buffaloes': ('bóng rổ', 'Hanoi Buffaloes'),
+    'thang long warriors': ('bóng rổ', 'Thang Long Warriors'),
+    'bong da ha noi': ('bóng đá', 'Bóng đá Hà Nội'),
+    'clb bong da ha noi': ('bóng đá', 'Bóng đá Hà Nội'),
+    'doi bong da ha noi': ('bóng đá', 'Bóng đá Hà Nội'),
+    'doi bong ha noi': ('bóng đá', 'Bóng đá Hà Nội'),
+    'bong ro ha noi': ('bóng rổ', 'Bóng rổ Hà Nội'),
+    'clb bong ro ha noi': ('bóng rổ', 'Bóng rổ Hà Nội'),
+    'bong chuyen ha noi': ('bóng chuyền', 'Bóng chuyền Hà Nội'),
+    'doi bong chuyen ha noi': ('bóng chuyền', 'Bóng chuyền Hà Nội'),
+    'cau long ha noi': ('cầu lông', 'Cầu lông Hà Nội'),
+    'clb cau long ha noi': ('cầu lông', 'Cầu lông Hà Nội'),
+    'dien kinh ha noi': ('điền kinh', 'Điền kinh Hà Nội'),
+    'vo thuat ha noi': ('võ thuật', 'Võ thuật Hà Nội'),
+    'the thao ha noi': (None, 'Thể thao Hà Nội'),
+    'phong trao the thao ha noi': (None, 'Thể thao Hà Nội'),
+    'the thao thu do': (None, 'Thể thao Hà Nội'),
+    'the thao dai hoc ha noi': (None, 'Thể thao Đại học Hà Nội'),
+    'the thao sinh vien ha noi': (None, 'Thể thao Đại học Hà Nội'),
+    'cac truong dai hoc ha noi': (None, 'Thể thao Đại học Hà Nội'),
+
+    # 3. TP. Hồ Chí Minh Scope
+    'clb tp.hcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb tphcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb bong da tp.hcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb bong da tphcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb bong da thanh pho ho chi minh': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb nu tp.hcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'clb nu tphcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'bong da tp.hcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'bong da tphcm': ('bóng đá', 'Bóng đá TP.HCM'),
+    'bong da sai gon': ('bóng đá', 'Bóng đá TP.HCM'),
+    'saigon heat': ('bóng rổ', 'Saigon Heat'),
+    'ho chi minh city wings': ('bóng rổ', 'Ho Chi Minh City Wings'),
+    'hcmc wings': ('bóng rổ', 'Ho Chi Minh City Wings'),
+    'city wings': ('bóng rổ', 'Ho Chi Minh City Wings'),
+    'bong ro tp.hcm': ('bóng rổ', 'Bóng rổ TP.HCM'),
+    'bong ro tphcm': ('bóng rổ', 'Bóng rổ TP.HCM'),
+    'bong ro sai gon': ('bóng rổ', 'Bóng rổ TP.HCM'),
+    'clb bong ro tp.hcm': ('bóng rổ', 'Bóng rổ TP.HCM'),
+    'clb bong ro tphcm': ('bóng rổ', 'Bóng rổ TP.HCM'),
+    'cau long tp.hcm': ('cầu lông', 'Cầu lông TP.HCM'),
+    'cau long tphcm': ('cầu lông', 'Cầu lông TP.HCM'),
+    'clb cau long tp.hcm': ('cầu lông', 'Cầu lông TP.HCM'),
+    'clb cau long tphcm': ('cầu lông', 'Cầu lông TP.HCM'),
+    'bong ban tp.hcm': ('bóng bàn', 'Bóng bàn TP.HCM'),
+    'bong ban tphcm': ('bóng bàn', 'Bóng bàn TP.HCM'),
+    'bong chuyen tp.hcm': ('bóng chuyền', 'Bóng chuyền TP.HCM'),
+    'bong chuyen tphcm': ('bóng chuyền', 'Bóng chuyền TP.HCM'),
+    'maseco tp.hcm': ('bóng chuyền', 'Bóng chuyền TP.HCM'),
+    'the thao tp.hcm': (None, 'Thể thao TP.HCM'),
+    'the thao tphcm': (None, 'Thể thao TP.HCM'),
+    'the thao sai gon': (None, 'Thể thao TP.HCM'),
+    'the thao thanh pho ho chi minh': (None, 'Thể thao TP.HCM'),
+
+    # 4. Việt Nam Scope
+    'doi tuyen viet nam': ('bóng đá', 'Đội tuyển Việt Nam'),
+    'tuyen viet nam': ('bóng đá', 'Đội tuyển Việt Nam'),
+    'doi tuyen quoc gia': ('bóng đá', 'Đội tuyển Việt Nam'),
+    'doi tuyen bong da nam': ('bóng đá', 'Đội tuyển bóng đá nam Việt Nam'),
+    'doi tuyen bong da nu': ('bóng đá', 'Đội tuyển bóng đá nữ Việt Nam'),
+    'quang hai': ('bóng đá', 'Nguyễn Quang Hải'),
+    'nguyen quang hai': ('bóng đá', 'Nguyễn Quang Hải'),
+    'hoang duc': ('bóng đá', 'Nguyễn Hoàng Đức'),
+    'nguyen hoang duc': ('bóng đá', 'Nguyễn Hoàng Đức'),
+    'cong phuong': ('bóng đá', 'Nguyễn Công Phượng'),
+    'van lam': ('bóng đá', 'Đặng Văn Lâm'),
+    'tien linh': ('bóng đá', 'Nguyễn Tiến Linh'),
+    'nguyen tien linh': ('bóng đá', 'Nguyễn Tiến Linh'),
+    'park hang-seo': ('bóng đá', 'Park Hang-seo'),
+    'park hang seo': ('bóng đá', 'Park Hang-seo'),
+    'v-league': ('bóng đá', 'V-League'),
+    'vleague': ('bóng đá', 'V-League'),
+    'thuy linh': ('cầu lông', 'Nguyễn Thùy Linh'),
+    'nguyen thuy linh': ('cầu lông', 'Nguyễn Thùy Linh'),
+    'tien minh': ('cầu lông', 'Nguyễn Tiến Minh'),
+    'nguyen tien minh': ('cầu lông', 'Nguyễn Tiến Minh'),
+    'le duc phat': ('cầu lông', 'Lê Đức Phát'),
+    'doi tuyen cau long': ('cầu lông', 'Đội tuyển cầu lông Việt Nam'),
+    'trinh linh giang': ('pickleball', 'Trịnh Linh Giang'),
+    'doi tuyen pickleball viet nam': ('pickleball', 'Đội tuyển Pickleball Việt Nam'),
+    'pickleball viet nam': ('pickleball', 'Pickleball Việt Nam'),
+    'ly hoang nam': ('tennis', 'Lý Hoàng Nam'),
+    'doi tuyen tennis viet nam': ('tennis', 'Đội tuyển Tennis Việt Nam'),
+    'davis cup viet nam': ('tennis', 'Davis Cup Việt Nam'),
+    'saigon heat': ('bóng rổ', 'Saigon Heat'),
+    'thang long warriors': ('bóng rổ', 'Thang Long Warriors'),
+    'hanoi buffaloes': ('bóng rổ', 'Hanoi Buffaloes'),
+    'vba': ('bóng rổ', 'VBA'),
+    'doi tuyen bong ro': ('bóng rổ', 'Đội tuyển bóng rổ Việt Nam'),
+    'doi tuyen bong chuyen nu viet nam': ('bóng chuyền', 'Đội tuyển bóng chuyền nữ Việt Nam'),
+    'doi tuyen bong chuyen nam viet nam': ('bóng chuyền', 'Đội tuyển bóng chuyền nam Việt Nam'),
+    'doi tuyen bong chuyen nu': ('bóng chuyền', 'Đội tuyển bóng chuyền nữ Việt Nam'),
+    'doi tuyen bong chuyen': ('bóng chuyền', 'Đội tuyển bóng chuyền Việt Nam'),
+    'thanh thuy': ('bóng chuyền', 'Trần Thị Thanh Thúy'),
+    'tran thi thanh thuy': ('bóng chuyền', 'Trần Thị Thanh Thúy'),
+    'bich tuyen': ('bóng chuyền', 'Nguyễn Thị Bích Tuyền'),
+    'nguyen thi bich tuyen': ('bóng chuyền', 'Nguyễn Thị Bích Tuyền'),
+    'kieu trinh': ('bóng chuyền', 'Hoàng Thị Kiều Trinh'),
+    'vtv cup': ('bóng chuyền', 'VTV Cup'),
+
+    # 3. Quốc tế Scope
+    'messi': ('bóng đá', 'Lionel Messi'),
+    'lionel messi': ('bóng đá', 'Lionel Messi'),
+    'leo messi': ('bóng đá', 'Lionel Messi'),
+    'leo': ('bóng đá', 'Lionel Messi'),
+    'la pulga': ('bóng đá', 'Lionel Messi'),
+    'ronaldo': ('bóng đá', 'Cristiano Ronaldo'),
+    'cristiano ronaldo': ('bóng đá', 'Cristiano Ronaldo'),
+    'cristiano': ('bóng đá', 'Cristiano Ronaldo'),
+    'cr7': ('bóng đá', 'Cristiano Ronaldo'),
+    'c ronaldo': ('bóng đá', 'Cristiano Ronaldo'),
+    'erling haaland': ('bóng đá', 'Erling Haaland'),
+    'haaland': ('bóng đá', 'Erling Haaland'),
+    'kylian mbappe': ('bóng đá', 'Kylian Mbappé'),
+    'mbappe': ('bóng đá', 'Kylian Mbappé'),
+    'neymar': ('bóng đá', 'Neymar'),
+    'premier league': ('bóng đá', 'Premier League'),
+    'ngoai hang anh': ('bóng đá', 'Ngoại Hạng Anh'),
+    'champions league': ('bóng đá', 'UEFA Champions League'),
+    'world cup': ('bóng đá', 'FIFA World Cup'),
+    'inter miami': ('bóng đá', 'Lionel Messi'),
+    'al-nassr': ('bóng đá', 'Cristiano Ronaldo'),
+    'al nassr': ('bóng đá', 'Cristiano Ronaldo'),
+    'axelsen': ('cầu lông', 'Viktor Axelsen'),
+    'viktor axelsen': ('cầu lông', 'Viktor Axelsen'),
+    'lin dan': ('cầu lông', 'Lin Dan'),
+    'lee chong wei': ('cầu lông', 'Lee Chong Wei'),
+    'kento momota': ('cầu lông', 'Kento Momota'),
+    'an se young': ('cầu lông', 'An Se Young'),
+    'bwf': ('cầu lông', 'BWF'),
+    'ben johns': ('pickleball', 'Ben Johns'),
+    'anna leigh waters': ('pickleball', 'Anna Leigh Waters'),
+    'ppa tour': ('pickleball', 'PPA Tour'),
+    'novak djokovic': ('tennis', 'Novak Djokovic'),
+    'djokovic': ('tennis', 'Novak Djokovic'),
+    'rafael nadal': ('tennis', 'Rafael Nadal'),
+    'nadal': ('tennis', 'Rafael Nadal'),
+    'roger federer': ('tennis', 'Roger Federer'),
+    'federer': ('tennis', 'Roger Federer'),
+    'carlos alcaraz': ('tennis', 'Carlos Alcaraz'),
+    'alcaraz': ('tennis', 'Carlos Alcaraz'),
+    'jannik sinner': ('tennis', 'Jannik Sinner'),
+    'sinner': ('tennis', 'Jannik Sinner'),
+    'wimbledon': ('tennis', 'Wimbledon'),
+    'grand slam': ('tennis', 'Grand Slam'),
+    'lebron james': ('bóng rổ', 'LeBron James'),
+    'lebron': ('bóng rổ', 'LeBron James'),
+    'stephen curry': ('bóng rổ', 'Stephen Curry'),
+    'curry': ('bóng rổ', 'Stephen Curry'),
+    'michael jordan': ('bóng rổ', 'Michael Jordan'),
+    'kobe bryant': ('bóng rổ', 'Kobe Bryant'),
+    'kobe': ('bóng rổ', 'Kobe Bryant'),
+    'nba': ('bóng rổ', 'NBA'),
+    'fivb': ('bóng chuyền', 'FIVB'),
+}
+
 WEEKDAYS = {
     'thu hai': 0, 'thu ba': 1, 'thu tu': 2, 'thu nam': 3,
     'thu sau': 4, 'thu bay': 5, 'chu nhat': 6,
 }
 ENTITY_KEYS = (
     'sport_type', 'court_type', 'venue_name', 'location', 'date', 'start_time', 'end_time',
-    'preferred_time', 'max_price', 'booking_code',
+    'preferred_time', 'max_price', 'booking_code', 'sports_entity',
 )
 
 OUT_OF_SCOPE_TERMS = (
@@ -54,7 +384,7 @@ OUT_OF_SCOPE_TERMS = (
     'thoi tiet', 'tin tuc', 'thit cho', 'mon an', 'nau an', 'cach nau', 'cong thuc', 'lam banh',
     'phim', 'am nhac', 'du lich', 'chuyen cuoi', 'ke chuyen',
     'tu van tinh cam', 'tinh yeu', 'sua may tinh', 'cai win',
-    'dich doan', 'dich cau',
+    'dich doan', 'dich cau', 'tuyen sinh', 'hoc phi', 'diem chuan', 'nganh hoc', 'nhap hoc', 'xet tuyen',
 )
 DOMAIN_TERMS = (
     'san', 'the thao', 'sporthub', 'co so', 'dia diem', 'tien ich', 'khung gio',
@@ -85,6 +415,10 @@ class IntentEntities:
     max_price: float | None = None
     number_of_players: int | None = None
     booking_code: str | None = None
+    sports_entity: str | None = None
+    sports_entities: list[str] = field(default_factory=list)
+    venue_names: list[str] = field(default_factory=list)
+    sport_types: list[str] = field(default_factory=list)
 
     @property
     def price_max(self) -> float | None:
@@ -129,6 +463,10 @@ class IntentRouter:
             or fresh_entities.sport_type is not None or fresh_entities.court_type is not None
         )
 
+        has_unsupported_sport = any(term in query for term in UNSUPPORTED_SPORTS_TERMS)
+        if has_unsupported_sport and not fresh_entities.sports_entities:
+            return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.99, fresh_entities, context_reset=True)
+
         has_out_of_scope = any(term in query for term in OUT_OF_SCOPE_TERMS)
         has_domain_term = any(term in query for term in (
             'cho san', 'dat san', 'tim san', 'xem san', 'thue san', 'san con trong',
@@ -149,13 +487,13 @@ class IntentRouter:
         if self._is_greeting(query):
             return IntentRoute(AssistantIntent.GREETING, 0.99, entities)
 
-        intent, confidence = self._match_intent(query, follow_up, effective_context, fresh_entities)
+        intent, confidence = self._match_intent(query, follow_up, effective_context, fresh_entities, entities)
         if intent is None:
             if follow_up:
                 intent, confidence = AssistantIntent.FOLLOW_UP, 0.82
             elif self._looks_ambiguous(query):
                 intent, confidence = AssistantIntent.UNCLEAR, 0.35
-            elif not any(term in query for term in DOMAIN_TERMS) and not entities.sport_type and not entities.location:
+            elif not any(term in query for term in DOMAIN_TERMS) and not entities.sport_type and not entities.sports_entity and not entities.sports_entities:
                 intent, confidence = AssistantIntent.OUT_OF_SCOPE, 0.86
             else:
                 intent, confidence = AssistantIntent.UNCLEAR, 0.4
@@ -173,7 +511,9 @@ class IntentRouter:
         follow_up: bool,
         context: dict[str, Any],
         fresh_entities: IntentEntities,
+        entities: IntentEntities | None = None,
     ) -> tuple[AssistantIntent | None, float]:
+        effective_sports_ent = fresh_entities.sports_entity or (entities.sports_entity if entities else None)
         partner_context = context.get('last_intent') == AssistantIntent.PARTNER_APPLICATION_SUPPORT.value
         if any(term in query for term in (
             'tro thanh chu san', 'dang ky lam doi tac', 'dang ky doi tac', 'dang ky owner',
@@ -221,18 +561,20 @@ class IntentRouter:
         if any(term in query for term in ('tai khoan', 'ho so', 'thong tin cua toi', 'doi mat khau', 'dang nhap', 'dang ky tai khoan', 'dang ky sporthub', 'sua thong tin ca nhan', 'chinh sua ho so', 'bao nhieu owner', 'bao nhieu customer', 'owner dang hoat dong')):
             return AssistantIntent.ACCOUNT_SUPPORT, 0.94
         if any(term in query for term in (
-            'huong dan', 'cach su dung', 'cach dat san', 'lam the nao de dat san', 'lam sao de dat san',
+            'huong dan dat san', 'huong dan tim san', 'huong dan su dung', 'huong dan sporthub', 'huong dan dang ky',
+            'huong dan chu san', 'huong dan thanh toan', 'huong dan danh gia', 'huong dan tao san',
+            'cach su dung', 'cach dat san', 'lam the nao de dat san', 'lam sao de dat san',
             'sporthub lam duoc gi', 'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi',
             'giup toi nhung gi', 'giup duoc gi', 'hoat dong nhu the nao', 'sporthub la gi',
             'vai tro', 'phan quyen', 'cac buoc dat san', 'danh gia san', 'lam the nao de danh gia',
             'lam the nao de tim san', 'cach tim san', 'lam sao de tim san',
             'dieu kien dang ky chu san', 'yeu cau dang ky owner', 'can gi de dang ky lam chu san',
             'chu san duoc quan ly', 'owner quan ly', 'chu san them san', 'tao san moi', 'them san moi',
-            'chu san quan ly khung gio', 'cai dat khung gio', 'tao slot', 'bang gia', 'gia gio vang',
+            'chu san quan ly khung gio', 'cai dat khung gio', 'tao slot', 'bang gia gio vang', 'cai dat bang gia',
             'chu san quan ly san pham', 'thue vot bong', 'san pham phu tro', 'xem doanh thu chu san',
             'admin quan ly', 'duyet ho so chu san', 'duyet co so', 'phe duyet co so',
             'bao lau thi duyet', 'thoi gian duyet', 'phi dang ky chu san', 'phi duy tri',
-        )):
+        )) or ('huong dan' in query and any(term in query for term in DOMAIN_TERMS)):
             return AssistantIntent.SYSTEM_GUIDE, 0.95
         if any(term in query for term in ('bao nhieu co so', 'co bao nhieu co so', 'so luong co so')):
             return AssistantIntent.SEARCH_VENUE, 0.96
@@ -264,13 +606,95 @@ class IntentRouter:
         if any(term in query for term in ('goi y', 'de xuat', 'phu hop', 'nen chon', 'tot nhat', 'san ngon', 'vai san ngon')) and not any(term in query for term in ('gio', 'khung gio', 'slot')):
             return AssistantIntent.RECOMMEND_VENUE, 0.93
         if any(term in query for term in (
-            'dia chi', 'tien ich', 'thong tin san', 'chi tiet san', 'gia bao nhieu', 'gia san',
+            'dia chi', 'tien ich', 'thong tin san', 'chi tiet san', 'gia bao nhieu', 'gia san', 'bang gia',
             'bao tri', 'dong cua', 'gio mo cua', 'mo cua luc nao', 'bai do xe', 'dieu hoa',
         )):
             return AssistantIntent.GET_VENUE_DETAIL, 0.92
 
+        domain_terms = (
+            'san', 'co so', 'choi', 'dat', 'tim', 'kiem', 'dia diem', 'co', 'o dau', 'khu vuc'
+        )
+
+        is_sports_spec_or_rule = any(term in query for term in (
+            'kich thuoc san', 'chieu cao luoi', 'kich thuoc luoi', 'luat choi', 'luat thi dau', 'luat',
+            'tieu chuan', 'quy dinh', 'quy tac', 'viet vi', 'tie-break', '3 diem', 'cach tinh diem',
+            'thoi gian thi dau', 'ky thuat', 'chien thuat', 'doi hinh', 'tieu su', 'la ai', 'ai la',
+            'thanh tich', 'lich su', 'nguon goc', 'phong trao', 'huan luyen vien', 'hlv',
+            'ictu co san', 'truong ictu', 'truong dai hoc', 'san van dong', 'svd', 'suc chua', 'quy mo'
+        ))
+
+        # Check SPORTS_KNOWLEDGE
+        is_venue_operation = not is_sports_spec_or_rule and (any(term in query for term in (
+            'dat san', 'thue san', 'tim san', 'con trong', 'lich trong', 'khung gio',
+            'cho toi san', 'muon dat', 'tao booking', 'xem san',
+            'gia san', 'co so nao', 'co bao nhieu co so', 'kiem san', 'gia bao nhieu',
+            'dat lich', 'huy san', 'doi lich', 'san con trong', 'slot', 'co slot', 'gia ca',
+            'con gio', 'con san', 'tim co so', 'san nao con', 'san nao trong', 'co san',
+            'co san nao', 'co san khong', 'san o'
+        )) or bool(re.search(r'\b(san|co so|thue san|dat san)\b', query)))
+        if not is_venue_operation:
+            # If sports entity is a geographic location (province/city) or school/university, require sports knowledge context/keywords
+            geo_locations = {'ha noi', 'thai nguyen', 'tp hcm', 'tp.hcm', 'ho chi minh', 'hcm', 'da nang', 'hai phong', 'can tho'}
+            academic_terms = ('tuyen sinh', 'hoc phi', 'diem chuan', 'nganh hoc', 'dao tao', 'khoa hoc', 'nhap hoc', 'xet tuyen', 'chuong trinh hoc')
+            has_academic = any(term in query for term in academic_terms)
+            is_geo_or_school = effective_sports_ent and (
+                normalize_text(effective_sports_ent) in geo_locations
+                or any(k in normalize_text(effective_sports_ent) for k in ('ictu', 'truong', 'dai hoc', 'fit', 'fet'))
+            )
+            has_sports_inquiry = any(term in query for term in (
+                'the thao', 'clb', 'cau lac bo', 'doi bong', 'doi tuyen', 'mon the thao', 'mon gi', 'mon nao',
+                'giai', 'phong trao', 'manh ve', 'co nhung doi', 'co doi', 'vdv', 'van dong vien',
+                'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'bong ban', 'e-sports', 'san'
+            ))
+
+            if effective_sports_ent is not None and not has_academic and (not is_geo_or_school or has_sports_inquiry):
+                return AssistantIntent.SPORTS_KNOWLEDGE, 0.96
+            is_sports_context = context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value
+            if is_sports_context:
+                if any(term in query for term in (
+                    'anh ay', 'cau thu nay', 'cau thu do', 'ong ay', 'co ay', 'chi ay',
+                    'tay vot nay', 'tay vot do', 'vdv nay', 'vdv do', 'van dong vien nay', 'van dong vien do',
+                    'nguoi nay', 'nguoi do', 'doi nay', 'doi do', 'clb nay', 'clb do',
+                    'cau lac bo nay', 'cau lac bo do', 'svd nay', 'svd do', 'san nay', 'san do',
+                    'doi nao', 'clb nao', 'cau lac bo nao', 'giai nao', 'choi cho', 'da cho', 'thi dau cho',
+                    'dang thi dau', 'dang choi', 'o dau', 'con ', 'the con ', 'thi sao', 'thanh tich', 'sinh nam',
+                    'bao nhieu tuoi', 'que o dau', 'huan luyen vien', 'hlv', 'con o', 'the con o',
+                    'cau lac bo', 'clb', 'doi tuyen', 'doi bong', 'co bao nhieu ban thang', 'danh hieu', 'vo dich',
+                    'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'con mon khac', 'mon khac', 'co doi'
+                )):
+                    return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
+            has_supported_sport = (
+                fresh_entities.sport_type in SUPPORTED_SPORTS
+                or any(k in query for k in SPORT_ALIASES)
+            )
+            if has_supported_sport:
+                if any(term in query for term in (
+                    'la ai', 'ai la', 'tieu su', 'bao nhieu tuoi', 'sinh nam', 'que o dau',
+                    'o dau co nhung gi', 'co nhung gi', 'co gi noi bat', 'co nhung ai', 'nhung ai', 'noi tieng',
+                    'choi cho doi nao', 'da cho doi nao', 'clb nao', 'doi bong nao', 'doi nao', 'nhung doi nao',
+                    'co nhung doi nao', 'co doi nao', 'cac doi nao', 'nhung clb nao', 'co nhung clb nao', 'co clb nao',
+                    'doi tuyen', 'tuyen quoc gia', 'tuyen nu', 'tuyen nam',
+                    'thanh tich', 'giai dau', 'giai vo dich', 'vo dich', 'quan quan', 'a quan',
+                    'huy chuong', 'cup', 'danh hieu', 'ky luc', 'ban thang',
+                    'lich su', 'nguon goc', 'ra doi', 'quy mo', 'phat trien', 'phong trao', 'thuc trang',
+                    'luat choi', 'luat thi dau', 'luat', 'quy dinh', 'quy tac', 'viet vi', 'tie-break', '3 diem',
+                    'cach tinh diem', 'tinh diem', 'kich thuoc san', 'kich thuoc', 'tieu chuan',
+                    'kich thuoc luoi', 'chieu cao luoi', 'thoi gian thi dau', 'bao nhieu nguoi', 'may nguoi',
+                    'ky thuat', 'cach giao bong', 'cach dap bong', 'cach bat bong', 'cach nem bong',
+                    'chien thuat', 'doi hinh', 'vi tri',
+                    'huan luyen vien', 'hlv', 'cau thu', 'van dong vien', 'vdv', 'tay vot', 'trong tai',
+                    'san van dong', 'svd', 'khu lien hop', 'cau lac bo', 'clb', 'hoc vien',
+                    'o thai nguyen', 'o viet nam', 'the gioi', 'quoc te', 'nhu the nao', 'the nao',
+                    'co gi', 'la gi', 'y nghia', 'xep hang'
+                )):
+                    return AssistantIntent.SPORTS_KNOWLEDGE, 0.94
+
         # General Search / Availability matching
-        has_search_entities = bool(fresh_entities.sport_type or fresh_entities.location or fresh_entities.court_type)
+        has_search_entities = bool(fresh_entities.sport_type or fresh_entities.court_type) or (
+            bool(fresh_entities.location) and (
+                any(term in query for term in domain_terms) or bool(re.search(r'\b(san|co so|choi|dat|tim|kiem|dia diem|co)\b', query))
+            )
+        )
         has_date_or_time = bool(fresh_entities.date or fresh_entities.start_time or fresh_entities.preferred_time)
         has_search_terms = any(term in query for term in (
             'co san', 'san nao', 'tim san', 'tim co so', 'kiem san', 'cho toi san',
@@ -308,7 +732,8 @@ class IntentRouter:
             term in query for term in (
                 'san nay', 'cai nay', 'phuong an nay', 'san do', 'gia bao nhieu', 'bao nhieu co so',
                 'con gio nao', 'con 19h', 'the con', 're hon', 'doi sang',
-                'thi sao', 'vay con', 'con khong', 'san khac', 'ngay khac', 'gio khac', 'khung khac', 'khac'
+                'thi sao', 'vay con', 'con khong', 'san khac', 'ngay khac', 'gio khac', 'khung khac', 'khac',
+                'anh ay', 'cau thu nay', 'ong ay', 'doi nay', 'clb nay', 'thi dau', 'choi cho', 'da cho',
             )
         )
 
@@ -336,10 +761,227 @@ class IntentRouter:
 
     def _entities(self, query: str, context: dict[str, Any], today: date) -> IntentEntities:
         start_time, end_time = self._times(query)
+
+        # Multi-sport type extraction
+        sport_matches: list[tuple[int, int, str]] = []
+        for key in sorted(SPORT_ALIASES.keys(), key=len, reverse=True):
+            pattern = r'(?<![a-z0-9])' + re.escape(key) + r'(?![a-z0-9])'
+            for m in re.finditer(pattern, query):
+                s, e = m.start(), m.end()
+                if not any(max(s, ex_s) < min(e, ex_e) for ex_s, ex_e, _ in sport_matches):
+                    sport_matches.append((s, e, SPORT_ALIASES[key]))
+        sport_matches.sort(key=lambda x: x[0])
+        sport_types: list[str] = []
+        seen_sports = set()
+        for _, _, sp in sport_matches:
+            if sp not in seen_sports:
+                seen_sports.add(sp)
+                sport_types.append(sp)
+
+        extracted_sport = sport_types[0] if sport_types else None
+
+        # Multi-entity sports extraction
+        sports_matches: list[tuple[int, int, str, str]] = []  # (start, end, sport, canonical_name)
+        for key in sorted(KNOWN_SPORTS_ENTITIES.keys(), key=len, reverse=True):
+            pattern = r'(?<![a-z0-9])' + re.escape(key) + r'(?![a-z0-9])'
+            for m in re.finditer(pattern, query):
+                s, e = m.start(), m.end()
+                if not any(max(s, ex_s) < min(e, ex_e) for ex_s, ex_e, _, _ in sports_matches):
+                    sport, name = KNOWN_SPORTS_ENTITIES[key]
+                    sports_matches.append((s, e, sport, name))
+
+        sports_matches.sort(key=lambda x: x[0])
+        sports_entities: list[str] = []
+        seen_entities = set()
+        for _, _, sport, name in sports_matches:
+            if name not in seen_entities:
+                seen_entities.add(name)
+                sports_entities.append(name)
+
+        # Check flexible Thai Nguyen patterns if not directly matched
+        if not sports_entities and 'thai nguyen' in query:
+            tn_entity = None
+            tn_sport = None
+            if any(k in query for k in ('san van dong', 'svd')):
+                tn_entity = 'Sân vận động Thái Nguyên'
+                tn_sport = 'bóng đá'
+            elif any(k in query for k in ('ngoai bong da', 'nhung mon the thao', 'cac mon the thao', 'the thao gi', 'nhung doi the thao', 'cac doi the thao', 'the thao thai nguyen')):
+                tn_entity = 'Thể thao Thái Nguyên'
+            elif 'cau long' in query:
+                tn_entity = 'Cầu lông Thái Nguyên'
+                tn_sport = 'cầu lông'
+            elif 'pickleball' in query:
+                tn_entity = 'Pickleball Thái Nguyên'
+                tn_sport = 'pickleball'
+            elif 'tennis' in query or 'quan vot' in query:
+                tn_entity = 'Tennis Thái Nguyên'
+                tn_sport = 'tennis'
+            elif 'bong ro' in query:
+                tn_entity = 'Bóng rổ Thái Nguyên'
+                tn_sport = 'bóng rổ'
+            elif 'bong chuyen' in query:
+                tn_entity = 'Bóng chuyền Thái Nguyên'
+                tn_sport = 'bóng chuyền'
+            elif 'bong da' in query or 'doi bong' in query:
+                if any(k in query for k in ('sinh vien', 'hoc duong', 'ictu', 'truong dai hoc', 'dh cntt')):
+                    tn_entity = 'Bóng đá ICTU'
+                elif any(k in query for k in ('t&t', 'tt', 'clb nu', 'doi nu', 'bong da nu', 'nu')):
+                    tn_entity = 'Thái Nguyên T&T'
+                elif any(k in query for k in ('nam', 'fc thai nguyen', 'bong da nam')):
+                    tn_entity = 'Bóng đá nam Thái Nguyên'
+                else:
+                    tn_entity = 'Bóng đá Thái Nguyên'
+                tn_sport = 'bóng đá'
+            if tn_entity and tn_entity not in sports_entities:
+                sports_entities.append(tn_entity)
+                if extracted_sport is None:
+                    extracted_sport = tn_sport
+
+        # Check flexible Hanoi patterns
+        if any(k in query for k in ('ha noi', 'hanoi', 'thu do')):
+            hn_ent = None
+            hn_sp = None
+            if any(k in query for k in ('bong ro', 'basketball')):
+                hn_ent = 'Bóng rổ Hà Nội'
+                hn_sp = 'bóng rổ'
+            elif any(k in query for k in ('bong chuyen', 'volleyball')):
+                hn_ent = 'Bóng chuyền Hà Nội'
+                hn_sp = 'bóng chuyền'
+            elif any(k in query for k in ('cau long', 'badminton')):
+                hn_ent = 'Cầu lông Hà Nội'
+                hn_sp = 'cầu lông'
+            elif any(k in query for k in ('dai hoc', 'sinh vien', 'truong dai hoc')):
+                hn_ent = 'Thể thao Đại học Hà Nội'
+            elif any(k in query for k in ('ngoai bong da', 'manh ve mon gi', 'the thao gi', 'nhung mon the thao', 'cac mon the thao', 'the thao ha noi', 'the thao')):
+                hn_ent = 'Thể thao Hà Nội'
+            elif any(k in query for k in ('bong da', 'doi bong', 'clb bong da', 'clb nao', 'doi nao')):
+                hn_ent = 'Bóng đá Hà Nội'
+                hn_sp = 'bóng đá'
+            if hn_ent and hn_ent not in sports_entities:
+                sports_entities.append(hn_ent)
+                if extracted_sport is None and hn_sp is not None:
+                    extracted_sport = hn_sp
+
+        # Check flexible TP.HCM patterns
+        if any(k in query for k in ('tp.hcm', 'tphcm', 'ho chi minh', 'sai gon')):
+            hcm_ent = None
+            hcm_sp = None
+            if any(k in query for k in ('bong ro', 'basketball')):
+                hcm_ent = 'Bóng rổ TP.HCM'
+                hcm_sp = 'bóng rổ'
+            elif any(k in query for k in ('bong chuyen', 'volleyball')):
+                hcm_ent = 'Bóng chuyền TP.HCM'
+                hcm_sp = 'bóng chuyền'
+            elif any(k in query for k in ('cau long', 'badminton')):
+                hcm_ent = 'Cầu lông TP.HCM'
+                hcm_sp = 'cầu lông'
+            elif any(k in query for k in ('bong ban', 'table tennis')):
+                hcm_ent = 'Bóng bàn TP.HCM'
+                hcm_sp = 'bóng bàn'
+            elif any(k in query for k in ('ngoai bong da', 'the thao gi', 'nhung mon the thao', 'cac mon the thao', 'the thao tp.hcm', 'the thao tphcm', 'the thao')):
+                hcm_ent = 'Thể thao TP.HCM'
+            elif any(k in query for k in ('bong da', 'doi bong', 'clb bong da', 'clb nao', 'doi nao')):
+                hcm_ent = 'Bóng đá TP.HCM'
+                hcm_sp = 'bóng đá'
+            if hcm_ent and hcm_ent not in sports_entities:
+                sports_entities.append(hcm_ent)
+                if extracted_sport is None and hcm_sp is not None:
+                    extracted_sport = hcm_sp
+
+        # Check flexible ICTU patterns if query contains ICTU context
+        is_ictu_query = any(k in query for k in ('ictu', 'truong cntt', 'dh cntt', 'dai hoc cong nghe thong tin va truyen thong', 'cong nghe thong tin va truyen thong'))
+        if is_ictu_query:
+            ictu_ent = None
+            ictu_sp = None
+            if any(k in query for k in ('cau long', 'badminton')):
+                ictu_ent = 'Cầu lông ICTU'
+                ictu_sp = 'cầu lông'
+            elif any(k in query for k in ('bong chuyen', 'volleyball')):
+                ictu_ent = 'Bóng chuyền ICTU'
+                ictu_sp = 'bóng chuyền'
+            elif any(k in query for k in ('bong ban', 'table tennis')):
+                ictu_ent = 'Bóng bàn ICTU'
+                ictu_sp = 'bóng bàn'
+            elif any(k in query for k in ('pickleball', 'pickle ball')):
+                ictu_ent = 'Pickleball ICTU'
+                ictu_sp = 'pickleball'
+            elif any(k in query for k in ('mon the thao', 'nhung mon', 'con choi mon', 'cac mon', 'clb the thao', 'clb nao', 'ngoai bong da', 'the thao gi', 'nhung clb')):
+                ictu_ent = 'Thể thao ICTU'
+            elif any(k in query for k in ('bong da', 'doi bong', 'san bong', 'ictu cup', 'cup')):
+                ictu_ent = 'Bóng đá ICTU'
+                ictu_sp = 'bóng đá'
+            if ictu_ent and ictu_ent not in sports_entities:
+                sports_entities.append(ictu_ent)
+                if extracted_sport is None and ictu_sp is not None:
+                    extracted_sport = ictu_sp
+
+        # Inherit previous sports entity ONLY if this query is a genuine pronoun/follow-up reference
+        if not sports_entities and context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value:
+            is_loc_followup = any(term in query for term in ('tinh nay', 'thanh pho nay', 'o day', 'dia phuong nay', 'con mon khac', 'mon khac thi sao', 'con mon nao', 'cac mon khac', 'con mon gi'))
+            is_followup = is_loc_followup or any(term in query for term in (
+                'anh ay', 'cau thu nay', 'cau thu do', 'ong ay', 'co ay', 'chi ay',
+                'tay vot nay', 'tay vot do', 'vdv nay', 'vdv do', 'van dong vien nay', 'van dong vien do',
+                'nguoi nay', 'nguoi do', 'doi nay', 'doi do', 'clb nay', 'clb do',
+                'cau lac bo nay', 'cau lac bo do', 'svd nay', 'svd do', 'san nay', 'san do',
+                'ho', 'ca hai', 'hai nguoi nay', 'cac cau thu nay', 'cac vdv nay', 'hai cau thu nay',
+                'dang thi dau cho', 'dang thi dau o', 'dang choi cho', 'choi cho doi nao', 'da cho doi nao',
+                'thi dau cho clb nao', 'thi dau cho doi nao', 'dang da cho', 'dang thi dau', 'dang choi',
+                'sinh nam bao nhieu', 'sinh ngay nao', 'sinh o dau', 'que o dau', 'bao nhieu tuoi', 'co bao nhieu ban thang',
+                'danh hieu gi', 'vo dich nam nao', 'thanh tich gi', 'da giai nghe chua', 'giai nghe chua',
+                'quoc tich gi', 'trang thai thi dau', 'qua trinh thi dau'
+            ))
+            if is_loc_followup:
+                prev_str = " ".join(context.get('sports_entities', [])) + " " + str(context.get('sports_entity', '')) + " " + str(context.get('location', ''))
+                norm_prev = normalize_text(prev_str)
+                loc_target = None
+                if any(k in norm_prev for k in ('thai nguyen', 'ictu')):
+                    loc_target = 'Thái Nguyên'
+                elif any(k in norm_prev for k in ('ha noi', 'hanoi', 'thu do')):
+                    loc_target = 'Hà Nội'
+                elif any(k in norm_prev for k in ('tp.hcm', 'tphcm', 'ho chi minh', 'sai gon')):
+                    loc_target = 'TP.HCM'
+
+                if loc_target:
+                    if any(k in query for k in ('bong chuyen', 'volleyball')):
+                        sports_entities.append(f"Bóng chuyền {loc_target}")
+                        extracted_sport = 'bóng chuyền'
+                    elif any(k in query for k in ('bong ro', 'basketball')):
+                        sports_entities.append(f"Bóng rổ {loc_target}")
+                        extracted_sport = 'bóng rổ'
+                    elif any(k in query for k in ('cau long', 'badminton')):
+                        sports_entities.append(f"Cầu lông {loc_target}")
+                        extracted_sport = 'cầu lông'
+                    elif any(k in query for k in ('bong ban', 'table tennis')):
+                        sports_entities.append(f"Bóng bàn {loc_target}")
+                        extracted_sport = 'bóng bàn'
+                    elif any(k in query for k in ('mon khac', 'con mon nao', 'con mon gi', 'the thao')):
+                        sports_entities.append(f"Thể thao {loc_target}")
+                    elif any(k in query for k in ('clb', 'doi bong', 'doi nao')):
+                        sports_entities.append(f"Bóng đá {loc_target}")
+                        extracted_sport = 'bóng đá'
+
+            if is_followup and not sports_entities:
+                prev_entities = context.get('sports_entities')
+                if prev_entities and isinstance(prev_entities, list):
+                    for pe in prev_entities:
+                        if pe not in sports_entities:
+                            sports_entities.append(pe)
+                elif context.get('sports_entity'):
+                    sports_entities.append(context.get('sports_entity'))
+                if extracted_sport is None:
+                    extracted_sport = context.get('sport_type')
+
+        sports_entity = sports_entities[0] if sports_entities else None
+        if extracted_sport is None and sports_matches:
+            extracted_sport = sports_matches[0][2]
+
+        venue_names = self._venue_names(query)
+        venue_name = venue_names[0] if venue_names else None
+
         result = IntentEntities(
-            sport_type=next((value for key, value in SPORT_ALIASES.items() if key in query), None),
+            sport_type=extracted_sport,
             court_type=self._court_type(query),
-            venue_name=self._venue_name(query),
+            venue_name=venue_name,
             location=extract_location(query),
             date=self._date(query, today),
             start_time=start_time,
@@ -348,6 +990,10 @@ class IntentRouter:
             max_price=self._price(query),
             number_of_players=self._players(query),
             booking_code=self._booking_code(query),
+            sports_entity=sports_entity,
+            sports_entities=sports_entities,
+            venue_names=venue_names,
+            sport_types=sport_types,
         )
         aliases = {
             'sport_type': ('sport_type',), 'court_type': ('court_type',), 'venue_name': ('venue_name', 'field_name'),
@@ -367,13 +1013,23 @@ class IntentRouter:
     @staticmethod
     def _starts_new_request(query: str, entities: IntentEntities, context: dict[str, Any]) -> bool:
         explicitly_searching = any(term in query for term in (
-            'tim san', 'tim co so', 'kiem san', 'goi y san', 'toi muon san', 'muon tim san',
+            'tim san', 'tim co so', 'kiem san', 'goi y san', 'toi muon san', 'muon tim san', 'dat san',
         ))
+        from_sports_to_search = (context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value and explicitly_searching)
+        from_search_to_sports = (context.get('last_intent') != AssistantIntent.SPORTS_KNOWLEDGE.value and entities.sports_entity is not None)
         previous_sport = context.get('sport_type')
+        is_sports_context = context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value
+        is_sports_followup = is_sports_context and any(term in query for term in (
+            'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'o day', 'con mon', 'mon khac', 'cac mon', 'co doi'
+        ))
         changed_sport = bool(entities.sport_type and previous_sport and entities.sport_type != previous_sport)
+        if is_sports_followup:
+            changed_sport = False
         previous_location = context.get('location')
         changed_location = bool(entities.location and previous_location and entities.location != previous_location)
-        return explicitly_searching or changed_sport or changed_location
+        previous_entity = context.get('sports_entity')
+        changed_entity = bool(entities.sports_entity and previous_entity and entities.sports_entity != previous_entity)
+        return explicitly_searching or changed_sport or changed_location or changed_entity or from_sports_to_search or from_search_to_sports
 
     @staticmethod
     def _court_type(query: str) -> str | None:
@@ -406,7 +1062,26 @@ class IntentRouter:
         return match[0].replace(' ', '-') if match else None
 
     @staticmethod
+    def _venue_names(query: str) -> list[str]:
+        quoted = re.findall(r'["“]([^"”]{2,80})["”]', query)
+        if quoted:
+            return [q.strip() for q in quoted if q.strip()]
+        unquoted = re.findall(r'\bsan\s+([a-zA-Z0-9\s_-]{1,30}?)(?=\s+(?:va|va\s+san|gia|,|\.|\?|$))', query, flags=re.IGNORECASE)
+        reserved_words = {'bong', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'don', 'doi', 'trong nha', 'ngoai troi', 'con trong', 're', 'dep', 'tot', 'nao', 'nay', 'do'}
+        filtered = []
+        for m in unquoted:
+            cand = m.strip()
+            if cand and cand not in reserved_words and len(cand) >= 1:
+                filtered.append(f"sân {cand}")
+        if len(filtered) >= 2:
+            return filtered
+        return []
+
+    @staticmethod
     def _venue_name(query: str) -> str | None:
+        names = IntentRouter._venue_names(query)
+        if names:
+            return names[0]
         quoted = re.search(r'["“]([^"”]{2,80})["”]', query)
         return quoted[1].strip() if quoted else None
 
