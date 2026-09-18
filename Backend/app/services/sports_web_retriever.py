@@ -63,8 +63,13 @@ HIGH_VOLATILITY_PATTERNS = (
     "dang choi",
     "dang da cho",
     "dang da",
-    "doi bong nao",
-    "clb nao",
+    "thi dau cho doi bong nao",
+    "thi dau cho clb nao",
+    "da cho doi bong nao",
+    "da cho clb nao",
+    "choi cho doi bong nao",
+    "choi cho clb nao",
+    "khoac ao clb nao",
     "thi dau o dau",
     "chuyen nhuong",
     "tin chuyen nhuong",
@@ -88,13 +93,29 @@ HIGH_VOLATILITY_PATTERNS = (
     "top may",
     "dung thu may",
     "lich thi dau",
+    "lich dau",
     "chan thuong",
     "treo gio",
     "co thi dau khong",
     "phong do hien tai",
     "tinh hinh thi dau",
+    "ket qua moi nhat",
+    "ket qua hom nay",
+    "ti so moi nhat",
+    "bang xep hang moi nhat",
+    "vong bang",
+    "tu ket",
+    "ban ket",
+    "chung ket",
+    "mua giai 2024",
     "mua giai 2025",
     "mua giai 2026",
+    "v-league 2024",
+    "v-league 2025",
+    "v-league 2026",
+    "vba 2024",
+    "vba 2025",
+    "vba 2026",
 )
 
 # Stable keywords / topics
@@ -266,6 +287,8 @@ class SportsWebRetriever:
     def is_high_volatility_query(self, query: str) -> bool:
         """Deterministically check if a sports query touches high-volatility information."""
         norm = normalize_text(query)
+        if any(p in norm for p in ("co nhung doi", "co nhung clb", "co bao nhieu clb", "cac doi the thao", "cac mon the thao", "tong quan")):
+            return False
         return any(pattern in norm for pattern in HIGH_VOLATILITY_PATTERNS)
 
     def is_rumor_or_unconfirmed(self, text: str) -> bool:

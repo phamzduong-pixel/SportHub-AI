@@ -1,9 +1,9 @@
 import os
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Any
 
 from ..models.knowledge_entry import KnowledgeEntry
 from .knowledge_retriever import KnowledgeRetriever
-from ..repositories.knowledge_repository import KnowledgeRepository
+from ..repositories.knowledge_repository import KnowledgeRepository, get_knowledge_repository
 
 
 class KnowledgeService:
@@ -17,7 +17,7 @@ class KnowledgeService:
     NO_KNOWLEDGE = "NO_KNOWLEDGE"
 
     def __init__(self, repository: KnowledgeRepository = None, retriever: KnowledgeRetriever = None):
-        self.repo = repository or KnowledgeRepository()
+        self.repo = repository or get_knowledge_repository()
         self.retriever = retriever or KnowledgeRetriever(self.repo)
 
     def retrieve(
@@ -63,3 +63,51 @@ class KnowledgeService:
         if not results:
             return []
         return results
+
+    def index_entry(self, entry: KnowledgeEntry) -> bool:
+        """Incrementally index a knowledge entry in retriever and repository."""
+        self.repo.upsert_entry(entry)
+        return self.retriever.index_entry(entry)
+
+    def update_entry(self, entry: KnowledgeEntry) -> bool:
+        """Incrementally update an existing entry in retriever and repository."""
+        self.repo.upsert_entry(entry)
+        return self.retriever.update_entry(entry)
+
+    def remove_entry(self, entry_id: str) -> bool:
+        """Remove an entry from retriever and repository."""
+        self.repo.remove_entry(entry_id)
+        return self.retriever.remove_entry(entry_id)
+
+    def apply_fact_update(
+        self,
+        fact: Any,
+        persist_markdown: bool = False,
+    ) -> Any:
+        """Apply sports fact update through SportsKnowledgeUpdater and incrementally sync index."""
+        from .sports_knowledge_updater import SportsKnowledgeUpdater, KnowledgeUpdateAction
+
+        updater = SportsKnowledgeUpdater(repository=self.repo, knowledge_retriever=self.retriever)
+        result = updater.apply_fact_update(fact, persist_markdown=persist_markdown)
+        return result
+
+
+_shared_knowledge_service_instance: Optional[KnowledgeService] = None
+
+
+def get_knowledge_service(
+    repository: Optional[KnowledgeRepository] = None,
+    retriever: Optional[KnowledgeRetriever] = None,
+) -> KnowledgeService:
+    global _shared_knowledge_service_instance
+    if _shared_knowledge_service_instance is None or repository is not None or retriever is not None:
+        service = KnowledgeService(repository=repository, retriever=retriever)
+        if repository is None and retriever is None:
+            _shared_knowledge_service_instance = service
+        return service
+    return _shared_knowledge_service_instance
+
+
+def reset_shared_knowledge_service() -> None:
+    global _shared_knowledge_service_instance
+    _shared_knowledge_service_instance = None

@@ -29,6 +29,13 @@ class AssistantIntent(str, Enum):
     UNCLEAR = 'UNCLEAR'
     OUT_OF_SCOPE = 'OUT_OF_SCOPE'
     SPORTS_KNOWLEDGE = 'SPORTS_KNOWLEDGE'
+    AI_IDENTITY = 'AI_IDENTITY'
+    AI_CAPABILITY = 'AI_CAPABILITY'
+    THANKS = 'THANKS'
+    GOODBYE = 'GOODBYE'
+    CASUAL = 'CASUAL'
+    ABUSIVE = 'ABUSIVE'
+    NONSENSE = 'NONSENSE'
 
 
 SPORT_ALIASES = {
@@ -114,6 +121,7 @@ KNOWN_SPORTS_ENTITIES = {
     'svd thai nguyen': ('bóng đá', 'Sân vận động Thái Nguyên'),
     'clb cau long thai nguyen': ('cầu lông', 'CLB Cầu lông Thái Nguyên'),
     'phong trao cau long thai nguyen': ('cầu lông', 'Cầu lông Thái Nguyên'),
+    'cau long thai nguyen': ('cầu lông', 'Cầu lông Thái Nguyên'),
     'clb pickleball thai nguyen': ('pickleball', 'CLB Pickleball Thái Nguyên'),
     'pickleball thai nguyen': ('pickleball', 'Pickleball Thái Nguyên'),
     'clb tennis thai nguyen': ('tennis', 'CLB Tennis Thái Nguyên'),
@@ -283,6 +291,9 @@ KNOWN_SPORTS_ENTITIES = {
     'park hang seo': ('bóng đá', 'Park Hang-seo'),
     'v-league': ('bóng đá', 'V-League'),
     'vleague': ('bóng đá', 'V-League'),
+    'giai bong da nu quoc gia': ('bóng đá', 'Giải Bóng đá Nữ Quốc gia'),
+    'bong da nu quoc gia': ('bóng đá', 'Giải Bóng đá Nữ Quốc gia'),
+    'giai bong da nu': ('bóng đá', 'Giải Bóng đá Nữ Quốc gia'),
     'thuy linh': ('cầu lông', 'Nguyễn Thùy Linh'),
     'nguyen thuy linh': ('cầu lông', 'Nguyễn Thùy Linh'),
     'tien minh': ('cầu lông', 'Nguyễn Tiến Minh'),
@@ -402,6 +413,9 @@ def normalize_text(value: str) -> str:
     return ''.join(char for char in normalized if unicodedata.category(char) != 'Mn').replace('đ', 'd')
 
 
+from .ai_sports_resolver import SportsContextResolver
+
+
 @dataclass
 class IntentEntities:
     sport_type: str | None = None
@@ -419,6 +433,9 @@ class IntentEntities:
     sports_entities: list[str] = field(default_factory=list)
     venue_names: list[str] = field(default_factory=list)
     sport_types: list[str] = field(default_factory=list)
+    is_conditional: bool = False
+    conditional_note: str | None = None
+    is_meme_or_joke: bool = False
 
     @property
     def price_max(self) -> float | None:
@@ -463,6 +480,14 @@ class IntentRouter:
             or fresh_entities.sport_type is not None or fresh_entities.court_type is not None
         )
 
+        # 1. Safety / Abusive detection
+        if self._is_abusive(query):
+            return IntentRoute(AssistantIntent.ABUSIVE, 0.99, fresh_entities, context_reset=True)
+
+        # 2. Nonsense / Spam / Keyboard mash detection
+        if self._is_nonsense(query):
+            return IntentRoute(AssistantIntent.NONSENSE, 0.99, fresh_entities, context_reset=True)
+
         has_unsupported_sport = any(term in query for term in UNSUPPORTED_SPORTS_TERMS)
         if has_unsupported_sport and not fresh_entities.sports_entities:
             return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.99, fresh_entities, context_reset=True)
@@ -484,8 +509,19 @@ class IntentRouter:
                 return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.95, fresh_entities, context_reset=False, is_combined_out_of_scope=True)
             return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.99, fresh_entities, context_reset=True)
 
+        # 3. Natural Conversation / Social greetings & chit-chat (when no specific search / booking request)
         if self._is_greeting(query):
             return IntentRoute(AssistantIntent.GREETING, 0.99, entities)
+        if self._is_ai_identity(query, fresh_entities):
+            return IntentRoute(AssistantIntent.AI_IDENTITY, 0.99, entities)
+        if self._is_ai_capability(query, fresh_entities):
+            return IntentRoute(AssistantIntent.AI_CAPABILITY, 0.98, entities)
+        if self._is_thanks(query):
+            return IntentRoute(AssistantIntent.THANKS, 0.98, entities)
+        if self._is_goodbye(query):
+            return IntentRoute(AssistantIntent.GOODBYE, 0.98, entities)
+        if self._is_casual(query):
+            return IntentRoute(AssistantIntent.CASUAL, 0.95, entities)
 
         intent, confidence = self._match_intent(query, follow_up, effective_context, fresh_entities, entities)
         if intent is None:
@@ -554,7 +590,10 @@ class IntentRouter:
             return AssistantIntent.RESCHEDULE_BOOKING, 0.97
         if re.search(r'\b(huy|huỷ)\b', query) and any(term in query for term in ('san', 'booking', 'lich dat', 'ma dat', 'chinh sach', 'don', 'don dat')):
             return AssistantIntent.CANCEL_BOOKING, 0.96
-        if any(term in query for term in ('trang thai booking', 'booking cua toi', 'lich su dat', 'lich dat cua toi', 'xem booking', 'ma dat', 'bao nhieu booking', 'booking hom nay')) or (
+        if any(term in query for term in (
+            'trang thai booking', 'booking cua toi', 'lich su dat', 'lich dat cua toi', 'xem booking',
+            'ma dat', 'bao nhieu booking', 'booking hom nay', 'kiem tra don dat', 'kiem tra don', 'don dat san', 'don dat'
+        )) or (
             'booking' in query and ('the nao' in query or 'trang thai' in query)
         ):
             return AssistantIntent.GET_BOOKING, 0.95
@@ -644,11 +683,28 @@ class IntentRouter:
             has_sports_inquiry = any(term in query for term in (
                 'the thao', 'clb', 'cau lac bo', 'doi bong', 'doi tuyen', 'mon the thao', 'mon gi', 'mon nao',
                 'giai', 'phong trao', 'manh ve', 'co nhung doi', 'co doi', 'vdv', 'van dong vien',
-                'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'bong ban', 'e-sports', 'san'
+                'bong da', 'da bong', 'choi bong', 'thi dau', 'giai dau', 'co doi khong',
+                'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'bong ban', 'e-sports', 'san'
             ))
+
+            if fresh_entities.is_meme_or_joke:
+                return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
+
+            if fresh_entities.is_conditional and fresh_entities.sports_entities:
+                return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
 
             if effective_sports_ent is not None and not has_academic and (not is_geo_or_school or has_sports_inquiry):
                 return AssistantIntent.SPORTS_KNOWLEDGE, 0.96
+
+            is_athlete_inquiry = any(p in query for p in (
+                'anh ay sinh', 'ong ay sinh', 'co ay sinh', 'cau thu nay sinh', 'vdv nay sinh', 'tay vot nay sinh',
+                'anh ay bao nhieu tuoi', 'anh ay da cho', 'anh ay choi cho', 'ong ay da cho', 'ong ay choi cho',
+                'anh ay thi dau', 'ong ay thi dau', 'anh ay sinh nam', 'ong ay sinh nam', 'sinh nam bao nhieu',
+                'anh ay da o vi tri', 'anh ay choi o vi tri', 'da o vi tri nao', 'choi o vi tri nao'
+            ))
+            if is_athlete_inquiry:
+                return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
+
             is_sports_context = context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value
             if is_sports_context:
                 if any(term in query for term in (
@@ -666,6 +722,8 @@ class IntentRouter:
             has_supported_sport = (
                 fresh_entities.sport_type in SUPPORTED_SPORTS
                 or any(k in query for k in SPORT_ALIASES)
+                or any(k in query for k in ('vff', 'fifa', 'v-league', 'vba', 'ictu cup', 'cau thu', 'tay vot', 'van dong vien', 'vdv'))
+                or (any(k in query for k in ('clb', 'cau lac bo', 'doi bong', 'doi tuyen')) and any(k in query for k in ('la ai', 'ai la', 'tieu su', 'thanh tich', 'vo dich', 'o dau', 'thanh lap')))
             )
             if has_supported_sport:
                 if any(term in query for term in (
@@ -676,6 +734,9 @@ class IntentRouter:
                     'doi tuyen', 'tuyen quoc gia', 'tuyen nu', 'tuyen nam',
                     'thanh tich', 'giai dau', 'giai vo dich', 'vo dich', 'quan quan', 'a quan',
                     'huy chuong', 'cup', 'danh hieu', 'ky luc', 'ban thang',
+                    'ket qua tran', 'ket qua thi dau', 'ket qua moi nhat', 'ket qua', 'ti so',
+                    'lich thi dau', 'lich dau', 'bang xep hang', 'xep hang', 'tran dau', 'chuyen nhuong',
+                    'tin chuyen nhuong', 'hop dong', 'gia nhap', 'roi clb',
                     'lich su', 'nguon goc', 'ra doi', 'quy mo', 'phat trien', 'phong trao', 'thuc trang',
                     'luat choi', 'luat thi dau', 'luat', 'quy dinh', 'quy tac', 'viet vi', 'tie-break', '3 diem',
                     'cach tinh diem', 'tinh diem', 'kich thuoc san', 'kich thuoc', 'tieu chuan',
@@ -685,7 +746,7 @@ class IntentRouter:
                     'huan luyen vien', 'hlv', 'cau thu', 'van dong vien', 'vdv', 'tay vot', 'trong tai',
                     'san van dong', 'svd', 'khu lien hop', 'cau lac bo', 'clb', 'hoc vien',
                     'o thai nguyen', 'o viet nam', 'the gioi', 'quoc te', 'nhu the nao', 'the nao',
-                    'co gi', 'la gi', 'y nghia', 'xep hang'
+                    'co gi', 'la gi', 'y nghia'
                 )):
                     return AssistantIntent.SPORTS_KNOWLEDGE, 0.94
 
@@ -710,12 +771,159 @@ class IntentRouter:
         return None, 0.0
 
     @staticmethod
+    def _is_abusive(query: str) -> bool:
+        abusive_patterns = (
+            r'\b(?:dcm|clgt|dm|vcl|vl|vcc|dkm|đkm|đcm|đụ|địt)\b',
+            r'\b(?:dit\s*me|du\s*me|dit\s*con\s*me|du\s*con\s*me|dmm|dcmm|clmm)\b',
+            r'\b(?:cai\s*buoi|dau\s*buoi|cai\s*lon|con\s*lon|lon\s*me|cai\s*cac|con\s*cac|an\s*cac)\b',
+            r'\b(?:do\s*ngu|ngu\s*vcl|ngu\s*vl|ngu\s*ngoc|ngu\s*qua|do\s*cho|con\s*cho|thang\s*cho|mat\s*day|chet\s*di|cut\s*di|bien\s*di|chet\s*me)\b',
+            r'\b(?:fuck|bitch|asshole|bullshit)\b',
+        )
+        return any(bool(re.search(pat, query, re.IGNORECASE)) for pat in abusive_patterns)
+
+    @staticmethod
+    def _is_nonsense(query: str) -> bool:
+        cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
+        if not cleaned:
+            return True
+        # Repeated single character >= 5 times (e.g. aaaaa, zzzzzz, 11111)
+        if re.search(r'(.)\1{4,}', cleaned):
+            return True
+        # Repeated words >= 3 times (e.g. test test test)
+        if re.search(r'\b([a-z0-9]+)(?:\s+\1){2,}\b', cleaned):
+            return True
+        # Keyboard mash / random tokens
+        mash_tokens = {'asdf', 'asdfg', 'asdfgh', 'asdfghjkl', 'qwerty', 'qwertyuiop', 'zxcv', 'zxcvbn', 'zxcvbnm', 'lkjhg', 'poiuy', '123456', '12345678'}
+        words = cleaned.split()
+        if len(words) == 1 and (words[0] in mash_tokens or (len(words[0]) >= 7 and not any(v in words[0] for v in 'aeiouy'))):
+            return True
+        # 6 or more consecutive consonants without any vowels (a, e, i, o, u, y), excluding known acronyms
+        consonant_match = re.search(r'[bcdfghjklmnpqrstvwxz]{6,}', cleaned)
+        if consonant_match:
+            matched_str = consonant_match.group(0)
+            if matched_str not in {'sporthub', 'tphcm'}:
+                return True
+        return False
+
+    @staticmethod
     def _is_greeting(query: str) -> bool:
         cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
-        return cleaned in {
-            'chao', 'xin chao', 'hello', 'hi', 'hey', 'chao ban', 'alo', 'chao tro ly',
-            'xin chao sporthub', 'hello sporthub', 'hi sporthub'
-        }
+        if not cleaned:
+            return False
+        tokens = cleaned.split()
+        if len(tokens) > 6:
+            return False
+        greeting_starts = (
+            'xin chao', 'chao buoi sang', 'chao buoi chieu', 'chao buoi toi',
+            'good morning', 'good afternoon', 'good evening',
+            'chao ban nhe', 'chao ban nha', 'chao ban', 'chao tro ly', 'chao sporthub', 'chao ad', 'chao shop',
+            'chao anh', 'chao em', 'chao chi', 'chao nhe', 'chao nha', 'chao',
+            'hello sporthub', 'hi sporthub', 'hello ban', 'hi ban', 'hey ban', 'hello ad', 'hi ad',
+            'hello', 'hi', 'hey', 'alo sporthub', 'alo ban', 'alo', 'helo',
+        )
+        remaining = cleaned
+        for g in sorted(greeting_starts, key=len, reverse=True):
+            remaining = re.sub(r'\b' + re.escape(g) + r'\b', '', remaining).strip()
+        particles = {'nha', 'nhe', 'a', 'ha', 'oi', 'sporthub', 'ai', 'ad', 'shop', 'tro ly', 'ban', 'em', 'anh', 'chi', 'bot', 'minh'}
+        rem_tokens = [t for t in remaining.split() if t not in particles]
+        return len(rem_tokens) == 0
+
+    @staticmethod
+    def _is_ai_identity(query: str, fresh_entities: IntentEntities) -> bool:
+        if fresh_entities.sports_entities or fresh_entities.sport_type or fresh_entities.venue_name:
+            return False
+        if any(k in query for k in ('chuc nang', 'tinh nang', 'lam duoc', 'giup duoc', 'ho tro')):
+            return False
+        identity_patterns = (
+            r'\b(?:ban|tro ly|bot)\s+(?:la\s+ai|ten\s+gi|ten\s+la\s+gi|la\s+gi|la\s+ai\s+the|la\s+ai\s+vay|la\s+ai\s+gi|la\s+con\s+gi|la\s+bot\s+gi|la\s+ai\s+day)\b',
+            r'\b(?:ten\s+cua\s+ban|ten\s+ban\s+la\s+gi|ten\s+ban\s+la\s+chi)\b',
+            r'\b(?:ai\s+tao\s+ra\s+ban|ai\s+sinh\s+ra\s+ban|ai\s+lam\s+ra\s+ban|ai\s+phat\s+trien\s+ban|ban\s+do\s+ai\s+tao|ban\s+tu\s+dau\s+den)\b',
+            r'\b(?:tro\s+ly\s+nay\s+la\s+ai|tro\s+ly\s+sporthub\s+la\s+ai|bot\s+nay\s+la\s+ai)\b',
+        )
+        return any(bool(re.search(pat, query, re.IGNORECASE)) for pat in identity_patterns)
+
+    @staticmethod
+    def _is_ai_capability(query: str, fresh_entities: IntentEntities) -> bool:
+        if fresh_entities.venue_name or fresh_entities.booking_code:
+            return False
+        if fresh_entities.sport_type and any(term in query for term in ('tim', 'san', 'dat', 'gia', 'con trong')):
+            return False
+        capability_patterns = (
+            'ban co the lam gi', 'ban lam duoc gi', 'ban giup duoc gi', 'ban giup toi duoc gi',
+            'ban giup duoc gi cho toi', 'tro ly nay dung de lam gi', 'tro ly nay lam duoc gi', 'tro ly nay lam gi',
+            'chuc nang cua ban', 'tinh nang cua ban', 'ban co chuc nang gi', 'ban co tinh nang gi',
+            'ban biet lam gi', 'ban ho tro duoc gi', 'ban ho tro nhung gi', 'sporthub lam duoc gi',
+            'sporthub ai lam duoc gi', 'bot lam duoc gi', 'ai nay lam duoc gi', 'ban lam gi duoc',
+            'ban giup gi', 'giup duoc gi', 'lam duoc gi', 'ban lam duoc nhung viec gi', 'ban lam duoc nhung gi',
+            'ban lam duoc viec gi', 'tro ly nay lam gi', 'tro ly sporthub lam duoc gi',
+        )
+        return any(p in query for p in capability_patterns)
+
+    @staticmethod
+    def _is_thanks(query: str) -> bool:
+        cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
+        if not cleaned:
+            return False
+        has_domain = any(term in cleaned for term in ('tim', 'san', 'dat', 'gia', 'huy', 'doi', 'xem', 'lich', 'kiem'))
+        if has_domain:
+            return False
+        thanks_phrases = (
+            'cam on ban nhe', 'cam on ban nha', 'cam on ban', 'cam on nha', 'cam on nhe',
+            'cam on nhieu', 'cam on tro ly', 'cam on sporthub', 'cam on',
+            'thank you so much', 'thank you', 'thanks a lot', 'thanks ban', 'thanks nha', 'thanks nhe', 'thanks', 'thank ban', 'thank',
+            'ok ban nhe', 'ok ban nha', 'ok ban', 'ok nha', 'ok nhe', 'ok roi', 'ok nhe ban', 'okie', 'oki', 'ok',
+            'duoc roi ban', 'duoc roi nha', 'duoc roi nhe', 'duoc roi', 'da hieu roi', 'da hieu', 'ro roi ban', 'ro roi',
+            'da vang', 'vang a', 'vang', 'da cam on',
+        )
+        tokens = cleaned.split()
+        if len(tokens) > 6:
+            return False
+        return any(cleaned == p or cleaned.startswith(p + ' ') or cleaned.endswith(' ' + p) for p in thanks_phrases)
+
+    @staticmethod
+    def _is_goodbye(query: str) -> bool:
+        cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
+        if not cleaned:
+            return False
+        goodbye_phrases = (
+            'tam biet ban nhe', 'tam biet ban nha', 'tam biet ban', 'tam biet',
+            'chao tam biet',
+            'hen gap lai ban nhe', 'hen gap lai nhe', 'hen gap lai nha', 'hen gap lai',
+            'bye bye ban', 'bye bye nha', 'bye bye nhe', 'bye bye', 'bye ban', 'bye nha', 'bye nhe', 'bye',
+            'goodbye ban', 'goodbye', 'bai bai',
+            'chuc ngu ngon', 'good night', 'g9',
+            'chuc mot ngay tot lanh', 'chuc ngay tot lanh', 'ngay moi tot lanh', 'chuc buoi toi vui ve',
+        )
+        tokens = cleaned.split()
+        if len(tokens) > 6:
+            return False
+        return any(cleaned == p or cleaned.startswith(p + ' ') or cleaned.endswith(' ' + p) for p in goodbye_phrases)
+
+    @staticmethod
+    def _is_casual(query: str) -> bool:
+        cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
+        if not cleaned:
+            return False
+        if any(term in cleaned for term in ('tim san', 'dat san', 'thue san', 'gia san', 'huy san', 'doi lich', 'con trong', 'con slot', 'san bong', 'san cau long', 'san tennis')):
+            return False
+        casual_phrases = (
+            'hom nay ban the nao', 'hom nay the nao roi', 'hom nay the nao', 'ban the nao roi', 'ban the nao',
+            'ban khoe khong', 'ban co khoe khong', 'khoe khong ban', 'khoe khong',
+            'dao nay the nao', 'ban on khong', 'the nao roi ban', 'the nao roi',
+            'hay qua ban', 'hay qua nha', 'hay qua nhe', 'hay qua', 'hay the',
+            'tuyet voi qua', 'tuyet voi lam', 'tuyet voi', 'tuyet qua',
+            'duoc do ban', 'duoc do nha', 'duoc do nhe', 'duoc do', 'duoc day',
+            'tot lam ban', 'tot lam nha', 'tot lam',
+            'dinh qua ban', 'dinh qua', 'dinh the',
+            'gioi qua ban', 'gioi qua', 'gioi the',
+            'xin qua ban', 'xin qua', 'xin the',
+            'chuan luon ban', 'chuan luon', 'chuan qua',
+            'thong minh qua ban', 'thong minh qua', 'thong minh the',
+        )
+        tokens = cleaned.split()
+        if len(tokens) > 6:
+            return False
+        return any(cleaned == p or cleaned.startswith(p + ' ') or cleaned.endswith(' ' + p) for p in casual_phrases)
 
     @staticmethod
     def _has_continuation_detail(query: str) -> bool:
@@ -797,6 +1005,25 @@ class IntentRouter:
             if name not in seen_entities:
                 seen_entities.add(name)
                 sports_entities.append(name)
+
+        # Natural & Context-aware sports resolution (nicknames, numbers in words/digits, slangs, follow-ups)
+        sports_res = SportsContextResolver.resolve(query, context)
+        if sports_res.sport and extracted_sport is None:
+            extracted_sport = sports_res.sport
+        for ent in sports_res.entities:
+            if ent not in sports_entities:
+                sports_entities.append(ent)
+                seen_entities.add(ent)
+
+        # Resolve 'ICTU' entity to 'Bóng đá ICTU' if context/query is about football / teams
+        if 'ICTU' in sports_entities and (
+            extracted_sport == 'bóng đá'
+            or any(k in query for k in ('doi bong', 'bong da', 'da bong', 'cung mot doi', 'thai nguyen t&t', 'doi nam', 'doi nu', 'giai', 'thi dau'))
+        ):
+            idx = sports_entities.index('ICTU')
+            sports_entities[idx] = 'Bóng đá ICTU'
+            if extracted_sport is None:
+                extracted_sport = 'bóng đá'
 
         # Check flexible Thai Nguyen patterns if not directly matched
         if not sports_entities and 'thai nguyen' in query:
@@ -927,7 +1154,7 @@ class IntentRouter:
                 'dang thi dau cho', 'dang thi dau o', 'dang choi cho', 'choi cho doi nao', 'da cho doi nao',
                 'thi dau cho clb nao', 'thi dau cho doi nao', 'dang da cho', 'dang thi dau', 'dang choi',
                 'sinh nam bao nhieu', 'sinh ngay nao', 'sinh o dau', 'que o dau', 'bao nhieu tuoi', 'co bao nhieu ban thang',
-                'danh hieu gi', 'vo dich nam nao', 'thanh tich gi', 'da giai nghe chua', 'giai nghe chua',
+                'danh hieu', 'vo dich nam nao', 'thanh tich gi', 'da giai nghe chua', 'giai nghe chua',
                 'quoc tich gi', 'trang thai thi dau', 'qua trinh thi dau'
             ))
             if is_loc_followup:
@@ -974,6 +1201,8 @@ class IntentRouter:
         sports_entity = sports_entities[0] if sports_entities else None
         if extracted_sport is None and sports_matches:
             extracted_sport = sports_matches[0][2]
+        if extracted_sport is None and sports_res.sport:
+            extracted_sport = sports_res.sport
 
         venue_names = self._venue_names(query)
         venue_name = venue_names[0] if venue_names else None

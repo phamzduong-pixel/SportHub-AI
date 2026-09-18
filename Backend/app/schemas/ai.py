@@ -91,11 +91,17 @@ class RecommendationResponse(BaseModel):
     items: list[DemandRecommendation]
 
 
+class AssistantMode(str, Enum):
+    NATURAL = 'NATURAL'
+    PROFESSIONAL = 'PROFESSIONAL'
+
+
 class AssistantRequest(RequestModel):
     message: str = Field(min_length=2, max_length=500)
     context_field_id: int | None = Field(default=None, gt=0)
     context: dict[str, Any] | None = None
     conversation_id: str | None = None
+    assistant_mode: AssistantMode | None = None
 
 
 class AssistantSuggestion(BaseModel):
@@ -161,6 +167,7 @@ class AssistantResponse(BaseModel):
     context_reset: bool = False
     partner_application_status: Literal['NONE', 'PENDING', 'APPROVED', 'REJECTED'] | None = None
     action: AssistantAction | None = None
+    assistant_mode: AssistantMode = AssistantMode.NATURAL
 
 
 class AIMessageItem(BaseModel):
@@ -358,3 +365,24 @@ class OccupancySummaryResponse(BaseModel):
     low_demand_hours: list[OccupancySlotInsight]
     analytics: OccupancyMetrics
     source: str
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    query: str | None = None
+    sport: str | None = None
+    entity: str | None = None
+    raw_items: list[Any] | None = None
+    persist_markdown: bool = False
+
+
+class KnowledgeUpdateResponse(BaseModel):
+    status: str
+    message: str
+    summary: dict[str, Any] | None = None
+    job_id: str | None = None
+
+
+class KnowledgeUpdateStatusResponse(BaseModel):
+    is_running: bool
+    current_job_id: str | None = None
+    last_summary: dict[str, Any] | None = None

@@ -459,22 +459,55 @@ flowchart TD
 
 ---
 
-## 14. BẢNG TỔNG KẾT KIỂM THỬ NGHIỆM THU (TEST SUITE VERIFICATION)
+## 14. BỘ ĐIỀU HƯỚNG VÀ XỬ LÝ GIAO TIẾP TỰ NHIÊN (NATURAL CONVERSATION & CONTEXT UNDERSTANDING)
+
+### 14.1 Giao tiếp Xã giao Thường ngày (NATURAL-01)
+Chế độ Tự nhiên (`AssistantMode.NATURAL`) được trang bị khả năng nhận diện và phản hồi 5 nhóm giao tiếp phi nghiệp vụ:
+1. **Chào hỏi / Xã giao**: `hello`, `hi`, `chào bạn`, `xin chào`, `chào buổi sáng`, `hey`, `alo`...
+2. **Nhận diện & Năng lực trợ lý**: `bạn là ai?`, `bạn tên gì?`, `bạn có thể làm gì?`, `bạn giúp được gì?` (giới thiệu 4 trụ cột nghiệp vụ mà không gọi RAG thừa).
+3. **Cảm ơn / Tạm biệt / Phản hồi xã giao**: `cảm ơn`, `ok`, `được rồi`, `bye`, `tạm biệt`...
+4. **Trò chuyện thường ngày**: `hôm nay bạn thế nào?`, `bạn khỏe không?`, `hay quá`, `tuyệt vời`...
+5. **Nội dung rác / Vô nghĩa / Xúc phạm**: Xử lý an toàn, lịch sự, nhắc nhở văn minh và điều hướng về dịch vụ thể thao.
+
+### 14.2 Hiểu Ngữ cảnh Thể thao, Biệt danh & Slang (NATURAL-02)
+- **Module `SportsContextResolver`**:
+  - Chuẩn hóa số từ chữ sang số (`anh bảy` $\leftrightarrow$ `anh 7`, `anh mười` $\leftrightarrow$ `anh 10`, `anh chín` $\leftrightarrow$ `anh 9`...).
+  - Tra cứu biệt danh thân mật trên 6 môn thể thao (Bóng đá, Tennis, Cầu lông, Bóng rổ, Bóng chuyền, Pickleball).
+  - Kế thừa ngữ cảnh hội thoại đa lượt (ví dụ: turn 1 hỏi *"Anh 7 trong bóng đá là ai?"* $\rightarrow$ turn 2 hỏi *"Còn anh 10 là ai?"* $\rightarrow$ suy luận `Lionel Messi`).
+  - Xử lý có điều kiện khi câu hỏi thiếu ngữ cảnh (*"anh 7 là ai?"*).
+  - Thấu hiểu câu đùa và trào lưu mạng xã hội (*"đấng maguire"*, *"anh 7 đi bộ vuốt tóc"*, *"lakaka"*).
+
+### 14.3 Khung Xem Trước Nguồn Web (Web Source Preview Panel - WP-01 → WP-06)
+- **Bố cục 2 Panel**: Chatbot bên trái + Web Preview Panel bên phải.
+- **Tương tác Nguồn Trích dẫn**: Click citation/source trong tin nhắn AI sẽ tự động đồng bộ và hiển thị website nguồn tương ứng trên preview panel.
+- **Iframe & Fallback Thông Minh**: Nhúng iframe trực tiếp khi cho phép; tự động fallback card có nút "Mở link" (new tab) và "Copy URL" (toast feedback) khi website chặn iframe.
+
+---
+
+## 15. BẢNG TỔNG KẾT KIỂM THỬ NGHIỆM THU TOÀN DIỆN (TEST SUITE VERIFICATION)
 
 Hệ thống AI đã vượt qua toàn bộ các bài kiểm tra tự động và tích hợp:
 
-| Bộ Kiểm Thử | File Test | Số Lượng Test | Kết Quả |
+| Bộ Kiểm Thử | File Test | Số Lượng Test / Subtests | Kết Quả |
 |---|---|:---:|:---:|
-| **Final Web & Sports Knowledge Validation** | `test_final_sports_web_validation.py` | 8 | **8/8 PASSED (100%)** |
-| **Combined Evidence & Ranking** | `test_sports_combined_evidence.py` | 5 | **5/5 PASSED (100%)** |
-| **Freshness Evaluation & Volatility** | `test_sports_freshness_evaluation.py` | 5 | **5/5 PASSED (100%)** |
-| **Sports Web Retriever & Whitelist** | `test_sports_web_retriever.py` | 7 | **7/7 PASSED (100%)** |
-| **AI Web Flow Separation** | `test_ai_web_flow_separation.py` | 6 | **6/6 PASSED (100%)** |
-| **Sports Intent Router & Scope** | `test_sports_intent_router.py` | 11 | **11/11 PASSED (100%)** |
-| **Sports Knowledge Validation** | `test_sports_knowledge_validation.py` | 14 | **14/14 PASSED (100%)** |
-| **AI Location & Multi-turn Search** | `test_ai_location_search.py` | 20 | **20/20 PASSED (100%)** |
-| **Tổng Cộng Targeted Sports & Web Suites** | | **76** | **76/76 PASSED (100%)** |
+| **Natural Context & Entity Understanding** | `test_ai_natural_context_entity.py` | 12 methods / 36 subtests | **PASSED (100%)** |
+| **Natural Conversation Handling** | `test_ai_natural_conversation.py` | 12 methods / 52 subtests | **PASSED (100%)** |
+| **Sports Knowledge RAG** | `test_sports_knowledge_rag.py` | 10 tests | **PASSED (100%)** |
+| **AI Assistant Mode Foundation** | `test_ai_assistant_mode_foundation.py` | 9 tests | **PASSED (100%)** |
+| **AI Mode Scenarios Integration** | `test_ai_assistant_mode_scenarios_integration.py` | 15 tests | **PASSED (100%)** |
+| **Intent Router & NLU** | `test_ai_intent_router.py` | 25 tests | **PASSED (100%)** |
+| **Domain Boundary & Scope Policy** | `test_ai_domain_boundary.py` | 31 tests | **PASSED (100%)** |
+| **AI Web Flow Separation** | `test_ai_web_flow_separation.py` | 6 tests | **PASSED (100%)** |
+| **Final Web & Sports Knowledge Validation** | `test_final_sports_web_validation.py` | 8 tests | **PASSED (100%)** |
+| **Combined Evidence & Ranking** | `test_sports_combined_evidence.py` | 5 tests | **PASSED (100%)** |
+| **Freshness Evaluation & Volatility** | `test_sports_freshness_evaluation.py` | 5 tests | **PASSED (100%)** |
+| **Sports Web Retriever & Whitelist** | `test_sports_web_retriever.py` | 7 tests | **PASSED (100%)** |
+| **Sports Intent Router & Scope** | `test_sports_intent_router.py` | 11 tests | **PASSED (100%)** |
+| **Sports Knowledge Validation** | `test_sports_knowledge_validation.py` | 14 tests | **PASSED (100%)** |
+| **AI Location & Multi-turn Search** | `test_ai_location_search.py` | 20 tests | **PASSED (100%)** |
+| **Tổng Cộng AI Test Suites** | | **190+ tests / 88+ subtests** | **PASSED 100% (0 failures)** |
 | **Frontend TypeScript Build** | `tsc -b && vite build` | — | **0 Errors, Build Thành Công** |
+
 
 
 

@@ -10,14 +10,19 @@ from ..core.config import settings
 from ..models.knowledge_entry import KnowledgeEntry
 from ..models.user import User
 from ..repositories.ai_repository import AIRepository
-from ..schemas.ai import SlotRecommendationRequest
+from ..schemas.ai import AssistantMode, SlotRecommendationRequest
 from .ai_feature_service import AIFeatureService
 from .inventory_service import InventoryService
-from .ai_domain_policy import COMBINED_OUT_OF_SCOPE_REPLY, NO_DATA_REPLY, OUT_OF_SCOPE_REPLY, ScopeClassification
+from .ai_domain_policy import (
+    COMBINED_OUT_OF_SCOPE_REPLY, NO_DATA_REPLY, OUT_OF_SCOPE_REPLY,
+    PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL,
+    ScopeClassification, ScopeDecision, ModeScopeEvaluation, evaluate_mode_scope,
+)
 from .ai_intent_router import AssistantIntent, IntentRoute, IntentRouter
 from .rag_guardrail import RAGGuardrail
 from .rag_response_validator import validate_response
 from .ai_system_knowledge import match_system_knowledge
+from .llm_sports_processor import get_llm_sports_processor
 
 
 SPORT_ALIASES = {
@@ -76,28 +81,159 @@ class AIAssistantService:
         self.guardrail = guardrail or RAGGuardrail()
         self._active_route: IntentRoute | None = None
         self._conversation_context: dict[str, Any] = {}
+        self._assistant_mode: AssistantMode = AssistantMode.NATURAL
+        self._mode_evaluation: ModeScopeEvaluation | None = None
 
-    def ask(self, message: str, context_field_id: int | None = None, context: dict[str, Any] | None = None):
+    def ask(
+        self,
+        message: str,
+        context_field_id: int | None = None,
+        context: dict[str, Any] | None = None,
+        assistant_mode: AssistantMode | str | None = None,
+    ):
+        if isinstance(assistant_mode, AssistantMode):
+            self._assistant_mode = assistant_mode
+        elif isinstance(assistant_mode, str) and assistant_mode.upper() in AssistantMode.__members__:
+            self._assistant_mode = AssistantMode[assistant_mode.upper()]
+        elif context and context.get('assistant_mode') in AssistantMode.__members__:
+            self._assistant_mode = AssistantMode[context['assistant_mode']]
+        else:
+            self._assistant_mode = AssistantMode.NATURAL
+
         query = plain(' '.join(message.strip().split()))
         router_context = dict(context or {})
         if context_field_id and not router_context.get('field_id'):
             router_context['field_id'] = context_field_id
+        router_context = self._sanitize_context_for_mode(router_context, self._assistant_mode)
         self._conversation_context = router_context
         route = self.intent_router.route(message, router_context, today=datetime.now(self.tz).date())
         self._active_route = route
         effective_context = {} if route.context_reset else router_context
         self._conversation_context = effective_context
-        logger.info('Assistant intent=%s confidence=%.2f', route.intent.value, route.confidence)
 
+        eval_res = evaluate_mode_scope(self._assistant_mode, route.intent, query=query)
+        self._mode_evaluation = eval_res
+        logger.info(
+            'Assistant mode=%s scope=%s intent=%s confidence=%.2f is_allowed=%s',
+            self._assistant_mode.value, eval_res.scope_decision.value, route.intent.value, route.confidence, eval_res.is_allowed,
+        )
+
+        if not eval_res.is_allowed:
+            reply_text = eval_res.refusal_reply or OUT_OF_SCOPE_REPLY
+            if getattr(route, 'is_combined_out_of_scope', False) and eval_res.scope_decision == ScopeDecision.OUT_OF_SCOPE:
+                reply_text = COMBINED_OUT_OF_SCOPE_REPLY
+            return self._response(
+                reply_text, SearchCriteria(), [], needs_clarification=False,
+                classification=eval_res.classification, status='OUT_OF_SCOPE',
+            )
         if route.intent == AssistantIntent.OUT_OF_SCOPE:
             reply_text = COMBINED_OUT_OF_SCOPE_REPLY if getattr(route, 'is_combined_out_of_scope', False) else OUT_OF_SCOPE_REPLY
             return self._response(
                 reply_text, SearchCriteria(), [], needs_clarification=False,
                 classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
             )
-        if route.intent == AssistantIntent.GREETING:
+        if route.intent == AssistantIntent.ABUSIVE:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                reply_text = 'Yêu cầu chứa nội dung không phù hợp. Vui lòng giữ chuẩn mực giao tiếp khi sử dụng dịch vụ SportHub AI.'
+            else:
+                reply_text = 'Mình luôn hướng tới giao tiếp lịch sự và tôn trọng. Nếu bạn cần hỗ trợ tìm sân thể thao hay tra cứu thông tin trên SportHub AI, mình rất sẵn lòng hỗ trợ bạn! 😊'
             return self._response(
-                'Xin chào! Tôi là trợ lý chuyên biệt của SportHub AI. Tôi có thể giúp bạn tìm sân, kiểm tra lịch trống hoặc hướng dẫn sử dụng hệ thống. Bạn đang quan tâm đến môn thể thao nào?',
+                reply_text, SearchCriteria(), [], needs_clarification=False,
+                classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
+            )
+
+        if route.intent == AssistantIntent.NONSENSE:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                reply_text = 'Nội dung không rõ ràng. Vui lòng nhập yêu cầu nghiệp vụ cụ thể liên quan đến hệ thống SportHub AI.'
+            else:
+                reply_text = 'Xin lỗi bạn, mình chưa hiểu được nội dung này. Bạn có thể hỏi mình về tìm sân, đặt sân hoặc các chủ đề thể thao nhé! 🏸⚽'
+            return self._response(
+                reply_text, SearchCriteria(), [], needs_clarification=False,
+                classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
+            )
+
+        if route.intent == AssistantIntent.GREETING:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                greeting_text = (
+                    'Xin chào! Tôi là Trợ lý Nghiệp vụ SportHub AI. Tôi có thể hỗ trợ bạn tìm kiếm sân, '
+                    'kiểm tra lịch trống, báo giá, đặt sân và giải đáp các nghiệp vụ hệ thống. Bạn cần hỗ trợ gì?'
+                )
+            else:
+                greeting_text = (
+                    'Xin chào! Tôi là trợ lý chuyên biệt của SportHub AI. Tôi có thể giúp bạn tìm sân, '
+                    'kiểm tra lịch trống, đặt sân, hướng dẫn hệ thống hoặc cùng bạn tìm hiểu kiến thức thể thao. '
+                    'Bạn đang quan tâm đến môn thể thao nào? 🏸⚽😊'
+                )
+            return self._response(
+                greeting_text,
+                SearchCriteria(), [],
+            )
+
+        if route.intent == AssistantIntent.AI_IDENTITY:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                identity_text = (
+                    'Tôi là Trợ lý Nghiệp vụ SportHub AI, được thiết kế để hỗ trợ tra cứu và thao tác các nghiệp vụ đặt sân thể thao trên hệ thống SportHub AI.'
+                )
+            else:
+                identity_text = (
+                    'Mình là SportHub AI – trợ lý thông minh hỗ trợ tìm kiếm sân bãi, đặt lịch thể thao '
+                    'và giải đáp các kiến thức thể thao hữu ích. Bạn đang quan tâm đến môn thể thao nào? 🏸⚽'
+                )
+            return self._response(
+                identity_text,
+                SearchCriteria(), [],
+            )
+
+        if route.intent == AssistantIntent.AI_CAPABILITY:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                capability_text = (
+                    'Tôi hỗ trợ các nghiệp vụ: tìm kiếm sân thể thao, kiểm tra lịch trống, báo giá, đặt sân, '
+                    'hủy/đổi lịch, chính sách thanh toán và quản lý cơ sở trên SportHub AI.'
+                )
+            else:
+                capability_text = (
+                    'Mình có thể hỗ trợ bạn rất nhiều việc trên SportHub AI:\n'
+                    '- 🏟️ **Tìm và gợi ý sân**: Tìm sân bóng đá, cầu lông, pickleball, tennis, bóng rổ, bóng chuyền theo khu vực và mức giá.\n'
+                    '- ⏱️ **Kiểm tra lịch trống & đặt sân**: Tra cứu các khung giờ còn trống và hỗ trợ quy trình đặt sân tiện lợi.\n'
+                    '- 📖 **Hướng dẫn hệ thống**: Giải đáp chính sách cọc, hoàn tiền, hủy lịch và hướng dẫn đăng ký chủ sân.\n'
+                    '- 🏆 **Kiến thức thể thao**: Tra cứu luật thi đấu, thông tin cầu thủ, đội bóng, giải đấu và phong trào thể thao.\n\n'
+                    'Bạn cần mình hỗ trợ phần nào trước? 😊'
+                )
+            return self._response(
+                capability_text,
+                SearchCriteria(), [],
+            )
+
+        if route.intent == AssistantIntent.THANKS:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                thanks_text = 'Rất hân hạnh được hỗ trợ bạn. Vui lòng cho tôi biết nếu bạn cần hỗ trợ thêm thông tin nghiệp vụ trên SportHub AI.'
+            else:
+                thanks_text = 'Không có chi! Rất vui được hỗ trợ bạn. Chúc bạn có những giây phút luyện tập thể thao thật vui vẻ! Nếu cần gì thêm, bạn cứ nhắn mình nhé. 😊🏸⚽'
+            return self._response(
+                thanks_text,
+                SearchCriteria(), [],
+            )
+
+        if route.intent == AssistantIntent.GOODBYE:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                goodbye_text = 'Cảm ơn bạn đã sử dụng dịch vụ SportHub AI. Chúc bạn một ngày làm việc hiệu quả và hẹn gặp lại.'
+            else:
+                goodbye_text = 'Tạm biệt bạn nhé! Chúc bạn có những trận đấu thể thao tuyệt vời và tràn đầy năng lượng. Hẹn gặp lại bạn trên SportHub AI! 👋✨'
+            return self._response(
+                goodbye_text,
+                SearchCriteria(), [],
+            )
+
+        if route.intent == AssistantIntent.CASUAL:
+            if self._assistant_mode == AssistantMode.PROFESSIONAL:
+                casual_text = 'Cảm ơn bạn. Tôi luôn sẵn sàng hỗ trợ các nghiệp vụ đặt sân và quản lý trên SportHub AI. Bạn cần thực hiện thao tác nào?'
+            else:
+                if any(k in query for k in ('khoe', 'the nao', 'on khong', 'dao nay')):
+                    casual_text = 'Mình là trợ lý ảo nên luôn sẵn sàng 24/7 với năng lượng tràn đầy để hỗ trợ bạn! Hôm nay bạn có dự định chơi môn thể thao nào không? 🏃‍♂️✨'
+                else:
+                    casual_text = 'Cảm ơn bạn nhiều nhé! Rất vui vì thông tin hữu ích với bạn. Bạn có muốn tìm sân hay hỏi thêm gì về thể thao không nào? 😊'
+            return self._response(
+                casual_text,
                 SearchCriteria(), [],
             )
         if route.intent == AssistantIntent.UNCLEAR:
@@ -128,7 +264,7 @@ class AIAssistantService:
         if route.intent in static_intents:
             role = self.current_user.role if self.current_user else 'CUSTOMER'
             guardrail = RAGGuardrail()
-            retrieved = guardrail.retrieve_context(query, role, route.intent.name)
+            retrieved = guardrail.retrieve_context(query, role, route.intent.name, assistant_mode=self._assistant_mode)
             if retrieved:
                 # Concatenate retrieved answers
                 answer_text = ' '.join(entry.answer for entry, _ in retrieved)
@@ -508,64 +644,133 @@ class AIAssistantService:
 
     def _answer_sports_knowledge(self, query: str, route: IntentRoute):
         criteria = SearchCriteria()
+        if self._assistant_mode == AssistantMode.PROFESSIONAL:
+            return self._response(
+                PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL,
+                criteria,
+                [],
+                classification=ScopeClassification.OUT_OF_SCOPE,
+                status='OUT_OF_SCOPE',
+            )
         role = self.current_user.role if self.current_user else 'CUSTOMER'
         sport = route.entities.sport_type
         target_entities = route.entities.sports_entities or ([route.entities.sports_entity] if route.entities.sports_entity else [])
         guardrail = self.guardrail
 
+        # ── LLM Query Understanding Phase ─────────────────────────────
+        # Use LLM to resolve entities/aliases, detect follow-up, rewrite query.
+        # Falls back to deterministic extraction if LLM is unavailable.
+        llm_processor = get_llm_sports_processor()
+        conversation_messages = self._conversation_context.get('conversation_messages')
+        llm_understanding = llm_processor.understand_query(
+            query, conversation_messages=conversation_messages, context=self._conversation_context,
+        )
+        effective_query = query  # query used for RAG retrieval
+        if llm_understanding:
+            logger.info(
+                'LLM understanding: entities=%s sport=%s topic=%s follow_up=%s rewrite=%s',
+                llm_understanding.entities, llm_understanding.sport, llm_understanding.topic,
+                llm_understanding.is_follow_up, llm_understanding.rewritten_query[:80],
+            )
+            # Merge LLM-resolved entities with deterministic ones
+            if llm_understanding.entities and not target_entities:
+                target_entities = llm_understanding.entities
+            elif llm_understanding.entities:
+                # Prefer LLM entities if they resolve more specifically
+                for llm_ent in llm_understanding.entities:
+                    if llm_ent not in target_entities:
+                        target_entities.append(llm_ent)
+            # Use LLM sport if deterministic didn't find one
+            if llm_understanding.sport and not sport:
+                sport = llm_understanding.sport
+            # Use rewritten query for retrieval (resolves pronouns/follow-ups)
+            if llm_understanding.rewritten_query and llm_understanding.rewritten_query != query:
+                effective_query = llm_understanding.rewritten_query
+
+        # ── RAG Retrieval Phase ────────────────────────────────────────
         # If no specific entities detected, perform broad sports retrieval
         if not target_entities:
-            retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=None)
-            eval_res = guardrail.evaluate_freshness_and_sufficiency(query, retrieved)
+            retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+            eval_res = guardrail.evaluate_freshness_and_sufficiency(effective_query, retrieved)
             if eval_res.needs_fresh_web:
-                web_evidences = guardrail.retrieve_web_context(query, route.intent.name, sport=sport, entity=None)
-                retrieved = guardrail.merge_and_prefer_evidence(query, retrieved, web_evidences)
-            if not retrieved:
-                entity_label = f" về môn {sport}" if sport else ""
-                reply = (
-                    f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
-                    "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
-                )
-                response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
-                if route.entities.sport_type:
-                    response['understood']['sport_type'] = route.entities.sport_type
-                response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
-                return response
+                web_evidences = guardrail.retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+                retrieved = guardrail.merge_and_prefer_evidence(effective_query, retrieved, web_evidences)
             target_entities = [None]
-            entity_retrievals = {None: retrieved}
+            entity_retrievals = {None: retrieved or []}
         else:
             entity_retrievals = {}
             for ent in target_entities:
-                retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=ent)
+                retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
                 if not retrieved and ent:
-                    search_query = f"{ent} {query}"
-                    retrieved = guardrail.retrieve_context(search_query, role, route.intent.name, sport=sport, entity=ent)
+                    search_query = f"{ent} {effective_query}"
+                    retrieved = guardrail.retrieve_context(search_query, role, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
                 if not retrieved:
-                    retrieved = guardrail.retrieve_context(query, role, route.intent.name, sport=sport, entity=None)
-                eval_res = guardrail.evaluate_freshness_and_sufficiency(query, retrieved)
+                    retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+                eval_res = guardrail.evaluate_freshness_and_sufficiency(effective_query, retrieved)
                 if eval_res.needs_fresh_web:
-                    web_evidences = guardrail.retrieve_web_context(query, route.intent.name, sport=sport, entity=ent)
-                    retrieved = guardrail.merge_and_prefer_evidence(query, retrieved, web_evidences)
-                entity_retrievals[ent] = retrieved
+                    web_evidences = guardrail.retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
+                    retrieved = guardrail.merge_and_prefer_evidence(effective_query, retrieved, web_evidences)
+                entity_retrievals[ent] = retrieved or []
 
-        # Check if ALL retrievals failed
-        all_empty = all(not r for r in entity_retrievals.values())
-        if all_empty:
-            entity_label = f" về {', '.join(e for e in target_entities if e)}" if any(target_entities) else (f" về môn {sport}" if sport else "")
-            reply = (
-                f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
-                "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
-            )
-            response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
+        # ── LLM Grounded Response Generation Phase ─────────────────────
+        # Collect all evidence for LLM response generation
+        all_evidence = []
+        for ent in target_entities:
+            all_evidence.extend(entity_retrievals.get(ent, []))
+
+        target_ent = target_entities[0] if (target_entities and target_entities[0]) else None
+        target_top = llm_understanding.topic if llm_understanding else None
+        grounded = llm_processor.generate_grounded_response(
+            effective_query,
+            all_evidence,
+            conversation_messages=conversation_messages,
+            target_entity=target_ent,
+            target_topic=target_top,
+        )
+        if grounded and grounded.answer:
+            # LLM generated a natural response — use it with citations
+            answer_text = validate_response(grounded.answer)
+            if grounded.citations:
+                citation_parts = []
+                for cit in grounded.citations:
+                    part = f"Nguồn: {cit['source_name']}"
+                    if cit.get('source_url'):
+                        part += f", {cit['source_url']}"
+                    if cit.get('collected_at'):
+                        part += f", cập nhật {cit['collected_at']}"
+                    citation_parts.append(part)
+                answer_text += f"\n\n({'; '.join(citation_parts)})"
+
+            # Build response using existing _response method
+            first_entry = all_evidence[0][0] if all_evidence else None
+            response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
             if route.entities.sports_entities:
                 response['understood']['sports_entities'] = route.entities.sports_entities
-            if route.entities.sports_entity:
+            if first_entry and first_entry.entity:
+                response['understood']['sports_entity'] = first_entry.entity
+            elif route.entities.sports_entity:
                 response['understood']['sports_entity'] = route.entities.sports_entity
-            if route.entities.sport_type:
+            if first_entry and first_entry.sport:
+                response['understood']['sport_type'] = first_entry.sport
+            elif route.entities.sport_type:
                 response['understood']['sport_type'] = route.entities.sport_type
+            if first_entry and getattr(first_entry, 'topic', None):
+                response['understood']['entity_type'] = first_entry.topic
             response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
             return response
 
+        # ── Deterministic Fallback Response (existing logic) ───────────
+        # If LLM response generation failed/unavailable, use original concatenation
+        return self._answer_sports_knowledge_deterministic(
+            query, route, criteria, role, sport, target_entities, entity_retrievals, guardrail,
+        )
+
+    def _answer_sports_knowledge_deterministic(
+        self, query: str, route: IntentRoute, criteria: SearchCriteria,
+        role: str, sport: str | None, target_entities: list,
+        entity_retrievals: dict, guardrail: RAGGuardrail,
+    ):
+        """Original deterministic sports knowledge response builder — used as fallback when LLM is unavailable."""
         norm_q = plain(query)
         requested_topics = {}
         topic_labels = {
@@ -596,6 +801,12 @@ class AIAssistantService:
             requested_topics['height'] = 'chiều cao'
         if any(p in norm_q for p in ('can nang', 'nang bao nhieu')):
             requested_topics['weight'] = 'cân nặng'
+        if any(p in norm_q for p in ('the vang', 'the do', 'the phat', 'phat the', 'bi the', 'dinh the', 'bao nhieu the', 'may the')):
+            requested_topics['cards'] = 'thẻ phạt/thẻ vàng/thẻ đỏ'
+        if any(p in norm_q for p in ('luong', 'thu nhap', 'tai san', 'gia chuyen nhuong')):
+            requested_topics['salary'] = 'tiền lương/thu nhập'
+        if any(p in norm_q for p in ('vo', 'ban gai', 'gia dinh', 'con cai', 'ket hon')):
+            requested_topics['family'] = 'gia đình/đời tư'
 
         TOPIC_ALIASES = {
             'cầu thủ': 'identity',
@@ -613,9 +824,9 @@ class AIAssistantService:
 
         for ent in target_entities:
             retrieved = entity_retrievals.get(ent, [])
-            if not retrieved:
-                if ent:
-                    all_answers.append(f"Hiện tại SportHub AI chưa có thông tin kiểm chứng về {ent} trong cơ sở dữ liệu.")
+            if not retrieved or (ent is None and any(k in norm_q for k in ('cau thu', 'vdv', 'van dong vien', 'tay vot', 'hlv', 'huan luyen vien')) and not any(k in norm_q for k in ('cac cau thu', 'cac vdv', 'nhung cau thu', 'phong trao', 'luat', 'kich thuoc', 'tieu chuan', 'huong dan'))):
+                target_label = ent if ent else "nội dung này"
+                all_answers.append(f"Hiện tại SportHub AI chưa có thông tin kiểm chứng về {target_label} trong cơ sở dữ liệu.")
                 continue
 
             seen_answers = set()
@@ -681,9 +892,36 @@ class AIAssistantService:
                 all_answers.extend(ent_answers)
                 all_citations.extend(ent_citations)
 
+        if not all_answers:
+            entity_label = f" về {', '.join(e for e in target_entities if e)}" if any(target_entities) else (f" về môn {sport}" if sport else "")
+            reply = (
+                f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
+                "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
+            )
+            response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
+            if route.entities.sports_entities:
+                response['understood']['sports_entities'] = route.entities.sports_entities
+            if route.entities.sports_entity:
+                response['understood']['sports_entity'] = route.entities.sports_entity
+            if route.entities.sport_type:
+                response['understood']['sport_type'] = route.entities.sport_type
+            response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+            return response
+
         answer_text = "\n\n".join(all_answers)
         if not is_multi and all_citations:
             answer_text += f"\n\n({'; '.join(all_citations)})"
+
+        if getattr(route.entities, 'conditional_note', None):
+            answer_text = f"{route.entities.conditional_note}\n\n" + answer_text
+            if not answer_text.endswith("?"):
+                answer_text += "\n\n(Nếu bạn đang hỏi về môn thể thao hoặc nhân vật nào khác, hãy chia sẻ thêm ngữ cảnh nhé! 😊)"
+
+        if getattr(route.entities, 'is_meme_or_joke', False):
+            if 'Harry Maguire' in target_entities:
+                answer_text += "\n\n(Lưu ý vui: 'Đấng Maguire' là biệt danh meme hài hước của người hâm mộ bóng đá trên mạng xã hội, bắt nguồn từ những tình huống thi đấu độc lạ và tính cách giải trí của trung vệ người Anh! 😄⚽)"
+            elif 'Romelu Lukaku' in target_entities:
+                answer_text += "\n\n(Lưu ý vui: 'Lakaka' là meme vui nhộn của cộng đồng mạng xuất phát từ những pha bóng tấu hài bất đắc dĩ của tiền đạo Romelu Lukaku! 😄⚽)"
 
         response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
         if route.entities.sports_entities:
@@ -1070,7 +1308,19 @@ class AIAssistantService:
             'context_reset': bool(route.context_reset) if route else False,
             'partner_application_status': partner_application_status,
             'action': action,
+            'assistant_mode': self._assistant_mode,
         }
+
+    @staticmethod
+    def _sanitize_context_for_mode(context: dict[str, Any], mode: AssistantMode) -> dict[str, Any]:
+        sanitized = dict(context)
+        if mode == AssistantMode.PROFESSIONAL:
+            sanitized.pop('sports_entity', None)
+            sanitized.pop('sports_entities', None)
+            sanitized.pop('entity_type', None)
+            if sanitized.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value:
+                sanitized.pop('last_intent', None)
+        return sanitized
 
     def _understood(self, criteria: SearchCriteria):
         return {
@@ -1091,6 +1341,8 @@ class AIAssistantService:
             'people': criteria.people,
             'special_requirements': criteria.special_requirements,
             'allow_alternatives': criteria.allow_alternatives,
+            'assistant_mode': self._assistant_mode.value if isinstance(self._assistant_mode, AssistantMode) else str(self._assistant_mode),
+            'scope_decision': self._mode_evaluation.scope_decision.value if self._mode_evaluation else None,
         }
 
     def _field_by_name(self, query: str):

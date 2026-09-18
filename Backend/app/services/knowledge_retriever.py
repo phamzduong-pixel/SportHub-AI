@@ -43,6 +43,107 @@ class KnowledgeRetriever:
             self._model = None
             self._embeddings = None
 
+    def index_entry(self, entry: KnowledgeEntry) -> bool:
+        """Incrementally index a new knowledge entry without rebuilding entire index.
+
+        Returns:
+            bool: True if entry was newly indexed, False if skipped or delegated to update.
+        """
+        for idx, existing in enumerate(self._static_entries):
+            if existing.id == entry.id:
+                return self.update_entry(entry)
+
+        # Append new entry
+        self._static_entries.append(entry)
+
+        # Incrementally encode vector embedding for the new chunk if semantic is active
+        if self.use_semantic and self._model is not None:
+            try:
+                import numpy as np
+                new_emb = self._model.encode([entry.question], show_progress_bar=False)
+                if self._embeddings is not None and len(self._embeddings) > 0:
+                    self._embeddings = np.vstack([self._embeddings, new_emb])
+                else:
+                    self._embeddings = np.array(new_emb)
+            except Exception:
+                pass
+
+        return True
+
+    def update_entry(self, entry: KnowledgeEntry, force: bool = False) -> bool:
+        """Incrementally update an existing indexed entry's affected chunk/record.
+
+        Returns:
+            bool: True if record was updated and re-indexed, False if unchanged/skipped.
+        """
+        target_idx = None
+        for idx, existing in enumerate(self._static_entries):
+            if existing.id == entry.id:
+                target_idx = idx
+                break
+
+        if target_idx is None:
+            return self.index_entry(entry)
+
+        existing = self._static_entries[target_idx]
+        is_changed = (
+            existing.answer != entry.answer
+            or existing.question != entry.question
+            or existing.topic != entry.topic
+            or existing.entity != entry.entity
+            or existing.sport != entry.sport
+        )
+
+        if not is_changed and not force:
+            # Update metadata in place without re-indexing
+            if entry.collected_at:
+                existing.collected_at = entry.collected_at
+            if entry.source_url:
+                existing.source_url = entry.source_url
+            if entry.source_name:
+                existing.source_name = entry.source_name
+            return False
+
+        # Update affected entry in-place
+        self._static_entries[target_idx] = entry
+
+        # Re-compute vector embedding ONLY for the affected record
+        if self.use_semantic and self._model is not None and self._embeddings is not None:
+            try:
+                if target_idx < len(self._embeddings):
+                    new_emb = self._model.encode([entry.question], show_progress_bar=False)[0]
+                    self._embeddings[target_idx] = new_emb
+            except Exception:
+                pass
+
+        return True
+
+    def remove_entry(self, entry_id: str) -> bool:
+        """Remove an entry from the index by ID.
+
+        Returns:
+            bool: True if removed, False if not found.
+        """
+        target_idx = None
+        for idx, existing in enumerate(self._static_entries):
+            if existing.id == entry_id:
+                target_idx = idx
+                break
+
+        if target_idx is None:
+            return False
+
+        self._static_entries.pop(target_idx)
+        if self.use_semantic and self._embeddings is not None:
+            try:
+                import numpy as np
+                if target_idx < len(self._embeddings):
+                    self._embeddings = np.delete(self._embeddings, target_idx, axis=0)
+            except Exception:
+                pass
+
+        return True
+
     @staticmethod
     def _normalize(text: str) -> str:
         if not text:
@@ -60,23 +161,81 @@ class KnowledgeRetriever:
         'leo messi': 'Lionel Messi',
         'leo': 'Lionel Messi',
         'la pulga': 'Lionel Messi',
+        'el pulga': 'Lionel Messi',
+        'anh 10': 'Lionel Messi',
+        'anh muoi': 'Lionel Messi',
+        'm10': 'Lionel Messi',
         'ronaldo': 'Cristiano Ronaldo',
         'cr7': 'Cristiano Ronaldo',
         'cristiano': 'Cristiano Ronaldo',
+        'anh 7': 'Cristiano Ronaldo',
+        'anh bay': 'Cristiano Ronaldo',
+        'chi 7': 'Cristiano Ronaldo',
+        'chi bay': 'Cristiano Ronaldo',
+        'dang maguire': 'Harry Maguire',
+        'chua te maguire': 'Harry Maguire',
+        'harry maguire': 'Harry Maguire',
+        'lakaka': 'Romelu Lukaku',
+        'lukaku': 'Romelu Lukaku',
+        'haaland': 'Erling Haaland',
+        'erling haaland': 'Erling Haaland',
+        'mbappe': 'Kylian Mbappé',
+        'kylian mbappe': 'Kylian Mbappé',
         # Football — Vietnam
         'quang hai': 'Nguyễn Quang Hải',
         'nguyen quang hai': 'Nguyễn Quang Hải',
+        'hai con': 'Nguyễn Quang Hải',
+        'thanh truot co': 'Nguyễn Quang Hải',
         'tien linh': 'Nguyễn Tiến Linh',
         'nguyen tien linh': 'Nguyễn Tiến Linh',
+        'linh ka': 'Nguyễn Tiến Linh',
         'hoang duc': 'Nguyễn Hoàng Đức',
         'nguyen hoang duc': 'Nguyễn Hoàng Đức',
+        'thay park': 'Park Hang-seo',
+        'park hang-seo': 'Park Hang-seo',
+        # Tennis
+        'tau toc hanh': 'Roger Federer',
+        'federer': 'Roger Federer',
+        'roger federer': 'Roger Federer',
+        'vua dat nen': 'Rafael Nadal',
+        'nadal': 'Rafael Nadal',
+        'rafael nadal': 'Rafael Nadal',
+        'nole': 'Novak Djokovic',
+        'djokovic': 'Novak Djokovic',
+        'novak djokovic': 'Novak Djokovic',
+        'alcaraz': 'Carlos Alcaraz',
+        # Basketball
+        'nha vua': 'LeBron James',
+        'king james': 'LeBron James',
+        'lebron': 'LeBron James',
+        'bep truong': 'Stephen Curry',
+        'chef curry': 'Stephen Curry',
+        'curry': 'Stephen Curry',
+        'black mamba': 'Kobe Bryant',
+        'kobe': 'Kobe Bryant',
         # Badminton
+        'super dan': 'Lin Dan',
+        'lin dan': 'Lin Dan',
         'thuy linh': 'Nguyễn Thùy Linh',
         'nguyen thuy linh': 'Nguyễn Thùy Linh',
+        'hoa khoi cau long': 'Nguyễn Thùy Linh',
         'tien minh': 'Nguyễn Tiến Minh',
         'nguyen tien minh': 'Nguyễn Tiến Minh',
+        'tuong dai cau long': 'Nguyễn Tiến Minh',
         'axelsen': 'Viktor Axelsen',
         'viktor axelsen': 'Viktor Axelsen',
+        # Volleyball
+        'khung long bong chuyen': 'Nguyễn Thị Bích Tuyền',
+        'bich tuyen': 'Nguyễn Thị Bích Tuyền',
+        '4t': 'Trần Thị Thanh Thúy',
+        'thanh thuy': 'Trần Thị Thanh Thúy',
+        'kieu trinh': 'Hoàng Thị Kiều Trinh',
+        # Pickleball
+        'vua pickleball': 'Ben Johns',
+        'ben johns': 'Ben Johns',
+        'nu hoang pickleball': 'Anna Leigh Waters',
+        'anna leigh waters': 'Anna Leigh Waters',
+        'quang duong': 'Quang Dương',
         # Football — Thai Nguyen
         'thai nguyen t&t': 'Thái Nguyên T&T',
         'thai nguyen tt': 'Thái Nguyên T&T',
@@ -92,6 +251,17 @@ class KnowledgeRetriever:
         'clb thai nguyen': 'Bóng đá Thái Nguyên',
         'cau lac bo thai nguyen': 'Bóng đá Thái Nguyên',
         'bong da thai nguyen': 'Bóng đá Thái Nguyên',
+        'bong da o thai nguyen': 'Bóng đá Thái Nguyên',
+        'bong da tai thai nguyen': 'Bóng đá Thái Nguyên',
+        'bong da tinh thai nguyen': 'Bóng đá Thái Nguyên',
+        'van dong vien thai nguyen': 'Bóng đá Thái Nguyên',
+        'van dong vien o thai nguyen': 'Bóng đá Thái Nguyên',
+        'van dong vien bong da thai nguyen': 'Bóng đá Thái Nguyên',
+        'cau thu thai nguyen': 'Bóng đá Thái Nguyên',
+        'cau thu o thai nguyen': 'Bóng đá Thái Nguyên',
+        'cau thu bong da thai nguyen': 'Bóng đá Thái Nguyên',
+        'cau thu nu thai nguyen': 'Thái Nguyên T&T',
+        'vdv thai nguyen': 'Bóng đá Thái Nguyên',
         # Football — ICTU (Trường Đại học CNTT & TT Thái Nguyên)
         'truong dai hoc cong nghe thong tin va truyen thong': 'Bóng đá ICTU',
         'dai hoc cong nghe thong tin va truyen thong': 'Bóng đá ICTU',
@@ -144,6 +314,17 @@ class KnowledgeRetriever:
         'phong trao the thao thai nguyen': 'Thể thao Thái Nguyên',
         'cac mon the thao thai nguyen': 'Thể thao Thái Nguyên',
         'cac doi the thao thai nguyen': 'Thể thao Thái Nguyên',
+        'cau long thai nguyen': 'Cầu lông Thái Nguyên',
+        'clb cau long thai nguyen': 'Cầu lông Thái Nguyên',
+        'phong trao cau long thai nguyen': 'Cầu lông Thái Nguyên',
+        'bong chuyen thai nguyen': 'Bóng chuyền Thái Nguyên',
+        'clb bong chuyen thai nguyen': 'Bóng chuyền Thái Nguyên',
+        'pickleball thai nguyen': 'Pickleball Thái Nguyên',
+        'clb pickleball thai nguyen': 'Pickleball Thái Nguyên',
+        'tennis thai nguyen': 'Tennis Thái Nguyên',
+        'clb tennis thai nguyen': 'Tennis Thái Nguyên',
+        'bong ro thai nguyen': 'Bóng rổ Thái Nguyên',
+        'clb bong ro thai nguyen': 'Bóng rổ Thái Nguyên',
         # Hanoi
         'ha noi fc': 'Hà Nội FC',
         'clb ha noi': 'Hà Nội FC',
@@ -250,7 +431,7 @@ class KnowledgeRetriever:
     }
 
     TOPIC_PATTERNS = {
-        'identity': ('la ai', 'gioi thieu', 'tieu su', 'profil', 'ai la', 'la doi nao', 'la doi bong nao', 'la clb nao', 'la doi', 'la clb', 'co nhung doi nao', 'co nhung clb nao'),
+        'identity': ('la ai', 'gioi thieu', 'tieu su', 'profil', 'ai la', 'la doi nao', 'la doi bong nao', 'la clb nao', 'la doi', 'la clb', 'co nhung doi nao', 'co nhung clb nao', 'co nhung doi bong nao', 'co nhung clb', 'co nhung clb bong ro', 'co nhung mon nao', 'co nhung mon the thao nao', 'ngoai bong da con co mon gi', 'con co mon gi'),
         'birth_date': ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh ngay bao nhieu', 'sinh ngay nao', 'sinh vao ngay', 'sinh vao ngay nao'),
         'birth_place': ('sinh o dau', 'noi sinh', 'que o dau', 'que quan', 'sinh tai', 'que o'),
         'current_club': ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'thi dau cho clb nao', 'thi dau cho doi nao', 'choi cho doi nao', 'da cho clb nao', 'thi dau o dau', 'choi o dau'),
@@ -258,6 +439,7 @@ class KnowledgeRetriever:
         'status': ('trang thai', 'giai nghe', 'con thi dau', 'da gia tu', 'giai nghe chua', 'da giai nghe'),
         'achievements': ('thanh tich', 'danh hieu', 'giai thuong', 'qua bong vang', 'huy chuong', 'cup vo dich', 'chuc vo dich', 'vo dich', 'gianh cup'),
         'founded': ('thanh lap', 'ngay thanh lap', 'nam thanh lap', 'thanh lap nam nao', 'thanh lap khi nao', 'ra mat khi nao', 'thanh lap vao nam'),
+        'community': ('phong trao', 'phat trien phong trao', 'phat trien the nao', 'hoat dong sinh vien', 'tap luyen'),
     }
 
     def _resolve_entity_alias(self, norm_query: str) -> Optional[str]:
@@ -301,6 +483,9 @@ class KnowledgeRetriever:
             query_for_topic = query_for_topic.replace(norm_ent, ' ')
         if target_norm and target_norm in query_for_topic:
             query_for_topic = query_for_topic.replace(target_norm, ' ')
+        # Also strip words like 'clb', 'doi bong', 'thanh pho' from topic check
+        for token_strip in ('clb', 'doi bong', 'thanh pho', 'tinh'):
+            query_for_topic = query_for_topic.replace(token_strip, ' ')
 
         # Identify all topics requested in the query
         query_matched_topics = set()
@@ -323,6 +508,18 @@ class KnowledgeRetriever:
         elif query_matched_topics and not ('identity' in query_matched_topics and len(query_matched_topics) == 1):
             topic_mismatch = True
 
+        # If query is an individual/athlete/person question, prevent matching generic sport rules
+        is_person_inquiry = any(p in norm_query for p in (
+            'la ai', 'ai la', 'tieu su', 'profil', 'sinh nam', 'sinh ngay', 'que o', 'que quan', 'chieu cao', 'khoac ao',
+            'van dong vien', 'vdv', 'cau thu', 'tay vot', 'co ai', 'nhung ai', 'ai gioi', 'ai dang la', 'nguoi choi',
+        ))
+        entry_id_norm = (getattr(entry, 'id', '') or '').lower()
+        entry_top_norm = (entry.topic or '').lower()
+        is_rule_entry = 'rule' in entry_id_norm or entry_top_norm in ('rules', 'luật', 'luật bóng đá', 'luật cầu lông')
+        is_general_sport_rule = is_rule_entry or (entry.entity and self._normalize(entry.entity) in ('bong da', 'cau long', 'bong ro', 'bong chuyen', 'bong ban', 'tennis', 'pickleball', 'the thao'))
+        if is_person_inquiry and is_general_sport_rule:
+            return 0.10
+
         if matches_entity:
             if topic_match:
                 return 0.95
@@ -332,18 +529,59 @@ class KnowledgeRetriever:
                 return 0.90
             if topic_mismatch:
                 return 0.20
+            # Common inquiry / question particles in Vietnamese
+            inquiry_tokens = {'co', 'khong', 'la', 'gi', 'the', 'nao', 'o', 'dau', 'cho', 'hoi', 've', 'ra', 'sao', 'nhu', 'nhung', 'ai'}
+            content_non_ent = [t for t in non_ent_q_tokens if t not in inquiry_tokens]
+            if not content_non_ent:
+                # Pure entity inquiry e.g. "Thái Nguyên có cầu lông không?", "Giải bóng đá Nữ Quốc gia là gì?"
+                return 0.90
             # Follow-up phrases e.g. "con ... thi sao", "anh ay the nao"
             is_followup = any(t in non_ent_q_tokens for t in ('con', 'the', 'sao', 'thi', 'anh', 'ay', 'ong', 'co', 'chi'))
-            matching_non_ent = [t for t in non_ent_q_tokens if t in doc_q_tokens]
-            non_ent_recall = len(matching_non_ent) / len(non_ent_q_tokens)
+            doc_ans_tokens = set(self._normalize(entry.answer).split()) if entry.answer else set()
+            matching_non_ent = [t for t in content_non_ent if t in doc_q_tokens or t in doc_ans_tokens]
+            non_ent_recall = len(matching_non_ent) / len(content_non_ent) if content_non_ent else 0.0
             if is_followup and len(non_ent_q_tokens) <= 4:
                 return 0.85
-            return 0.35 * 1.0 + 0.65 * non_ent_recall
+            if non_ent_recall == 0.0 and len(content_non_ent) >= 2:
+                return 0.20
+            return 0.60 + 0.35 * non_ent_recall
 
-        # Fallback if no entity match: combine sequence ratio and token recall
+        # If the query asks about a specific person/entity ("... là ai?", "... sinh năm nào?", "đang thi đấu cho CLB nào?", etc.) but no entity matched,
+        # do not match random general rules or other players.
+        is_entity_inquiry = any(p in norm_query for p in (
+            'la ai', 'ai la', 'sinh nam', 'sinh ngay', 'que o', 'que quan', 'noi sinh',
+            'dang choi cho', 'dang thi dau cho', 'thi dau cho', 'choi cho', 'dang da cho', 'da cho',
+            'khoac ao', 'chuyen nhuong', 'gia nhap', 'roi clb', 'bao nhieu tuoi', 'con thi dau', 'da giai nghe'
+        ))
+        if is_entity_inquiry:
+            return 0.10
+
+        # Fallback if no entity match: check if query is asking for general athletes / players / stars in a sport
+        is_sport_athletes_inquiry = any(p in norm_query for p in (
+            'van dong vien', 'vdv', 'tay vot', 'cau thu', 'nguoi choi', 'co ai', 'nhung ai',
+            'ai dang la', 'ai la van dong vien', 'ai la cau thu', 'ai la tay vot', 'ai gioi',
+            'noi bat', 'noi tieng', 'gioi', 'hang dau', 'xuat sac', 'tieu bieu', 'ngoi sao',
+            'cac van dong vien', 'nhung van dong vien', 'cac cau thu', 'nhung cau thu', 'cac tay vot',
+            'danh sach van dong vien', 'danh sach cau thu', 'danh sach tay vot'
+        ))
+        if is_sport_athletes_inquiry:
+            entry_id = getattr(entry, 'id', '') or ''
+            entry_top = (entry.topic or '').lower()
+            if 'rule' in entry_id.lower() or entry_top in ('rules', 'luật'):
+                return 0.10
+            if entry.sport:
+                entry_sport_norm = self._normalize(entry.sport)
+                query_sport_matches = entry_sport_norm in norm_query
+                if query_sport_matches:
+                    is_person_profile = entry_top in ('identity', 'profile', 'cầu thủ', 'vận động viên', 'tieu su', 'clb bóng đá')
+                    if is_person_profile and entry.entity and self._normalize(entry.entity) not in ('bong da', 'cau long', 'bong ro', 'bong chuyen', 'bong ban', 'tennis', 'pickleball', 'the thao'):
+                        return 0.88
+
         seq_ratio = difflib.SequenceMatcher(None, norm_query, norm_question).ratio()
         matching_q_tokens = [t for t in q_tokens if t in doc_q_tokens]
-        token_recall = len(matching_q_tokens) / len(q_tokens)
+        token_recall = len(matching_q_tokens) / len(q_tokens) if q_tokens else 0.0
+        if len(matching_q_tokens) < 2 and seq_ratio < 0.80:
+            return 0.20
         return 0.50 * seq_ratio + 0.50 * token_recall
 
     def _semantic_score(self, query: str, question_idx: int) -> float:

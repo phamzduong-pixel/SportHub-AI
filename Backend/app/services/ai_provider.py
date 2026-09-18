@@ -57,6 +57,14 @@ class OpenAIProvider(AIProvider):
 
     @staticmethod
     def _payload(task: str, system_data: dict) -> dict:
+        if isinstance(system_data, dict) and 'system_prompt' in system_data and 'user_message' in system_data:
+            return {
+                'model': settings.OPENAI_MODEL,
+                'messages': [
+                    {'role': 'system', 'content': system_data['system_prompt']},
+                    {'role': 'user', 'content': system_data['user_message']},
+                ],
+            }
         return {
             'model': settings.OPENAI_MODEL,
             'messages': [

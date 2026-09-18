@@ -1,10 +1,137 @@
+from dataclasses import dataclass
 from enum import Enum
+
+from ..schemas.ai import AssistantMode
+from .ai_intent_router import AssistantIntent
 
 
 class ScopeClassification(str, Enum):
     IN_SCOPE = 'IN_SCOPE'
     OUT_OF_SCOPE = 'OUT_OF_SCOPE'
     UNCLEAR = 'UNCLEAR'
+
+
+class ScopeDecision(str, Enum):
+    SPORT_HUB_BUSINESS = 'SPORT_HUB_BUSINESS'
+    SPORTS_KNOWLEDGE = 'SPORTS_KNOWLEDGE'
+    OUT_OF_SCOPE = 'OUT_OF_SCOPE'
+    UNCLEAR = 'UNCLEAR'
+
+
+class AllowedSource(str, Enum):
+    SPORTHUB_DB = 'SPORTHUB_DB'
+    INTERNAL_RAG = 'INTERNAL_RAG'
+    SPORTS_KNOWLEDGE_RAG = 'SPORTS_KNOWLEDGE_RAG'
+    APPROVED_SPORTS_WEB = 'APPROVED_SPORTS_WEB'
+
+
+PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL = (
+    "Ở chế độ Chuyên nghiệp (Professional), tôi chỉ hỗ trợ các nghiệp vụ trực tiếp trên hệ thống SportHub AI "
+    "(tìm sân, kiểm tra lịch trống, đặt sân, thanh toán, quản lý cơ sở). "
+    "Vui lòng chuyển sang chế độ Tự nhiên (Natural) nếu bạn muốn tra cứu kiến thức thể thao chung."
+)
+
+
+@dataclass
+class ModeScopeEvaluation:
+    mode: AssistantMode
+    scope_decision: ScopeDecision
+    classification: ScopeClassification
+    allowed_sources: set[AllowedSource]
+    is_allowed: bool
+    refusal_reply: str | None = None
+
+
+def evaluate_mode_scope(
+    mode: AssistantMode | str = AssistantMode.NATURAL,
+    intent: AssistantIntent | str = AssistantIntent.SEARCH_VENUE,
+    query: str | None = None,
+) -> ModeScopeEvaluation:
+    # Normalize mode
+    if isinstance(mode, str):
+        mode_str = mode.upper()
+        mode_val = AssistantMode[mode_str] if mode_str in AssistantMode.__members__ else AssistantMode.NATURAL
+    else:
+        mode_val = mode or AssistantMode.NATURAL
+
+    # Normalize intent
+    if isinstance(intent, str):
+        intent_val = AssistantIntent[intent] if intent in AssistantIntent.__members__ else AssistantIntent(intent)
+    else:
+        intent_val = intent
+
+    # 1. Determine Scope Decision & base classification
+    if intent_val in (AssistantIntent.ABUSIVE, AssistantIntent.NONSENSE):
+        scope_decision = ScopeDecision.OUT_OF_SCOPE
+        base_classification = ScopeClassification.OUT_OF_SCOPE
+    elif intent_val == AssistantIntent.OUT_OF_SCOPE:
+        scope_decision = ScopeDecision.OUT_OF_SCOPE
+        base_classification = ScopeClassification.OUT_OF_SCOPE
+    elif intent_val == AssistantIntent.UNCLEAR:
+        scope_decision = ScopeDecision.UNCLEAR
+        base_classification = ScopeClassification.UNCLEAR
+    elif intent_val == AssistantIntent.SPORTS_KNOWLEDGE:
+        scope_decision = ScopeDecision.SPORTS_KNOWLEDGE
+        base_classification = ScopeClassification.IN_SCOPE
+    else:
+        scope_decision = ScopeDecision.SPORT_HUB_BUSINESS
+        base_classification = ScopeClassification.IN_SCOPE
+
+    # 2. Determine Allowed Sources & Permissions by Mode
+    if mode_val == AssistantMode.PROFESSIONAL:
+        allowed_sources = {AllowedSource.SPORTHUB_DB, AllowedSource.INTERNAL_RAG}
+        if scope_decision == ScopeDecision.SPORTS_KNOWLEDGE:
+            return ModeScopeEvaluation(
+                mode=mode_val,
+                scope_decision=scope_decision,
+                classification=ScopeClassification.OUT_OF_SCOPE,
+                allowed_sources=set(),
+                is_allowed=False,
+                refusal_reply=PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL,
+            )
+        elif intent_val == AssistantIntent.OUT_OF_SCOPE:
+            return ModeScopeEvaluation(
+                mode=mode_val,
+                scope_decision=scope_decision,
+                classification=ScopeClassification.OUT_OF_SCOPE,
+                allowed_sources=set(),
+                is_allowed=False,
+                refusal_reply=OUT_OF_SCOPE_REPLY,
+            )
+        else:
+            return ModeScopeEvaluation(
+                mode=mode_val,
+                scope_decision=scope_decision,
+                classification=base_classification,
+                allowed_sources=allowed_sources,
+                is_allowed=True,
+                refusal_reply=None,
+            )
+    else:  # NATURAL
+        allowed_sources = {
+            AllowedSource.SPORTHUB_DB,
+            AllowedSource.INTERNAL_RAG,
+            AllowedSource.SPORTS_KNOWLEDGE_RAG,
+            AllowedSource.APPROVED_SPORTS_WEB,
+        }
+        if intent_val == AssistantIntent.OUT_OF_SCOPE:
+            return ModeScopeEvaluation(
+                mode=mode_val,
+                scope_decision=scope_decision,
+                classification=ScopeClassification.OUT_OF_SCOPE,
+                allowed_sources=set(),
+                is_allowed=False,
+                refusal_reply=OUT_OF_SCOPE_REPLY,
+            )
+        else:
+            return ModeScopeEvaluation(
+                mode=mode_val,
+                scope_decision=scope_decision,
+                classification=base_classification,
+                allowed_sources=allowed_sources,
+                is_allowed=True,
+                refusal_reply=None,
+            )
 
 
 # Canonical prompt for any present or future LLM integration. Runtime access control

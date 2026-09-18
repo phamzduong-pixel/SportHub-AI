@@ -12,6 +12,8 @@ export interface AssistantVenueResult {
   rating: number; image_url: string | null;
 }
 
+export type AssistantMode = 'NATURAL' | 'PROFESSIONAL';
+
 export interface AssistantAction { label: string; route: string; kind: 'link' }
 
 export interface AssistantResponse {
@@ -31,6 +33,7 @@ export interface AssistantResponse {
   context_reset: boolean;
   partner_application_status: 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED' | null;
   action: AssistantAction | null;
+  assistant_mode?: AssistantMode;
 }
 
 export type AssistantIntent = 'SEARCH_VENUE' | 'RECOMMEND_VENUE' | 'CHECK_AVAILABILITY' | 'RECOMMEND_SLOT' | 'OCCUPANCY_INSIGHT' | 'PARTNER_APPLICATION_SUPPORT' | 'GET_VENUE_DETAIL' | 'CREATE_BOOKING' | 'GET_BOOKING' | 'CANCEL_BOOKING' | 'RESCHEDULE_BOOKING' | 'PAYMENT_SUPPORT' | 'ACCOUNT_SUPPORT' | 'SYSTEM_GUIDE' | 'GREETING' | 'FOLLOW_UP' | 'UNCLEAR' | 'OUT_OF_SCOPE';
@@ -81,13 +84,15 @@ export async function askSportHubAssistant(
   contextFieldId?: number,
   context?: Record<string, unknown>,
   conversationId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  assistantMode: AssistantMode = 'NATURAL'
 ): Promise<AssistantResponse> {
   const payload = {
     message,
     context_field_id: contextFieldId || null,
     context: context || null,
     conversation_id: conversationId || null,
+    assistant_mode: assistantMode,
   };
   const controller = new AbortController();
   let timedOut = false;

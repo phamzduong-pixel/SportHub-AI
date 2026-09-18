@@ -189,18 +189,24 @@ Luồng hiện tại:
 AIAssistantPage
   → POST /api/ai/assistant
   → Vite proxy /ai/assistant
-  → intent extraction (IntentRouter) + context merge
-  → rẽ nhánh theo intent:
-      ├─ static intent (hướng dẫn, tài khoản, đối tác, thanh toán) → Guardrailed RAG (ai_system_knowledge / docs)
-      └─ dynamic intent (tìm sân, lịch trống, slot) → database search + ranking (LLM / Rule fallback)
-  → JSON response (structured text + suggestion cards)
+  → Intent extraction (IntentRouter) + Multi-turn context merge
+  → Rẽ nhánh theo Intent:
+      ├─ Business Intents (tìm sân, lịch trống, đặt sân, thanh toán) → Database (Ground Truth, NO Web Search)
+      ├─ Static Intents (hướng dẫn, tài khoản, đối tác) → Guardrailed RAG (ai_system_knowledge / docs)
+      ├─ Sports Knowledge (6 môn hỗ trợ: football, badminton, pickleball...) → Internal RAG + Controlled Web Retrieval (Whitelist, Freshness evaluation)
+      └─ Out of Scope (ngoài phạm vi / môn không hỗ trợ) → Safe refusal (NO Web Search)
+  → JSON response (Grounded answer + Venue cards + Source citations)
 ```
 
 AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Schema hiện có thực thể `Facility` riêng; `Field` là từng sân/court thuộc cơ sở. AI không tự tạo dữ liệu thay thế khi database không có kết quả.
 
 ## Tài liệu
 
+- [Báo cáo tiến độ phiên 17/09/2026 — Multi-Attribute RAG, Tri thức Thể thao & Controlled Web Retrieval](docs/SESSION_PROGRESS_2026-09-17.md)
 - [Báo cáo tiến độ phiên 13/09/2026 — Chuẩn hóa Bộ lọc, Đồng bộ Hệ thống & Tối ưu Giao diện](docs/SESSION_PROGRESS_2026-09-13.md)
+- [Báo cáo Kiến trúc Trợ lý AI (SportHub AI Assistant Architecture)](docs/AI_ASSISTANT_ARCHITECTURE_REPORT.md)
+- [Báo cáo Chi tiết Hệ thống AI (SportHub AI System Report)](docs/AI_SYSTEM.md)
+- [Báo cáo Đánh giá Thực nghiệm Hệ thống AI](docs/AI_EVALUATION.md)
 - [Bàn giao OWNER Facility, Mobile UX và Booking Service — 16/08/2026](docs/SECTION_HANDOFF_2026-08-16_OWNER_FACILITY_MOBILE_BOOKING_SERVICE.md)
 - [Bàn giao AI hỗ trợ CUSTOMER đăng ký OWNER — 14/08/2026](docs/SECTION_HANDOFF_2026-08-14_AI_PARTNER_SUPPORT.md)
 - [Báo cáo tiến độ phiên 10/08/2026](docs/SESSION_PROGRESS_2026-08-10.md)
@@ -210,3 +216,4 @@ AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Sche
 - [Kiến trúc](docs/ARCHITECTURE.md)
 - [Danh sách API](docs/API.md)
 - [Kịch bản demo](docs/DEMO_SCRIPT.md)
+

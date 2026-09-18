@@ -1,6 +1,6 @@
 import os
 import re
-from typing import List
+from typing import List, Optional, Tuple, Dict, Any
 
 from ..models.knowledge_entry import KnowledgeEntry
 
@@ -158,3 +158,65 @@ class KnowledgeRepository:
     def get_static_entries(self) -> List[KnowledgeEntry]:
         """Return only entries whose ``classification`` is ``static``."""
         return [e for e in self._entries if e.classification == "static"]
+
+    def get_entry_by_id(self, entry_id: str) -> Optional[KnowledgeEntry]:
+        """Find an entry by its unique ID."""
+        for entry in self._entries:
+            if entry.id == entry_id:
+                return entry
+        return None
+
+    def upsert_entry(self, entry: KnowledgeEntry) -> Tuple[bool, bool]:
+        """Insert a new entry or update an existing one in-memory.
+
+        Returns:
+            Tuple[bool, bool]: (is_new, is_updated)
+        """
+        for i, existing in enumerate(self._entries):
+            if existing.id == entry.id:
+                is_changed = (
+                    existing.answer != entry.answer
+                    or existing.question != entry.question
+                    or existing.topic != entry.topic
+                    or existing.entity != entry.entity
+                    or existing.sport != entry.sport
+                )
+                if not is_changed:
+                    # Update metadata only if newer/present without marking content updated
+                    if entry.collected_at and (not existing.collected_at or entry.collected_at > existing.collected_at):
+                        existing.collected_at = entry.collected_at
+                    if entry.source_url:
+                        existing.source_url = entry.source_url
+                    if entry.source_name:
+                        existing.source_name = entry.source_name
+                    return False, False
+
+                self._entries[i] = entry
+                return False, True
+
+        self._entries.append(entry)
+        return True, False
+
+    def remove_entry(self, entry_id: str) -> bool:
+        """Remove an entry by ID from the repository."""
+        initial_len = len(self._entries)
+        self._entries = [e for e in self._entries if e.id != entry_id]
+        return len(self._entries) < initial_len
+
+
+_shared_repository_instance: Optional[KnowledgeRepository] = None
+
+
+def get_knowledge_repository(knowledge_root: Optional[str] = None) -> KnowledgeRepository:
+    global _shared_repository_instance
+    if _shared_repository_instance is None or knowledge_root is not None:
+        repo = KnowledgeRepository(knowledge_root=knowledge_root)
+        if knowledge_root is None:
+            _shared_repository_instance = repo
+        return repo
+    return _shared_repository_instance
+
+
+def reset_shared_knowledge_repository() -> None:
+    global _shared_repository_instance
+    _shared_repository_instance = None

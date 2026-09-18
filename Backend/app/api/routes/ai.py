@@ -18,12 +18,13 @@ from ...schemas.ai import (
     SlotRecommendationRequest, SlotRecommendationResponse,
     DemandOverviewResponse, DemandPredictionRequest, DemandPredictionResponse,
     ModelMetricsResponse, RecommendationResponse,
+    KnowledgeUpdateRequest, KnowledgeUpdateResponse, KnowledgeUpdateStatusResponse,
 )
 from ...services.ai_assistant_service import AIAssistantService
 from ...services.ai_feature_service import AIFeatureService
 from ...services.booking_message_service import BookingMessageService
 from ...services.customer_recommendation_service import CustomerRecommendationService
-from ..dependencies import get_current_user, get_optional_current_user, require_owner
+from ..dependencies import get_current_user, get_optional_current_user, require_owner, require_system_admin
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 logger = logging.getLogger(__name__)
@@ -197,7 +198,15 @@ def assistant(
     db.commit()
 
     # 3. Context fallback from snapshot if not explicitly provided
-    effective_context = payload.context or conv.context_snapshot
+    effective_context = dict(payload.context or conv.context_snapshot or {})
+
+    # 3b. Inject recent conversation messages for LLM follow-up resolution
+    recent_msgs = [
+        {'role': m.role, 'content': m.content}
+        for m in (conv.messages or [])[-10:]
+    ]
+    if recent_msgs:
+        effective_context['conversation_messages'] = recent_msgs
 
     # 4. Process with AI Assistant Service
     try:
@@ -205,6 +214,7 @@ def assistant(
             payload.message,
             context_field_id=payload.context_field_id,
             context=effective_context,
+            assistant_mode=payload.assistant_mode,
         )
         logger.info('AI response ready: %d suggestions', len(result.get('suggestions', [])))
     except HTTPException:
@@ -222,7 +232,11 @@ def assistant(
         payload=serializable_result,
     )
     db.add(assistant_msg)
-    conv.context_snapshot = jsonable_encoder(result.get('understood'))
+    snapshot = jsonable_encoder(result.get('understood'))
+    # conversation_messages are reconstructed from DB each request — no need to persist in snapshot
+    if isinstance(snapshot, dict):
+        snapshot.pop('conversation_messages', None)
+    conv.context_snapshot = snapshot
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -274,3 +288,55 @@ def recommendations(
 ):
     normalized = ' '.join(sport_type.strip().lower().split())
     return service.for_user(current_user).recommendations(sport_type=normalized, booking_date=booking_date, max_price=max_price, limit=limit)
+
+
+@router.post('/knowledge/update', response_model=KnowledgeUpdateResponse)
+def trigger_sports_knowledge_update(
+    payload: KnowledgeUpdateRequest | None = None,
+    current_user: User = Depends(require_system_admin),
+):
+    """
+    Admin-only endpoint to trigger Sports Knowledge update job.
+    Enforces concurrency lock to prevent duplicate/concurrent runs.
+    """
+    from ...services.knowledge_update_service import KnowledgeUpdateJobManager, KnowledgeUpdateService
+
+    req = payload or KnowledgeUpdateRequest()
+    success, message, summary, job_id = KnowledgeUpdateJobManager.trigger_job(
+        query=req.query,
+        sport=req.sport,
+        entity=req.entity,
+        raw_items=req.raw_items,
+        persist_markdown=req.persist_markdown,
+    )
+
+    if not success and summary is None:
+        # Job already running conflict
+        raise HTTPException(
+            status_code=409,
+            detail=message,
+        )
+
+    return KnowledgeUpdateResponse(
+        status=summary.status if summary else ("COMPLETED" if success else "FAILED"),
+        message=message,
+        summary=summary.to_dict() if summary else None,
+        job_id=job_id,
+    )
+
+
+@router.get('/knowledge/update/status', response_model=KnowledgeUpdateStatusResponse)
+def get_sports_knowledge_update_status(
+    current_user: User = Depends(require_system_admin),
+):
+    """
+    Admin-only endpoint to check status of Knowledge Update jobs.
+    """
+    from ...services.knowledge_update_service import KnowledgeUpdateJobManager
+
+    status_data = KnowledgeUpdateJobManager.get_status()
+    return KnowledgeUpdateStatusResponse(
+        is_running=status_data["is_running"],
+        current_job_id=status_data["current_job_id"],
+        last_summary=status_data["last_summary"],
+    )
