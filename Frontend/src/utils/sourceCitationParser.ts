@@ -11,6 +11,70 @@ export interface SourceCitation {
   isInternal?: boolean;
 }
 
+export type EmbedStatus = 'LOADING' | 'EMBED_SUCCESS' | 'EMBED_BLOCKED' | 'EMBED_TIMEOUT' | 'INVALID_SOURCE';
+
+/**
+ * Determines the initial embed state and tab for a given source citation.
+ */
+export function getInitialEmbedStatus(source: SourceCitation | null): {
+  status: EmbedStatus;
+  initialTab: 'embed' | 'info';
+  hasValidUrl: boolean;
+} {
+  if (!source) {
+    return { status: 'INVALID_SOURCE', initialTab: 'info', hasValidUrl: false };
+  }
+  if (source.isInternal || !source.url) {
+    return { status: 'INVALID_SOURCE', initialTab: 'info', hasValidUrl: false };
+  }
+  if (!isValidHttpUrl(source.url)) {
+    return { status: 'INVALID_SOURCE', initialTab: 'info', hasValidUrl: false };
+  }
+  return { status: 'LOADING', initialTab: 'embed', hasValidUrl: true };
+}
+
+/**
+ * Validates whether a given string is a valid http(s) URL.
+ * Strictly disallows dangerous protocols (e.g. javascript:, data:, file:).
+ */
+export function isValidHttpUrl(rawUrl?: string | null): boolean {
+  if (!rawUrl || typeof rawUrl !== 'string') return false;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  // Disallow javascript:, data:, vbscript: or other dangerous pseudo-protocols before parsing
+  if (/^(?:javascript|data|vbscript|file|about):/i.test(trimmed)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(
+      trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`
+    );
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Safely opens an external URL in a new browser tab with strict security flags.
+ * Returns true if opened successfully, false otherwise.
+ */
+export function openSafeExternalUrl(rawUrl?: string | null): boolean {
+  if (!rawUrl || !isValidHttpUrl(rawUrl)) return false;
+  const trimmed = rawUrl.trim();
+  const safeUrl = trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`;
+  if (typeof window === 'undefined') return false;
+  try {
+    const newWindow = window.open(safeUrl, '_blank', 'noopener,noreferrer');
+    if (newWindow) {
+      newWindow.opener = null;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Extract clean domain name from a URL string (e.g. "https://www.fifa.com/worldcup" -> "fifa.com")
  */
@@ -59,10 +123,12 @@ export function parseCitationsFromText(text: string | null | undefined): {
       const trimmed = item.trim();
       if (!trimmed) continue;
 
-      // Extract parts: "FIFA, https://fifa.com, cập nhật 2026-09-17"
-      // URL matching
-      const urlMatch = trimmed.match(/https?:\/\/[^\s,;)]+/i);
-      const url = urlMatch ? urlMatch[0] : undefined;
+      // URL matching (supports https://, http://, www.)
+      const urlMatch = trimmed.match(/(?:https?:\/\/|www\.)[^\s,;)]+/i);
+      let url = urlMatch ? urlMatch[0] : undefined;
+      if (url && url.toLowerCase().startsWith('www.')) {
+        url = `https://${url}`;
+      }
 
       // Date matching
       const dateMatch = trimmed.match(/cập nhật\s+([0-9\-/]+)/i);
@@ -70,8 +136,8 @@ export function parseCitationsFromText(text: string | null | undefined): {
 
       // Extract Name (everything before the URL or first comma/date)
       let name = trimmed;
-      if (url) {
-        name = name.replace(url, '');
+      if (urlMatch) {
+        name = name.replace(urlMatch[0], '');
       }
       if (dateMatch) {
         name = name.replace(dateMatch[0], '');

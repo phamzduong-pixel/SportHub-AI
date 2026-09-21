@@ -67,3 +67,57 @@ User Input
 ```
 
 Hệ thống hoạt động ổn định, phân tách rõ ràng, sẵn sàng phục vụ người dùng.
+
+---
+
+## 5. CP-SYS-01 - Audit System Awareness Layer
+
+Checkpoint nay chi audit va thiet ke, chua thay doi code hoac database.
+
+### Domain source-of-truth hien co
+
+- Sport: `Field.sport_type`, `Facility.sports`, `ProductCatalogItem.sport_name` va `ProductSport.sport_name`.
+- Venue/court: `Facility` va `Field` trong live database.
+- Amenity: JSON `Facility.amenities` va `Field.amenities`; chua co bang Amenity rieng.
+- Product/service: `FacilityProduct`; catalog: `ProductCatalogItem`.
+- Sport <-> product/service: `ProductSport` (`facility_product_sports`).
+- Price/availability: `Field.base_price`, `TimeSlot.price`, `TimeSlot.is_active` va booking state.
+- Booking/payment/account: `Booking`, `BookingSlot`, `BookingProductItem`, `Payment`, `User`.
+- Owner/partner/admin: `User.role`, `OwnerApplication`, `Facility.owner_id` va cac trang thai review.
+
+Du lieu nghiep vu tren la live DB. Sports Knowledge/RAG la lop tri thuc the thao rieng, khong phai source-of-truth cho inventory, amenity, gia hoac availability.
+
+### Product / Service / Amenity audit
+
+`ProductService` va `InventoryService` da ho tro truy van product theo facility va sport, gom status, gia, inventory va mapping `ProductSport`. Tuy nhien AI hien chi goi chung khi da co `field_id`/venue context.
+
+`_answer_venue_detail()` doc duoc amenity cua mot field cu the. Chua co truy van system-domain o cap sport de tong hop product/service hoac amenity.
+
+Vi vay cac cau hoi nhu "san bong da co nhung tien ich nao?", "bong da co nhung tien ich gi?" va follow-up "tien ich cua mon the thao do" co the roi ve fallback: router chua bao phu day du tu khoa tien ich, Natural co nhanh tra loi dung cu generic, con Product handler yeu cau venue/field context.
+
+### Kien truc de xuat cho checkpoint tiep theo
+
+Them mot read-only `SystemDomainContext` dung truc tiep DB/repository hien co, khong duplicate database vao prompt va khong tao RAG moi. Context chi lay domain data can thiet:
+
+- sport-level products/services;
+- venue/field amenities;
+- venue products va availability;
+- price, booking, payment hoac account theo quyen hien tai.
+
+Natural se resolve semantic/entity/context roi truy van System Domain Context va dien dat tu nhien. Professional van giu IntentRouter va business services hien tai, uu tien deterministic live DB. Mutation van bat buoc di qua business service va authorization.
+
+### Trang thai he thong sau cac checkpoint AI
+
+- Natural Mode da co direct answer, small talk, Sports Knowledge/Web/RAG co citation, context/entity follow-up, alias resolution va SportHub bridge.
+- Professional Mode van giu business flow cho venue, availability, booking, payment, account, owner/partner va admin.
+- Sports Web/RAG da co whitelist/domain guardrail, evidence grounding va fallback khi thieu nguon.
+- Nguon the thao Thai Nguyen va Cong TTDT tinh da duoc ingest/index theo pipeline hien tai.
+- System Awareness cho Product/Service/Amenity theo sport hoac venue van la phan chua trien khai; day la hang muc tiep theo.
+
+### Rui ro can kiem soat
+
+- Khong dung du lieu catalog de khang dinh availability thuc te.
+- Khong tra product/amenity cua facility khac hoac vuot quyen owner/customer.
+- Khong nham dung cu the thao generic voi product/service dang co trong SportHub.
+- Khong de Natural early fallback chan live system lookup.
+- Khong bien system context thanh autonomous agent hoac business router thu hai.

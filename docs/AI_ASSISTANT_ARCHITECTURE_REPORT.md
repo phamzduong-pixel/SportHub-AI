@@ -351,4 +351,35 @@ flowchart TD
    - Grounded LLM Response: LLM chỉ trả lời dựa trên Grounded Evidence được tổng hợp và đính kèm đầy đủ nguồn trích dẫn (Title, Domain, URL, Publication Date).
    - Vượt qua 100% (8/8) kịch bản kiểm thử nghiệm thu cuối cùng (`test_final_sports_web_validation.py`).
 
+## 16. CP-SYS-03 — Final Natural & Professional Check
 
+### Nội dung đã hoàn thành
+
+- Bổ sung continuity cho System Domain khi follow-up ngắn đổi sport/venue/entity.
+- Giữ operation semantic trước đó: amenities hoặc products.
+- Không chuyển `còn cầu lông?` thành `SEARCH_VENUE`/`CHECK_AVAILABILITY`.
+- Vẫn chuyển đúng business flow với yêu cầu rõ ràng như `tìm sân cầu lông tối nay`.
+- Natural và Professional dùng cùng một resolver; Professional không bị Natural routing làm ảnh hưởng.
+- Sửa lỗi nhỏ ở Natural out-of-scope reply: method dùng instance context đúng cách.
+
+### Các lớp AI hiện có
+
+| Lớp | Vai trò |
+|---|---|
+| `IntentRouter` | Rule-based intent/entity routing, context merge/reset và semantic follow-up resolution |
+| `AIAssistantService` | Điều phối mode, policy, business handlers, System Domain và response contract |
+| SportHub Repository/DB | Source-of-truth cho sân, slot, giá, booking và dữ liệu nghiệp vụ |
+| `SystemDomainContextService` | Source-of-truth read-only cho amenities/products cấp sport và venue |
+| `RAGGuardrail` + Knowledge services | Grounded retrieval, role/scope gating, citation và safe fallback |
+| Natural mode | Sports Knowledge RAG + approved Web khi được policy cho phép |
+| Professional mode | Deterministic SportHub business/System Domain/internal guide; chặn Sports RAG/Web |
+| LLM | Chỉ hoạt động ở các tác vụ được giới hạn bằng structured output; không tự gọi tool hay mutation DB |
+
+### Verification snapshot
+
+- CP-SYS-03 smoke matrix: PASS ở cả Natural và Professional.
+- Sáu case demo: PASS, gồm amenities, products, sport switching, business search và venue follow-up.
+- `py_compile` cho router/assistant: PASS.
+- `test_ai_intent_router.py`: 25 passed, 24 subtests passed.
+- Natural follow-up/multiturn tests: 10 passed.
+- Một policy test còn fail do expectation greeting thiếu emoji; không liên quan context/routing CP-SYS-03.

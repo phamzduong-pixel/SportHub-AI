@@ -26,9 +26,10 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Badge, Button } from '@/components/common';
 import { WebSourcePreviewPanel } from '@/components/ai/WebSourcePreviewPanel';
+import { useAuth } from '@/contexts/AuthContext';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
-import { parseCitationsFromText, type SourceCitation } from '@/utils/sourceCitationParser';
+import { parseCitationsFromText, isValidHttpUrl, openSafeExternalUrl, type SourceCitation } from '@/utils/sourceCitationParser';
 import {
   AssistantApiError,
   AssistantTimeoutError,
@@ -108,6 +109,7 @@ const dateLabel = (value: string) =>
   );
 
 export function AIAssistantPage() {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const initialCourtId = Number(searchParams.get('courtId') || searchParams.get('field_id')) || undefined;
   const [conversationId, setConversationId] = useState<string | undefined>(() => {
@@ -128,6 +130,22 @@ export function AIAssistantPage() {
   const [searchContext, setSearchContext] = useState<Record<string, unknown>>({});
   const [selectedSource, setSelectedSource] = useState<SourceCitation | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [mobileConfirmSource, setMobileConfirmSource] = useState<SourceCitation | null>(null);
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === 'undefined') return true;
+    return window.matchMedia('(min-width: 1024px)').matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(min-width: 1024px)');
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      setIsDesktop(e.matches);
+    };
+    mql.addEventListener('change', handleMediaChange);
+    return () => mql.removeEventListener('change', handleMediaChange);
+  }, []);
+
   const messagesRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef<HTMLTextAreaElement>(null);
   const requestRef = useRef<AbortController | null>(null);
@@ -135,12 +153,27 @@ export function AIAssistantPage() {
   const baseTextRef = useRef('');
 
   const handleSelectSource = (citation: SourceCitation) => {
-    setSelectedSource(citation);
-    setIsPreviewOpen(true);
+    if (isDesktop) {
+      setSelectedSource(citation);
+      setIsPreviewOpen(true);
+    } else {
+      setMobileConfirmSource(citation);
+    }
   };
 
   const handleClosePreview = () => {
     setIsPreviewOpen(false);
+  };
+
+  const handleConfirmOpenSource = (citation: SourceCitation) => {
+    if (citation.url && isValidHttpUrl(citation.url)) {
+      openSafeExternalUrl(citation.url);
+    }
+    setMobileConfirmSource(null);
+  };
+
+  const handleCancelMobileConfirm = () => {
+    setMobileConfirmSource(null);
   };
 
   const isListeningRef = useRef(false);
@@ -322,6 +355,7 @@ export function AIAssistantPage() {
     setContextFieldId(initialCourtId);
     setSelectedSource(null);
     setIsPreviewOpen(false);
+    setMobileConfirmSource(null);
     setQuery('');
     setLoading(false);
   };
@@ -403,9 +437,9 @@ export function AIAssistantPage() {
         },
       ]);
 
-      // If citations exist and preview panel is open, update selected source to the first citation
+      // If citations exist and preview panel is open on desktop, update selected source to the first citation
       const { citations } = parseCitationsFromText(response.reply);
-      if (citations.length > 0 && isPreviewOpen) {
+      if (citations.length > 0 && isPreviewOpen && isDesktop) {
         setSelectedSource(citations[0]);
       }
 
@@ -448,7 +482,7 @@ export function AIAssistantPage() {
   };
 
   return (
-    <div className="h-[calc(100dvh-4rem)] min-h-[520px] bg-[radial-gradient(circle_at_top_left,_#ecfdf5,_transparent_35%),#f8fafc] p-2 sm:p-4 lg:p-5 overflow-hidden">
+    <div className="h-[calc(100dvh-4rem)] min-h-0 sm:min-h-[520px] bg-[radial-gradient(circle_at_top_left,_#ecfdf5,_transparent_35%),#f8fafc] p-1.5 sm:p-4 lg:p-5 overflow-hidden">
       <div
         className={`mx-auto grid h-full max-w-7xl gap-3 sm:gap-4 transition-all duration-200 ${
           isPreviewOpen
@@ -842,8 +876,16 @@ export function AIAssistantPage() {
                     <QuickActions actions={message.quickActions} onPrefill={applyQuickAction} />
                   </div>
                   {message.role === 'user' && (
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-slate-200 text-slate-600">
-                      <UserRound size={16} />
+                    <span className="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-200 text-slate-600">
+                      {user?.avatar_url ? (
+                        <img
+                          src={user.avatar_url}
+                          alt={`Ảnh đại diện của ${user.full_name}`}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <UserRound size={16} />
+                      )}
                     </span>
                   )}
                 </div>
@@ -994,7 +1036,7 @@ export function AIAssistantPage() {
         </section>
 
         {/* Desktop Web Source Preview Panel (Right Side Column) */}
-        {isPreviewOpen && (
+        {isPreviewOpen && isDesktop && (
           <div className="hidden lg:flex h-full min-h-0 min-w-0 flex-col animate-in fade-in duration-200">
             <WebSourcePreviewPanel
               source={selectedSource}
@@ -1004,20 +1046,97 @@ export function AIAssistantPage() {
         )}
       </div>
 
-      {/* Mobile / Tablet Web Source Preview Slide-over Overlay */}
-      {isPreviewOpen && (
+      {/* Mobile Source Confirmation Dialog */}
+      {!isDesktop && mobileConfirmSource && (
         <div
-          className="fixed inset-0 z-50 overflow-hidden bg-slate-950/45 backdrop-blur-xs lg:hidden animate-in fade-in duration-200"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/50 backdrop-blur-xs animate-in fade-in duration-150"
           onClick={(e) => {
-            if (e.target === e.currentTarget) handleClosePreview();
+            if (e.target === e.currentTarget) handleCancelMobileConfirm();
           }}
         >
-          <div className="ml-auto h-[100dvh] w-[min(100%,26rem)] max-w-full bg-white shadow-2xl p-2 sm:p-3 animate-in slide-in-from-right duration-200">
-            <WebSourcePreviewPanel
-              source={selectedSource}
-              onClose={handleClosePreview}
-              className="h-full !rounded-2xl"
-            />
+          <div
+            className="w-full max-w-sm rounded-2xl bg-white p-4 sm:p-5 shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150 space-y-3.5"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="source-confirm-title"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-100 text-emerald-800">
+                  <Globe size={20} />
+                </span>
+                <div className="min-w-0">
+                  <h2 id="source-confirm-title" className="text-sm sm:text-base font-bold text-slate-950 truncate">
+                    Mở trang web nguồn?
+                  </h2>
+                  <p className="text-xs text-slate-500 truncate">
+                    {mobileConfirmSource.name}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCancelMobileConfirm}
+                className="shrink-0 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Đóng dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-3 space-y-1.5 text-xs">
+              {mobileConfirmSource.domain && (
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500">Tên miền:</span>
+                  <span className="font-semibold text-slate-800">{mobileConfirmSource.domain}</span>
+                </div>
+              )}
+              {mobileConfirmSource.collectedAt && (
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-slate-500">Cập nhật:</span>
+                  <span className="font-medium text-slate-700">{mobileConfirmSource.collectedAt}</span>
+                </div>
+              )}
+              {mobileConfirmSource.url ? (
+                <div className="pt-1">
+                  <span className="text-slate-500 block mb-1">Đường dẫn:</span>
+                  <p className="text-[11px] font-mono text-brand-700 break-all bg-white p-2 rounded-lg border border-slate-200 select-all">
+                    {mobileConfirmSource.url}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-slate-500 italic">Nguồn nội bộ SportHub</p>
+              )}
+            </div>
+
+            <p className="text-[11.5px] text-slate-500 leading-relaxed">
+              {mobileConfirmSource.url && isValidHttpUrl(mobileConfirmSource.url)
+                ? 'Trang web sẽ được mở trong tab trình duyệt mới.'
+                : 'Nguồn này không có liên kết trang web ngoài.'}
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleCancelMobileConfirm}
+                className="px-3.5 py-1.5 text-xs font-semibold text-slate-700"
+              >
+                Hủy
+              </Button>
+              {mobileConfirmSource.url && isValidHttpUrl(mobileConfirmSource.url) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => handleConfirmOpenSource(mobileConfirmSource)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-brand-700 text-white hover:bg-brand-800"
+                >
+                  <span>Mở trang web</span>
+                  <ExternalLink size={13} />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}

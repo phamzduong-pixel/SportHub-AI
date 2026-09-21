@@ -98,3 +98,25 @@ Approved Sports Web
 - **Scenario Harness (`mode_evaluation_dataset.json`)**: **31/31 scenarios PASSED (100.0%)**.
 - **Bộ Kiểm thử Toàn diện**: **100% tests PASSED**, 0 failures, 0 regressions.
 - **Độ tin cậy**: Đáp ứng 100% các tiêu chuẩn về an toàn thông tin, phân quyền chế độ, và tính toàn vẹn dữ liệu.
+
+## VII. System Domain Context Continuity (CP-SYS-03)
+
+System Domain là nhánh dữ liệu nghiệp vụ chỉ đọc cho products/services và amenities ở cấp sport hoặc venue. Nhánh này dùng `SystemDomainContextService` làm source-of-truth và không tạo IntentRouter thứ hai.
+
+### Semantic context resolution
+
+`IntentRouter.is_system_domain_followup()` nhận diện các follow-up ngắn như `còn cầu lông`, `thế cầu lông thì sao`, `còn môn này`, `môn đó thì sao` và `sân đó thì sao` khi context trước có `domain_context_type` hợp lệ:
+
+1. Giữ operation trước đó: `sport_amenities`, `venue_amenities`, `sport_products` hoặc `venue_products`.
+2. Thay sport/venue/entity chỉ khi câu hiện tại nêu rõ.
+3. Giữ `context_reset=False` cho semantic follow-up.
+4. Khi có yêu cầu business rõ ràng như `tìm sân cầu lông tối nay`, business routing được ưu tiên và context được reset.
+
+Natural và Professional cùng gọi resolver này. Khác biệt giữa hai mode chỉ nằm ở policy nguồn dữ liệu và cách diễn đạt:
+
+- **Natural**: được dùng Sports Knowledge RAG/approved Web cho câu hỏi tri thức thể thao; System Domain và business data vẫn lấy từ backend source-of-truth.
+- **Professional**: chỉ xử lý SportHub DB, System Domain và internal guide/FAQ; Sports RAG và external Web bị chặn.
+
+### System Domain data contract
+
+Context trả về có thể chứa `domain_context_type`, `sport_type`, `field_id`, `result_field_ids` và `last_intent`. Metadata intent tiếp tục phản ánh operation (`GET_VENUE_DETAIL` hoặc `GET_PRODUCTS`) để downstream policy không hiểu nhầm follow-up là tìm sân. Không có schema database mới, RAG mới hoặc autonomous-agent loop.

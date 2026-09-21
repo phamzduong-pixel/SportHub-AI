@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { cleanSpeechText } from '../utils/cleanSpeechText';
+import { cleanSpeechText } from '../utils/cleanSpeechText.ts';
 
 export interface UseSpeechSynthesisOptions {
   lang?: string;
@@ -14,16 +14,26 @@ export interface UseSpeechSynthesisOptions {
 /*  Tiny helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Chrome caps a single utterance at ~15 s of audio.  We chunk text so
- *  each piece is short enough to stay below the limit.  */
+/** Chrome caps a single utterance at ~15 s of audio. We chunk text so
+ * each piece is short enough to stay below the limit. */
 const CHUNK_MAX_CHARS = 180;
 
-function splitIntoChunks(text: string): string[] {
+/**
+ * Split text into chunks suitable for TTS speech synthesis.
+ * Uses cross-browser compatible regex (avoiding lookbehinds which crash on Safari/WebKit).
+ */
+export function splitIntoChunks(text: string): string[] {
+  if (!text) return [];
   if (text.length <= CHUNK_MAX_CHARS) return [text];
 
+  // Match sentences ending with punctuation (. ! ? ; :) or end of text.
+  // Avoid lookbehind (?<=...) for cross-browser Safari / iOS WebKit compatibility.
+  const sentenceMatches = text.match(/[^.!?;:]+([.!?;:]+|$)/g);
+  const sentences = sentenceMatches && sentenceMatches.length > 0
+    ? sentenceMatches.map((s) => s.trim()).filter(Boolean)
+    : [text];
+
   const chunks: string[] = [];
-  // Split by sentence-ending punctuation first
-  const sentences = text.split(/(?<=[.!?;:])\s+/);
   let current = '';
 
   for (const sentence of sentences) {
@@ -121,7 +131,15 @@ export function useSpeechSynthesis({
 }: UseSpeechSynthesisOptions = {}) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | number | null>(null);
-  const [isSupported, setIsSupported] = useState(true);
+  const [isSupported, setIsSupported] = useState(() => {
+    return (
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window &&
+      'SpeechSynthesisUtterance' in window &&
+      Boolean(window.speechSynthesis) &&
+      Boolean(window.SpeechSynthesisUtterance)
+    );
+  });
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
@@ -138,12 +156,14 @@ export function useSpeechSynthesis({
 
   // ---- voice loading ----
   const loadVoices = useCallback(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window) || !window.speechSynthesis) return;
     try {
-      const v = window.speechSynthesis.getVoices();
-      if (v && v.length > 0) {
-        setAvailableVoices(v);
-        console.log('[TTS] voices loaded:', v.length);
+      if (typeof window.speechSynthesis.getVoices === 'function') {
+        const v = window.speechSynthesis.getVoices();
+        if (v && v.length > 0) {
+          setAvailableVoices(v);
+          console.log('[TTS] voices loaded:', v.length);
+        }
       }
     } catch (err) {
       console.warn('[TTS] getVoices error:', err);
@@ -154,18 +174,35 @@ export function useSpeechSynthesis({
     const ok =
       typeof window !== 'undefined' &&
       'speechSynthesis' in window &&
-      'SpeechSynthesisUtterance' in window;
+      'SpeechSynthesisUtterance' in window &&
+      Boolean(window.speechSynthesis) &&
+      Boolean(window.SpeechSynthesisUtterance);
     setIsSupported(ok);
 
-    if (ok) {
+    if (ok && window.speechSynthesis) {
       loadVoices();
-      // Chrome fires 'voiceschanged' when voices finish downloading
-      window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+      try {
+        if (typeof window.speechSynthesis.addEventListener === 'function') {
+          window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+        } else {
+          window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+      } catch {
+        /* noop */
+      }
     }
 
     return () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        try { window.speechSynthesis.removeEventListener('voiceschanged', loadVoices); } catch { /* noop */ }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        try {
+          if (typeof window.speechSynthesis.removeEventListener === 'function') {
+            window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+          } else {
+            window.speechSynthesis.onvoiceschanged = null;
+          }
+        } catch {
+          /* noop */
+        }
       }
     };
   }, [loadVoices]);
@@ -176,7 +213,7 @@ export function useSpeechSynthesis({
       heartbeatRef.current = window.setInterval(() => {
         try {
           const synth = window.speechSynthesis;
-          if (synth.speaking && synth.paused) synth.resume();
+          if (synth && synth.speaking && synth.paused) synth.resume();
         } catch { /* noop */ }
       }, 5_000);
     } else if (heartbeatRef.current) {
@@ -195,11 +232,15 @@ export function useSpeechSynthesis({
   const stop = useCallback(() => {
     chunkQueueRef.current = [];
     currentIdRef.current = null;
-    try { window.speechSynthesis.cancel(); } catch { /* noop */ }
+    try {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    } catch { /* noop */ }
     setIsSpeaking(false);
     setSpeakingId(null);
     utteranceRef.current = null;
-    try { delete (window as unknown as Record<string, unknown>).__sporthub_tts_utterance; } catch { /* noop */ }
+    try { (window as unknown as Record<string, unknown>).__sporthub_tts_utterance = null; } catch { /* noop */ }
   }, []);
 
   // ---- internal: speak a single chunk ----
@@ -246,7 +287,7 @@ export function useSpeechSynthesis({
           setIsSpeaking(false);
           setSpeakingId(null);
           utteranceRef.current = null;
-          try { delete (window as unknown as Record<string, unknown>).__sporthub_tts_utterance; } catch { /* noop */ }
+          try { (window as unknown as Record<string, unknown>).__sporthub_tts_utterance = null; } catch { /* noop */ }
           onEndRef.current?.();
           customOnEnd?.();
         }
@@ -266,7 +307,7 @@ export function useSpeechSynthesis({
         setIsSpeaking(false);
         setSpeakingId(null);
         utteranceRef.current = null;
-        try { delete (window as unknown as Record<string, unknown>).__sporthub_tts_utterance; } catch { /* noop */ }
+        try { (window as unknown as Record<string, unknown>).__sporthub_tts_utterance = null; } catch { /* noop */ }
       };
 
       // Keep a strong reference so GC doesn't kill it mid-speech

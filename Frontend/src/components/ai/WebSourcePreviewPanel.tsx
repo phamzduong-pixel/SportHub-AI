@@ -10,27 +10,21 @@ import {
   X,
   FileText,
   AlertTriangle,
+  AlertCircle,
+  Clock3,
   RotateCcw,
 } from 'lucide-react';
-import type { SourceCitation } from '@/utils/sourceCitationParser';
+import {
+  isValidHttpUrl,
+  getInitialEmbedStatus,
+  type EmbedStatus,
+  type SourceCitation,
+} from '@/utils/sourceCitationParser';
 
 interface WebSourcePreviewPanelProps {
   source: SourceCitation | null;
   onClose: () => void;
   className?: string;
-}
-
-/**
- * Validates whether a given string is a valid http(s) URL.
- */
-function isValidHttpUrl(url?: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 export function WebSourcePreviewPanel({
@@ -39,8 +33,7 @@ export function WebSourcePreviewPanel({
   className = '',
 }: WebSourcePreviewPanelProps) {
   const [copied, setCopied] = useState(false);
-  const [iframeLoading, setIframeLoading] = useState(true);
-  const [iframeBlocked, setIframeBlocked] = useState(false);
+  const [embedStatus, setEmbedStatus] = useState<EmbedStatus>('LOADING');
   const [activeTab, setActiveTab] = useState<'embed' | 'info'>('embed');
   const [reloadKey, setReloadKey] = useState(0);
   const timeoutRef = useRef<number | null>(null);
@@ -48,22 +41,22 @@ export function WebSourcePreviewPanel({
   const hasValidUrl = Boolean(source?.url && isValidHttpUrl(source.url));
 
   useEffect(() => {
-    // Reset all states when selected source changes
-    setIframeLoading(true);
-    setIframeBlocked(false);
+    // Reset states according to source validity
+    const initial = getInitialEmbedStatus(source);
+    setEmbedStatus(initial.status);
+    setActiveTab(initial.initialTab);
     setCopied(false);
-    setActiveTab(hasValidUrl && !source?.isInternal ? 'embed' : 'info');
 
     if (timeoutRef.current) {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
 
-    // Fallback timer: if iframe does not finish loading within 8 seconds (common for CSP / X-Frame-Options blocks)
-    if (hasValidUrl && !source?.isInternal) {
+    // Fallback timer: if iframe does not finish loading within 7.5 seconds
+    if (initial.status === 'LOADING') {
       timeoutRef.current = window.setTimeout(() => {
-        setIframeLoading(false);
-      }, 8000);
+        setEmbedStatus((current) => (current === 'LOADING' ? 'EMBED_TIMEOUT' : current));
+      }, 7500);
     }
 
     return () => {
@@ -72,7 +65,7 @@ export function WebSourcePreviewPanel({
         timeoutRef.current = null;
       }
     };
-  }, [source?.url, source?.id, reloadKey, hasValidUrl, source?.isInternal]);
+  }, [source?.url, source?.id, reloadKey, source?.isInternal]);
 
   const handleCopyUrl = async () => {
     if (!source?.url) return;
@@ -94,9 +87,20 @@ export function WebSourcePreviewPanel({
   };
 
   const handleRetryIframe = () => {
-    setIframeBlocked(false);
-    setIframeLoading(true);
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setEmbedStatus('LOADING');
     setReloadKey((k) => k + 1);
+  };
+
+  const handleMarkBlocked = () => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setEmbedStatus('EMBED_BLOCKED');
   };
 
   if (!source) {
@@ -142,7 +146,7 @@ export function WebSourcePreviewPanel({
             {source.isInternal ? <FileText size={16} /> : <Globe size={16} />}
           </span>
           <div className="min-w-0">
-            <h2 className="text-xs sm:text-sm font-bold text-slate-900 truncate" title={source.name}>
+            <h2 className="text-xs sm:text-sm font-bold text-slate-950 truncate" title={source.name}>
               {source.name}
             </h2>
             <div className="flex items-center gap-1.5 mt-0.5">
@@ -230,55 +234,172 @@ export function WebSourcePreviewPanel({
       <div className="flex-1 min-h-0 relative overflow-y-auto bg-slate-50/50">
         {hasValidUrl && !source.isInternal && activeTab === 'embed' ? (
           <div className="h-full w-full relative flex flex-col">
-            {iframeLoading && (
+            {/* Loading Overlay */}
+            {embedStatus === 'LOADING' && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/90 p-4">
                 <RefreshCw size={24} className="animate-spin text-emerald-600 mb-2" />
                 <p className="text-xs font-semibold text-slate-600">Đang tải trang web...</p>
-                <p className="text-[11px] text-slate-400 mt-1">{source.domain}</p>
+                <p className="text-[11px] text-slate-400 mt-1">{source.domain || source.url}</p>
               </div>
             )}
 
-            {iframeBlocked ? (
-              <div className="p-5 flex flex-col items-center justify-center text-center h-full">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-100 text-amber-800 mb-3">
+            {/* Fallback View: EMBED_BLOCKED */}
+            {embedStatus === 'EMBED_BLOCKED' && (
+              <div className="p-5 flex flex-col items-center justify-center text-center h-full space-y-3 animate-in fade-in duration-150">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-100 text-amber-800">
                   <AlertTriangle size={22} />
                 </div>
-                <h3 className="text-sm font-bold text-slate-900">Không thể nhúng trực tiếp</h3>
-                <p className="mt-1.5 text-xs text-slate-600 leading-5 max-w-[280px]">
-                  Website <strong>{source.domain}</strong> áp dụng chính sách bảo mật chống nhúng (X-Frame-Options / CSP).
-                </p>
-                <div className="mt-4 flex gap-2">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900">Website không cho phép hiển thị trực tiếp</h3>
+                  <p className="text-xs text-slate-600 leading-5 max-w-[300px]">
+                    Website <strong>{source.domain || source.name}</strong> áp dụng chính sách bảo mật hoặc giới hạn kỹ thuật chống nhúng trong khung (như header <code>X-Frame-Options</code> hoặc <code>Content-Security-Policy</code>).
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => setActiveTab('info')}
-                    className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs"
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs transition"
                   >
-                    Xem tóm tắt nguồn
+                    Xem thông tin nguồn
                   </button>
                   <a
                     href={source.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-800 shadow-xs"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-800 shadow-xs transition"
                   >
+                    <span>Mở trang web gốc</span>
                     <ExternalLink size={13} />
-                    Mở tab mới
                   </a>
+                  <button
+                    type="button"
+                    onClick={handleRetryIframe}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 shadow-xs transition"
+                    title="Thử tải lại"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Thử lại</span>
+                  </button>
                 </div>
               </div>
-            ) : (
-              <iframe
-                key={`${source.url}-${reloadKey}`}
-                src={source.url}
-                title={`Preview ${source.name}`}
-                className="w-full h-full border-0 flex-1 bg-white"
-                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-                onLoad={() => setIframeLoading(false)}
-                onError={() => {
-                  setIframeLoading(false);
-                  setIframeBlocked(true);
-                }}
-              />
+            )}
+
+            {/* Fallback View: EMBED_TIMEOUT */}
+            {embedStatus === 'EMBED_TIMEOUT' && (
+              <div className="p-5 flex flex-col items-center justify-center text-center h-full space-y-3 animate-in fade-in duration-150">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-50 text-amber-700 border border-amber-200">
+                  <Clock3 size={22} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900">Website phản hồi quá lâu</h3>
+                  <p className="text-xs text-slate-600 leading-5 max-w-[300px]">
+                    Trang web <strong>{source.domain || source.name}</strong> mất nhiều thời gian để tải hoặc máy chủ nguồn chặn kết nối nhúng.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('info')}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs transition"
+                  >
+                    Xem thông tin nguồn
+                  </button>
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-brand-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-800 shadow-xs transition"
+                  >
+                    <span>Mở trang web gốc</span>
+                    <ExternalLink size={13} />
+                  </a>
+                  <button
+                    type="button"
+                    onClick={handleRetryIframe}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 shadow-xs transition"
+                    title="Thử tải lại"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Thử lại</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Fallback View: INVALID_SOURCE */}
+            {embedStatus === 'INVALID_SOURCE' && (
+              <div className="p-5 flex flex-col items-center justify-center text-center h-full space-y-3 animate-in fade-in duration-150">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-slate-600">
+                  <AlertCircle size={22} />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900">Đường dẫn nguồn không hợp lệ</h3>
+                  <p className="text-xs text-slate-600 leading-5 max-w-[280px]">
+                    Nguồn này không chứa liên kết <code>http/https</code> hợp lệ để hiển thị hoặc mở ngoài.
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('info')}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-xs"
+                  >
+                    Xem thông tin nguồn
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Active Embed View: LOADING or EMBED_SUCCESS */}
+            {(embedStatus === 'LOADING' || embedStatus === 'EMBED_SUCCESS') && (
+              <div className="h-full w-full flex flex-col">
+                {/* Embed helper notification bar */}
+                <div className="flex items-center justify-between bg-amber-50/80 px-3 py-1.5 border-b border-amber-200/60 text-[11px] text-amber-900 shrink-0">
+                  <span className="truncate mr-2">
+                    💡 Nếu trang bị chặn bảo mật (X-Frame-Options):
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('info')}
+                      className="font-semibold underline hover:text-amber-950"
+                    >
+                      Xem tóm tắt
+                    </button>
+                    <span>·</span>
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 font-bold text-brand-700 hover:text-brand-900"
+                    >
+                      Mở tab mới <ExternalLink size={10} />
+                    </a>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={handleMarkBlocked}
+                      className="text-slate-500 hover:text-slate-800"
+                      title="Chuyển sang màn hình thông báo chặn"
+                    >
+                      Báo lỗi
+                    </button>
+                  </div>
+                </div>
+
+                <iframe
+                  key={`${source.url}-${reloadKey}`}
+                  src={source.url}
+                  title={`Preview ${source.name}`}
+                  className="w-full h-full border-0 flex-1 bg-white"
+                  sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                  referrerPolicy="no-referrer-when-downgrade"
+                  loading="lazy"
+                  onLoad={() => setEmbedStatus('EMBED_SUCCESS')}
+                  onError={() => setEmbedStatus('EMBED_BLOCKED')}
+                />
+              </div>
             )}
           </div>
         ) : (

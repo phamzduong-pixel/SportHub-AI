@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 from app.services.ai_intent_router import IntentRouter, AssistantIntent
 from app.services.ai_assistant_service import AIAssistantService, AIRepository
 

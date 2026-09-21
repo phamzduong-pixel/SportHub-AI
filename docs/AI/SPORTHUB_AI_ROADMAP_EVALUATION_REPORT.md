@@ -94,3 +94,21 @@
 ---
 
 $$\mathbf{AI\ PLAN\ COMPLETE}$$
+
+## Addendum — CP-SYS-03 Final Natural & Professional
+
+CP-SYS-03 hoàn thiện continuity của System Domain sau CP-SYS-02.
+
+- Follow-up ngắn ưu tiên semantic context trước đó và chỉ thay entity được nêu rõ.
+- Amenities giữ operation `GET_VENUE_DETAIL`; products giữ operation `GET_PRODUCTS`.
+- Business request explicit như tìm sân, lịch trống hoặc booking vẫn reset/routing theo flow nghiệp vụ.
+- Natural và Professional dùng chung `IntentRouter.is_system_domain_followup()` và `SystemDomainContextService`.
+- Không thay đổi database schema, không thêm RAG, không tạo router thứ hai, không cho LLM mutation DB.
+
+### Final verification
+
+- 6 case CP-SYS-03 ở cả hai mode: **PASS**.
+- `test_ai_intent_router.py`: **25 passed, 24 subtests passed**.
+- Natural follow-up/multiturn: **10 passed**.
+- Python compile: **PASS**.
+- Một policy expectation về emoji greeting còn khác output hiện tại; không ảnh hưởng routing, context continuity hoặc source-of-truth.

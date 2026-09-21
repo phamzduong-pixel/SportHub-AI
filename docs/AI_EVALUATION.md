@@ -125,3 +125,28 @@ Thực nghiệm kiểm tra cơ chế truyền nhận và xử lý Context giữa
 - [ ] Thu thập thêm dữ liệu hội thoại thực tế từ người dùng production để làm giàu thêm từ điển tiếng lóng địa phương (ví dụ: *"đá banh"*, *"dợt banh"*, *"đánh kèo"*).
 - [ ] Mở rộng Vector Database chuyên dụng quy mô lớn (Milvus / Qdrant / pgvector) khi số lượng bài viết cẩm nang và chính sách thể thao vượt trên 1.000 bài viết (hiện tại `all-MiniLM-L6-v2` + `KnowledgeRepository` đã đáp ứng tối ưu cho quy mô hiện hành).
 
+## Final Check — Natural & Professional sau CP-SYS-03
+
+Phạm vi kiểm tra chỉ là smoke test, compile và các test nhóm liên quan trực tiếp; không chạy full suite.
+
+| Nhóm | Kết quả | Ghi chú |
+|---|---|---|
+| Natural context/follow-up | PASS | Kế thừa operation, đổi sport/venue/entity đúng phạm vi |
+| Natural System Domain | PASS | Dùng `SystemDomainContextService`, không rơi vào availability khi follow-up ngắn |
+| Natural Sports Knowledge/RAG/Web | PASS theo regression nhóm hiện hữu | Guardrail/source policy không bị thay đổi |
+| Natural business query | PASS | Explicit search vẫn reset về business flow |
+| Professional business flow | PASS | Deterministic DB/business routing giữ nguyên |
+| Professional System Domain | PASS | Dùng cùng context resolver, không dùng Natural response path |
+| Professional Sports Knowledge/Web isolation | PASS theo policy tests | Sports RAG/Web vẫn bị chặn |
+| Python compile | PASS | `ai_intent_router.py`, `ai_assistant_service.py` |
+
+### CP-SYS-03 acceptance examples
+
+- `Bóng đá có những tiện ích gì?` → `AMENITIES` + football.
+- `Còn cầu lông?` → giữ `AMENITIES`, đổi badminton.
+- `Bóng đá có những sản phẩm gì?` → `PRODUCTS` + football.
+- `Còn tennis?` → giữ `PRODUCTS`, đổi tennis.
+- `Tìm sân cầu lông tối nay.` → `SEARCH_VENUE`/availability business flow.
+- `Sân đó có những tiện ích gì?` → venue amenities theo venue context.
+
+Kết luận: Natural và Professional hiện dùng đúng context/source-of-truth theo thiết kế; CP-SYS-03 không thêm schema, RAG hoặc router thứ hai.

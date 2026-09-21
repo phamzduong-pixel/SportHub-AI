@@ -49,3 +49,31 @@ Frontend: Chọn chế độ "💼 Chuyên nghiệp"
 3. (Vẫn ở Pro)        User: "Tìm sân bóng đá tại Cầu Giấy" -> AI: Xử lý tìm sân bình thường.
 4. (Chuyển về Natural) User: "Nguyễn Quang Hải sinh năm bao nhiêu?" -> AI: Trả lời năm sinh 1997 của Quang Hải.
 ```
+
+## IV. CP-SYS-03 — System Domain Context Continuity
+
+Mục tiêu của CP-SYS-03 là giữ đúng ngữ cảnh semantic khi người dùng hỏi follow-up ngắn, đồng thời không làm thay đổi business search/booking flow.
+
+| Bước | Prompt | Kỳ vọng Natural & Professional | Semantic context / source |
+| :---: | :--- | :--- | :--- |
+| 1 | `Bóng đá có những tiện ích gì?` | Trả lời tiện ích cấp System Domain cho bóng đá. | `SYSTEM_DOMAIN` + `AMENITIES` + sport `FOOTBALL` → `SystemDomainContextService` |
+| 2 | `Còn cầu lông?` | Kế thừa `AMENITIES`, chỉ đổi sport thành `BADMINTON`; không hỏi ngày chơi. | Giữ operation/domain trước đó, không route thành `SEARCH_VENUE` |
+| 3 | `Bóng đá có những sản phẩm gì?` | Trả lời sản phẩm/dịch vụ cấp System Domain cho bóng đá. | `SYSTEM_DOMAIN` + `PRODUCTS` |
+| 4 | `Còn tennis?` | Kế thừa `PRODUCTS`, chỉ đổi sport thành `TENNIS`. | Giữ operation/domain trước đó |
+| 5 | `Tìm sân cầu lông tối nay.` | Quay về tìm sân/availability bình thường. | Explicit business request thắng context; `context_reset=True` |
+| 6 | `Sân đó có những tiện ích gì?` | Giữ operation `AMENITIES`, đổi sang venue đang được tham chiếu. | `VENUE_AMENITIES` + `result_field_ids`/venue context |
+
+Quy tắc áp dụng giống nhau cho Natural và Professional:
+
+- Follow-up ngắn ưu tiên `domain_context_type` của lượt trước.
+- Chỉ thay entity mà người dùng nêu rõ: sport, venue hoặc entity.
+- Từ khóa tìm sân, lịch trống, thời gian hoặc booking vẫn chuyển về business flow.
+- Dữ liệu sản phẩm/tiện ích được lấy từ `SystemDomainContextService`; LLM không tự mutation database.
+
+### CP-SYS-03 Final Check
+
+- Route smoke test: PASS.
+- Natural và Professional dùng cùng context resolver: PASS.
+- Intent metadata giữ `GET_VENUE_DETAIL` cho amenities và `GET_PRODUCTS` cho products: PASS.
+- Compile Python: PASS.
+- Router regression: 25 tests passed; Natural follow-up/multiturn: 10 tests passed.

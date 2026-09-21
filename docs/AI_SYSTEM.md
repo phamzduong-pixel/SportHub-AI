@@ -511,3 +511,50 @@ Hệ thống AI đã vượt qua toàn bộ các bài kiểm tra tự động v�
 
 
 
+
+## CP-SYS-03 — System Domain Context Continuity
+
+### Trạng thái hoàn thành
+
+SportHub AI hiện đã có lớp context resolution dùng chung cho Natural và Professional. Lớp này giữ lại semantic context của lượt trước khi người dùng hỏi follow-up ngắn, thay vì suy diễn lại thành một business search mới.
+
+Các nguyên tắc đang áp dụng:
+
+- Ưu tiên `previous semantic context` khi lượt hiện tại là follow-up ngắn như “còn cầu lông?”, “thế cầu lông thì sao?”, “còn môn này?”, “môn đó thì sao?” hoặc “sân đó thì sao?”.
+- Khi lượt trước thuộc `SYSTEM_DOMAIN`, giữ nguyên `domain` và `operation`; chỉ thay `sport`, `venue` hoặc entity mà người dùng nói rõ.
+- Không chuyển thành `SEARCH_VENUE` hoặc `AVAILABILITY` chỉ vì follow-up có tên môn thể thao.
+- Câu hỏi tìm sân có ý định rõ ràng, ví dụ “Tìm sân cầu lông tối nay”, vẫn đi qua business search/availability bình thường.
+- Natural và Professional dùng cùng source-of-truth cho system-domain context; khác biệt giữa hai mode chỉ nằm ở cách diễn đạt và chính sách trả lời.
+- Không tạo IntentRouter thứ hai, không thay đổi DB schema, không thêm RAG và không để LLM tự mutation DB.
+
+### Context resolution contract
+
+| Lượt trước | Follow-up | Kết quả mong đợi |
+|---|---|---|
+| Bóng đá có những tiện ích gì? | Còn cầu lông? | Giữ `SYSTEM_DOMAIN` + `AMENITIES`, đổi `sport` thành `BADMINTON` |
+| Bóng đá có những sản phẩm gì? | Còn tennis? | Giữ `SYSTEM_DOMAIN` + `PRODUCTS`, đổi `sport` thành `TENNIS` |
+| Sân ABC có những tiện ích gì? | Sân DEF thì sao? | Giữ `AMENITIES`, đổi `venue` thành `DEF` |
+| Bóng đá có những tiện ích gì? | Tiện ích của môn này? | Giữ `sport=FOOTBALL` + `AMENITIES` |
+| Bóng đá có những sản phẩm gì? | Còn môn này? | Giữ `sport` context + `PRODUCTS` |
+| Bất kỳ câu system-domain nào | Tìm sân cầu lông tối nay | Reset sang business `SEARCH_VENUE`/availability |
+
+### Kiến trúc trợ lý AI hiện có
+
+1. **Mode policy**: xác định Natural hoặc Professional và áp dụng policy tương ứng.
+2. **Intent routing**: nhận diện domain, operation và entity; xử lý context continuity cho follow-up.
+3. **System Domain Context Service**: nguồn sự thật dùng chung để resolve system-domain context và semantic state.
+4. **System Domain handlers**: xử lý amenities, products, venue detail và các truy vấn hệ thống liên quan.
+5. **Business flow**: xử lý tìm sân, availability và booking khi câu hỏi có ý định nghiệp vụ rõ.
+6. **Sports Knowledge / RAG / Web**: phục vụ câu hỏi kiến thức thể thao theo source phù hợp, tách khỏi business search và system-domain routing.
+7. **Response policy**: Natural ưu tiên diễn đạt tự nhiên; Professional ưu tiên câu trả lời chính xác, deterministic và đúng business flow.
+
+### Kiểm tra sau CP-SYS-03
+
+- Natural: đạt context/follow-up, entity switching, sport switching, System Domain và phân biệt đúng system query với business query.
+- Professional: giữ routing deterministic, dùng đúng System Domain context và không bị Natural routing làm ảnh hưởng.
+- Các smoke cases đã xác nhận: amenities → follow-up cầu lông; products → follow-up tennis; tìm sân cầu lông tối nay; và truy vấn amenities của sân được chọn.
+- Type/compile checks liên quan đã đạt; full test suite không chạy theo phạm vi kiểm tra tiết kiệm token.
+
+### Phạm vi bảo toàn
+
+CP-SYS-03 chỉ điều chỉnh context resolution và routing trực tiếp liên quan. Các flow booking/search khi người dùng thực sự muốn tìm sân, schema dữ liệu, RAG và mutation DB được giữ nguyên.

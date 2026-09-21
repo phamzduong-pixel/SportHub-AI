@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanSpeechText } from '../utils/cleanSpeechText.ts';
+import { splitIntoChunks } from './useSpeechSynthesis.ts';
 
 // Mock Web Speech API SpeechSynthesis and SpeechSynthesisUtterance
 class MockSpeechSynthesisUtterance {
@@ -414,5 +415,53 @@ describe('AI Assistant Auto-Speak & Message UI Active State Workflows', () => {
     assert.equal(speakerEnabled, false);
     assert.equal(isSpeaking, false);
     assert.equal(speakingId, null);
+  });
+});
+
+describe('splitIntoChunks & Cross-Device Regular Expression Compatibility', () => {
+  it('should return empty array for empty input', () => {
+    assert.deepEqual(splitIntoChunks(''), []);
+  });
+
+  it('should return single chunk if text is shorter than limit', () => {
+    const text = 'Chào bạn! Mình có thể giúp bạn tìm sân bóng đá.';
+    const result = splitIntoChunks(text);
+    assert.deepEqual(result, [text]);
+  });
+
+  it('should split long text into multiple chunks at sentence boundaries without lookbehinds', () => {
+    const sentence1 = 'Hiện tại SportHub AI có 5 cơ sở sân cầu lông còn trống vào khung giờ từ 18:00 đến 20:00 tối nay.';
+    const sentence2 = 'Bạn có thể chọn Sân Cầu Lông Kỳ Hòa tại Quận 10 với mức giá 120.000đ mỗi giờ.';
+    const sentence3 = 'Hoặc bạn có thể chọn Sân Cầu Lông Phú Thọ tại Quận 11 với nhiều tiện ích đi kèm như bãi giữ xe và phòng thay đồ rộng rãi.';
+    const longText = `${sentence1} ${sentence2} ${sentence3}`;
+
+    const chunks = splitIntoChunks(longText);
+    assert.ok(chunks.length >= 2, 'Should be split into at least 2 chunks');
+    chunks.forEach((chunk) => {
+      assert.ok(chunk.length <= 180, `Chunk length (${chunk.length}) should be <= 180 chars`);
+    });
+    // Ensure all content is retained
+    const joined = chunks.join(' ');
+    assert.ok(joined.includes('Kỳ Hòa'));
+    assert.ok(joined.includes('Phú Thọ'));
+  });
+
+  it('should hard split excessively long sentences without punctuation on word boundaries', () => {
+    const veryLongWordy = Array(40).fill('SportHub').join(' ');
+    const chunks = splitIntoChunks(veryLongWordy);
+    assert.ok(chunks.length >= 2);
+    chunks.forEach((chunk) => {
+      assert.ok(chunk.length <= 180);
+    });
+  });
+
+  it('should safely parse on Safari/WebKit regex engine without lookbehinds or invalid group specifiers', () => {
+    // Test that standard RegExp compilation passes for all regexes in the codebase
+    assert.doesNotThrow(() => {
+      new RegExp('[^.!?;:]+([.!?;:]+|$)', 'g');
+      new RegExp('(\\(\\s*Nguồn:[\\s\\S]*?\\))', 'gi');
+      new RegExp('\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)', 'gi');
+      new RegExp('(?:ở|tại|quanh)\\s+(.+?)(?:\\s+(?:có|còn|không)|[?.!,]|$)', 'i');
+    });
   });
 });

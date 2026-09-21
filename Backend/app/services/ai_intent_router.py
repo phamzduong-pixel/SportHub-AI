@@ -473,6 +473,34 @@ class IntentRoute:
 
 class IntentRouter:
     """Pure routing layer: it never reads SportHub repositories or mutates data."""
+    @staticmethod
+    def is_system_domain_followup(query: str, context: dict[str, Any] | None = None) -> bool:
+        """Return whether a short query continues a System Domain conversation."""
+        context = context or {}
+        domain_kind = context.get('domain_context_type')
+        if domain_kind not in {'sport_products', 'sport_amenities', 'venue_products', 'venue_amenities'}:
+            return False
+
+        normalized = normalize_text(query).strip().rstrip('?!.,;:')
+        if not normalized:
+            return False
+
+        explicit_business_terms = (
+            'tim san', 'tim co so', 'kiem san', 'muon tim san', 'toi muon tim',
+            'dat san', 'thue san', 'booking', 'lich trong', 'khung gio',
+            'con trong', 'con san nao', 'san nao', 'san bong', 'san cau long',
+            'san tennis', 'san pickleball', 'san bong ro', 'san bong chuyen',
+            'toi nay', 'toi mai', 'ngay mai', 'ngay kia', 'gio ', ' h',
+        )
+        if any(term in normalized for term in explicit_business_terms):
+            return False
+
+        continuation_terms = (
+            'con ', 'the ', 'vay ', 'thi sao', 'mon nay', 'mon do',
+            'mon the thao nay', 'mon the thao do', 'san nay', 'san do',
+            'co so nay', 'co so do', 'noi do',
+        )
+        return any(term in normalized for term in continuation_terms)
 
     def route(self, message: str, context: dict[str, Any] | None = None, *, today: date | None = None) -> IntentRoute:
         query = normalize_text(' '.join(message.strip().split()))
@@ -482,8 +510,12 @@ class IntentRouter:
         has_context = any(context.get(key) is not None for key in (
             'sport_type', 'location', 'booking_date', 'date', 'field_id', 'result_field_ids', 'booking_code',
             'partner_application_status', 'partner_application_id', 'last_intent',
+            'domain_context_type',
         ))
-        context_reset = has_context and self._starts_new_request(query, fresh_entities, context)
+        system_domain_followup = self.is_system_domain_followup(query, context)
+        context_reset = has_context and not system_domain_followup and self._starts_new_request(query, fresh_entities, context)
+        if context.get("sports_entities") and any(term in query for term in ("ho dang", "hai nguoi", "hai cau thu", "ca hai", "thi dau o dau", "dang thi dau")):
+            context_reset = False
         effective_context = {} if context_reset else context
         entities = self._entities(query, effective_context, current_date)
         follow_up = has_context and (
@@ -533,6 +565,17 @@ class IntentRouter:
             return IntentRoute(AssistantIntent.GOODBYE, 0.98, entities)
         if self._is_casual(query):
             return IntentRoute(AssistantIntent.CASUAL, 0.95, entities)
+
+        # Keep the semantic System Domain operation for short entity switches.
+        # The assistant may answer before business handlers, but its route
+        # must also remain GET_PRODUCTS/GET_VENUE_DETAIL for downstream policy
+        # and metadata consumers.
+        if system_domain_followup:
+            semantic_intent = (
+                AssistantIntent.GET_PRODUCTS if context.get('domain_context_type', '').endswith('_products')
+                else AssistantIntent.GET_VENUE_DETAIL
+            )
+            return IntentRoute(semantic_intent, 0.97, entities, False, follow_up, False)
 
         intent, confidence = self._match_intent(query, follow_up, effective_context, fresh_entities, entities)
         if intent is None:
@@ -1227,11 +1270,20 @@ class IntentRouter:
                     if extracted_sport is None:
                         extracted_sport = prev_sport_type
 
+        # Preserve multiple previously resolved entities for plural/pronominal follow-ups.
+        if context.get("sports_entities") and any(term in query for term in ("ho dang", "hai nguoi", "hai cau thu", "ca hai", "so sanh", "thi dau o dau", "dang thi dau")):
+            sports_entities = list(context["sports_entities"])
+        # Resume venue search using the previous search sport when the user refers back to it.
+        if extracted_sport is None and context.get("last_search") and any(term in query for term in ("tim san bong luc nay", "san bong luc nay", "mon do", "loai san do")):
+            extracted_sport = context["last_search"].get("sport_type") or context.get("sport_type")
+
         sports_entity = sports_entities[0] if sports_entities else None
         active_entity = sports_res.active_entity if sports_res.active_entity is not None else sports_entity
         recent_entities = sports_res.recent_entities
         if sports_res.is_return_to_business:
-            extracted_sport = None
+                extracted_sport = None
+                if context.get('last_search'):
+                    extracted_sport = context['last_search'].get('sport_type') or context.get('sport_type')
         elif sports_res.sport:
             extracted_sport = sports_res.sport
         elif extracted_sport is None and sports_matches:

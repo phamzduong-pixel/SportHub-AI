@@ -59,7 +59,12 @@ export function useSpeechRecognition({
   onEnd,
 }: UseSpeechRecognitionOptions = {}) {
   const [isListening, setIsListening] = useState(false);
-  const [isSupported, setIsSupported] = useState(true);
+  const [isSupported, setIsSupported] = useState(() => {
+    return (
+      typeof window !== 'undefined' &&
+      Boolean(window.SpeechRecognition || window.webkitSpeechRecognition)
+    );
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [finalTranscript, setFinalTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -84,6 +89,10 @@ export function useSpeechRecognition({
   }, [onTranscriptChange, onError, onEnd]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      setIsSupported(false);
+      return;
+    }
     const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognitionClass) {
       setIsSupported(false);
@@ -228,8 +237,21 @@ export function useSpeechRecognition({
         fullTranscript: '',
       };
       recognitionRef.current.start();
-    } catch (error) {
+    } catch (error: unknown) {
       console.warn('Error starting speech recognition:', error);
+      const err = error as { name?: string };
+      if (err?.name === 'InvalidStateError') {
+        // Recognition is already active or in transition, ignore
+      } else if (err?.name === 'NotAllowedError') {
+        const msg = 'Quyền truy cập microphone bị từ chối. Vui lòng cấp quyền micro trong cài đặt trình duyệt.';
+        setErrorMessage(msg);
+        onErrorRef.current?.(msg);
+      } else {
+        const msg = 'Không thể khởi động micro. Vui lòng kiểm tra lại thiết bị.';
+        setErrorMessage(msg);
+        onErrorRef.current?.(msg);
+      }
+      setIsListening(false);
     }
   }, [isSupported]);
 
