@@ -9,7 +9,7 @@ from app.main import app
 
 class AssistantRankingProvider:
     def generate_json(self, **kwargs):
-        available = kwargs['system_data']['available_slots']
+        available = kwargs.get('system_data', {}).get('available_slots', [])
         return {'status': 'OK', 'recommendations': [
             {'court_id': item['court_id'], 'slot_id': item['slot_id'], 'reason': 'Phù hợp nhu cầu đã chọn.'}
             for item in available[:3]

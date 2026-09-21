@@ -3,11 +3,17 @@ import unicodedata
 
 
 LOCATION_ALIASES = {
+    'viet nam': 'Việt Nam', 'vietnam': 'Việt Nam', 'vn': 'Việt Nam',
     'ha noi': 'Hà Nội', 'hanoi': 'Hà Nội',
     'thai nguyen': 'Thái Nguyên',
     'tp hcm': 'TP.HCM', 'tphcm': 'TP.HCM', 'ho chi minh': 'TP.HCM',
-    'sai gon': 'TP.HCM',
+    'sai gon': 'TP.HCM', 'tp ho chi minh': 'TP.HCM',
     'da nang': 'Đà Nẵng',
+    'hai duong': 'Hải Dương',
+    'phu tho': 'Phú Thọ',
+    'dong nai': 'Đồng Nai',
+    'binh duong': 'Bình Dương',
+    'ninh binh': 'Ninh Bình',
     'cau giay': 'Cầu Giấy', 'tay ho': 'Tây Hồ', 'hoan kiem': 'Hoàn Kiếm',
     'ba dinh': 'Ba Đình', 'dong da': 'Đống Đa', 'thanh xuan': 'Thanh Xuân',
     'nam tu liem': 'Nam Từ Liêm', 'bac tu liem': 'Bắc Từ Liêm',
@@ -52,11 +58,13 @@ def extract_location(query: str) -> str | None:
     if district:
         return canonical_location(district[0])
     ignore_tokens = {
-        'day', 'toi', 'san nao', 'san', 'co so', 're hon', 'trong', 'khung gio',
+        'day', 'do', 'noi nay', 'noi do', 'cho nay', 'cho do', 'tai day', 'tai do', 'o day', 'o do',
+        'tinh nay', 'tinh do', 'tp nay', 'thanh pho nay', 'khu vuc nay',
+        'toi', 'san nao', 'san', 'co so', 're hon', 'trong', 'khung gio',
         'slot', 'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen',
         'gia re', 're nhat', 're', 'dat san', 'ngay mai', 'hom nay',
         'vay con', 'vay', 'con co', 'con san', 'con', 'lieu', 'the thi', 'vay thi',
-        'o dau', 'cho nao', 'khu nao', 'co san', 'co khong', 'san khac', 'gan day',
+        'o dau', 'dau', 'cho nao', 'khu nao', 'co san', 'co khong', 'san khac', 'khac', 'nao', 'gan day',
     }
     patterns = (
         r'\b(?:o|tai|quanh|gan)\s+(?:san\s+|co\s+so\s+)?(.+?)(?=\s+(?:co|tim|con|ngay|luc|(?:(?<!quoc\s)gia)|duoi|khong|san\s+nao|co\s+so)\b|$)',

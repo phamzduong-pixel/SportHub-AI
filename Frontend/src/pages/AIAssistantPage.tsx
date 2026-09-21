@@ -123,7 +123,7 @@ export function AIAssistantPage() {
   const [messages, setMessages] = useState<Message[]>([createDefaultWelcomeMessage(initialCourtId, assistantMode)]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [loadingText, setLoadingText] = useState('Đang tìm sân phù hợp...');
+  const [loadingText, setLoadingText] = useState('Đang suy nghĩ câu trả lời...');
   const [contextFieldId, setContextFieldId] = useState<number | undefined>(initialCourtId);
   const [searchContext, setSearchContext] = useState<Record<string, unknown>>({});
   const [selectedSource, setSelectedSource] = useState<SourceCitation | null>(null);
@@ -338,12 +338,16 @@ export function AIAssistantPage() {
     setMessages((current) => [...current.map(clearInteractiveContent), { id: Date.now(), role: 'user', text }]);
     const location = text.match(/(?:ở|tại|quanh)\s+(.+?)(?:\s+(?:có|còn|không)|[?.!,]|$)/i)?.[1]?.trim();
     const partnerRequest = /chủ sân|đối tác|hồ sơ/i.test(text);
+    const isVenueSearch = /(?:tìm|thuê|đặt|xem|còn|giá)\s+(?:sân|cơ sở|bãi)/i.test(text) || /sân\s+(?:bóng|cầu lông|pickleball|tennis|bóng rổ|bóng chuyền)/i.test(text);
+    
     setLoadingText(
       partnerRequest
         ? 'Đang kiểm tra hồ sơ đối tác...'
-        : location
+        : isVenueSearch && location
           ? `Đang tìm sân ở ${location}...`
-          : 'Đang tìm sân phù hợp...'
+          : isVenueSearch
+            ? 'Đang tìm sân phù hợp...'
+            : 'Đang suy nghĩ câu trả lời...'
     );
     setLoading(true);
     requestRef.current?.abort();
@@ -696,7 +700,9 @@ export function AIAssistantPage() {
           <div ref={messagesRef} className="min-h-0 flex-1 space-y-4 sm:space-y-5 overflow-y-auto bg-slate-50/60 p-3 sm:p-6">
             {messages.map((message) => {
               const parsedCitations =
-                message.role === 'assistant' ? parseCitationsFromText(message.text) : { citations: [] };
+                message.role === 'assistant'
+                  ? parseCitationsFromText(message.text)
+                  : { citations: [], bodyText: message.text };
 
               return (
                 <div

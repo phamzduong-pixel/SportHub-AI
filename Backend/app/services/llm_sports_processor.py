@@ -184,6 +184,7 @@ Extract the structured information."""
             top = (getattr(entry, 'topic', '') or '').strip().lower()
             src = (getattr(entry, 'source_name', '') or getattr(entry, 'source', '') or '').strip().lower()
             entry_id = (getattr(entry, 'id', '') or '').strip()
+            q_text = (getattr(entry, 'question', '') or '').lower()
 
             # If targeting athletes/teams, filter out generic game rules (e.g. offside / việt vị)
             if target_topic in ('identity', 'cầu thủ', 'vận động viên', 'athletes') or target_entity:
@@ -196,9 +197,12 @@ Extract the structured information."""
             if target_entity:
                 target_ent_lower = target_entity.strip().lower()
                 if target_ent_lower == ent or target_ent_lower in ent:
-                    priority_weight += 2.0
+                    priority_weight += 2.5
                 elif ent and ent in target_ent_lower:
-                    priority_weight += 1.5
+                    priority_weight += 1.8
+                elif ent and ent != target_ent_lower:
+                    # Specific entity mismatch penalty
+                    priority_weight -= 2.0
 
             # Topic match bonus
             if target_topic:

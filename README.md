@@ -202,6 +202,7 @@ AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Sche
 
 ## Tài liệu
 
+- [Báo cáo tiến độ phiên 20/09/2026 — Hoàn thiện Natural Sports Assistant & Multi-Turn Context Resolution](docs/SESSION_PROGRESS_2026-09-20.md)
 - [Báo cáo tiến độ phiên 17/09/2026 — Multi-Attribute RAG, Tri thức Thể thao & Controlled Web Retrieval](docs/SESSION_PROGRESS_2026-09-17.md)
 - [Báo cáo tiến độ phiên 13/09/2026 — Chuẩn hóa Bộ lọc, Đồng bộ Hệ thống & Tối ưu Giao diện](docs/SESSION_PROGRESS_2026-09-13.md)
 - [Báo cáo Kiến trúc Trợ lý AI (SportHub AI Assistant Architecture)](docs/AI_ASSISTANT_ARCHITECTURE_REPORT.md)

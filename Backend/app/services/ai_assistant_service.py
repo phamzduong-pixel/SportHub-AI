@@ -16,9 +16,10 @@ from .inventory_service import InventoryService
 from .ai_domain_policy import (
     COMBINED_OUT_OF_SCOPE_REPLY, NO_DATA_REPLY, OUT_OF_SCOPE_REPLY,
     PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL,
-    ScopeClassification, ScopeDecision, ModeScopeEvaluation, evaluate_mode_scope,
+    ScopeClassification, ScopeDecision, ScopeDomain, ScopeRouter, ModeScopeEvaluation, evaluate_mode_scope,
+    generate_out_of_scope_redirect,
 )
-from .ai_intent_router import AssistantIntent, IntentRoute, IntentRouter
+from .ai_intent_router import AssistantIntent, IntentRoute, IntentRouter, is_business_intent
 from .rag_guardrail import RAGGuardrail
 from .rag_response_validator import validate_response
 from .ai_system_knowledge import match_system_knowledge
@@ -106,28 +107,39 @@ class AIAssistantService:
             router_context['field_id'] = context_field_id
         router_context = self._sanitize_context_for_mode(router_context, self._assistant_mode)
         self._conversation_context = router_context
+        
+        # Scope Router domain classification
+        scope_domain = ScopeRouter.classify_domain(query, router_context, self._assistant_mode)
+        
         route = self.intent_router.route(message, router_context, today=datetime.now(self.tz).date())
         self._active_route = route
         effective_context = {} if route.context_reset else router_context
+        if route.context_reset and router_context.get('business_context'):
+            effective_context['business_context'] = router_context['business_context']
         self._conversation_context = effective_context
 
         eval_res = evaluate_mode_scope(self._assistant_mode, route.intent, query=query)
         self._mode_evaluation = eval_res
         logger.info(
-            'Assistant mode=%s scope=%s intent=%s confidence=%.2f is_allowed=%s',
-            self._assistant_mode.value, eval_res.scope_decision.value, route.intent.value, route.confidence, eval_res.is_allowed,
+            'Assistant mode=%s scope_domain=%s scope_decision=%s intent=%s confidence=%.2f is_allowed=%s',
+            self._assistant_mode.value, scope_domain.value, eval_res.scope_decision.value, route.intent.value, route.confidence, eval_res.is_allowed,
         )
-
         if not eval_res.is_allowed:
-            reply_text = eval_res.refusal_reply or OUT_OF_SCOPE_REPLY
             if getattr(route, 'is_combined_out_of_scope', False) and eval_res.scope_decision == ScopeDecision.OUT_OF_SCOPE:
                 reply_text = COMBINED_OUT_OF_SCOPE_REPLY
+            elif eval_res.scope_decision == ScopeDecision.SPORTS_KNOWLEDGE and self._assistant_mode == AssistantMode.PROFESSIONAL:
+                reply_text = eval_res.refusal_reply or PROFESSIONAL_SPORTS_KNOWLEDGE_REFUSAL
+            else:
+                reply_text = generate_out_of_scope_redirect(query, router_context, self._assistant_mode)
             return self._response(
                 reply_text, SearchCriteria(), [], needs_clarification=False,
                 classification=eval_res.classification, status='OUT_OF_SCOPE',
             )
         if route.intent == AssistantIntent.OUT_OF_SCOPE:
-            reply_text = COMBINED_OUT_OF_SCOPE_REPLY if getattr(route, 'is_combined_out_of_scope', False) else OUT_OF_SCOPE_REPLY
+            if getattr(route, 'is_combined_out_of_scope', False):
+                reply_text = COMBINED_OUT_OF_SCOPE_REPLY
+            else:
+                reply_text = generate_out_of_scope_redirect(query, router_context, self._assistant_mode)
             return self._response(
                 reply_text, SearchCriteria(), [], needs_clarification=False,
                 classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
@@ -324,10 +336,9 @@ class AIAssistantService:
             AssistantIntent.SEARCH_VENUE, AssistantIntent.RECOMMEND_VENUE,
             AssistantIntent.FOLLOW_UP, AssistantIntent.CHECK_AVAILABILITY, AssistantIntent.RECOMMEND_SLOT,
         }
-        location_first_request = (criteria.requested_field_id is None) and (
+        location_first_request = (criteria.requested_field_id is None) and criteria.booking_date is None and (
             bool(criteria.location) or (
-                criteria.booking_date is None
-                and criteria.start_minute is None
+                criteria.start_minute is None
                 and any(term in query for term in ('co san', 'san nao', 'toi muon san', 'muon san'))
             )
         )
@@ -654,8 +665,18 @@ class AIAssistantService:
             )
         role = self.current_user.role if self.current_user else 'CUSTOMER'
         sport = route.entities.sport_type
-        target_entities = route.entities.sports_entities or ([route.entities.sports_entity] if route.entities.sports_entity else [])
+        if route.entities.sport_type and route.entities.active_entity is None and not route.entities.sports_entities:
+            target_entities = []
+        else:
+            target_entities = route.entities.sports_entities or (
+                [route.entities.active_entity] if route.entities.active_entity
+                else ([route.entities.sports_entity] if route.entities.sports_entity else [])
+            )
         guardrail = self.guardrail
+
+        # ── Query Rewriting & Normalization ────────────────────────────
+        # Use deterministic rewrite first if available
+        effective_query = getattr(route.entities, 'rewritten_query', None) or query
 
         # ── LLM Query Understanding Phase ─────────────────────────────
         # Use LLM to resolve entities/aliases, detect follow-up, rewrite query.
@@ -665,7 +686,6 @@ class AIAssistantService:
         llm_understanding = llm_processor.understand_query(
             query, conversation_messages=conversation_messages, context=self._conversation_context,
         )
-        effective_query = query  # query used for RAG retrieval
         if llm_understanding:
             logger.info(
                 'LLM understanding: entities=%s sport=%s topic=%s follow_up=%s rewrite=%s',
@@ -676,14 +696,13 @@ class AIAssistantService:
             if llm_understanding.entities and not target_entities:
                 target_entities = llm_understanding.entities
             elif llm_understanding.entities:
-                # Prefer LLM entities if they resolve more specifically
                 for llm_ent in llm_understanding.entities:
                     if llm_ent not in target_entities:
                         target_entities.append(llm_ent)
             # Use LLM sport if deterministic didn't find one
             if llm_understanding.sport and not sport:
                 sport = llm_understanding.sport
-            # Use rewritten query for retrieval (resolves pronouns/follow-ups)
+            # Use LLM rewritten query if available
             if llm_understanding.rewritten_query and llm_understanding.rewritten_query != query:
                 effective_query = llm_understanding.rewritten_query
 
@@ -704,6 +723,8 @@ class AIAssistantService:
                 if not retrieved and ent:
                     search_query = f"{ent} {effective_query}"
                     retrieved = guardrail.retrieve_context(search_query, role, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
+                if not retrieved and route.entities.competition and route.entities.competition != ent:
+                    retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=route.entities.competition, assistant_mode=self._assistant_mode)
                 if not retrieved:
                     retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
                 eval_res = guardrail.evaluate_freshness_and_sufficiency(effective_query, retrieved)
@@ -718,8 +739,8 @@ class AIAssistantService:
         for ent in target_entities:
             all_evidence.extend(entity_retrievals.get(ent, []))
 
-        target_ent = target_entities[0] if (target_entities and target_entities[0]) else None
-        target_top = llm_understanding.topic if llm_understanding else None
+        target_ent = target_entities[0] if (target_entities and target_entities[0]) else (route.entities.active_entity or route.entities.sports_entity)
+        target_top = (llm_understanding.topic if llm_understanding else None) or route.entities.current_topic
         grounded = llm_processor.generate_grounded_response(
             effective_query,
             all_evidence,
@@ -746,16 +767,22 @@ class AIAssistantService:
             response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
             if route.entities.sports_entities:
                 response['understood']['sports_entities'] = route.entities.sports_entities
-            if first_entry and first_entry.entity:
-                response['understood']['sports_entity'] = first_entry.entity
-            elif route.entities.sports_entity:
-                response['understood']['sports_entity'] = route.entities.sports_entity
+            resolved_active = target_ent or (first_entry.entity if first_entry else None)
+            if resolved_active:
+                response['understood']['active_entity'] = resolved_active
+                response['understood']['sports_entity'] = resolved_active
+            if route.entities.recent_entities:
+                response['understood']['recent_entities'] = route.entities.recent_entities
             if first_entry and first_entry.sport:
                 response['understood']['sport_type'] = first_entry.sport
-            elif route.entities.sport_type:
-                response['understood']['sport_type'] = route.entities.sport_type
-            if first_entry and getattr(first_entry, 'topic', None):
+            elif sport:
+                response['understood']['sport_type'] = sport
+            if target_top:
+                response['understood']['current_topic'] = target_top
+                response['understood']['entity_type'] = target_top
+            elif first_entry and getattr(first_entry, 'topic', None):
                 response['understood']['entity_type'] = first_entry.topic
+                response['understood']['current_topic'] = first_entry.topic
             response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
             return response
 
@@ -770,7 +797,7 @@ class AIAssistantService:
         role: str, sport: str | None, target_entities: list,
         entity_retrievals: dict, guardrail: RAGGuardrail,
     ):
-        """Original deterministic sports knowledge response builder — used as fallback when LLM is unavailable."""
+        """Deterministic sports knowledge response builder — used as fallback when LLM is unavailable."""
         norm_q = plain(query)
         requested_topics = {}
         topic_labels = {
@@ -783,21 +810,36 @@ class AIAssistantService:
             'achievements': 'thành tích',
         }
 
-        if any(p in norm_q for p in ('la ai', 'gioi thieu', 'tieu su', 'profil')):
-            requested_topics['identity'] = topic_labels['identity']
-        if any(p in norm_q for p in ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh vao ngay', 'sinh ngay bao nhieu', 'sinh ngay nao')):
+        if any(p in norm_q for p in ('cup wc', 'wc', 'world cup', 'cup the gioi')):
+            if not any(p in norm_q for p in ('to chuc o dau', 'dien ra o dau', 'dang cai', 'vua pha luoi', 'ghi ban', 'thang ai')):
+                requested_topics['world_cup'] = 'FIFA World Cup'
+                requested_topics['achievements'] = topic_labels['achievements']
+        elif any(p in norm_q for p in ('c1', 'cup c1', 'champions league', 'uefa champions league')):
+            if not any(p in norm_q for p in ('to chuc o dau', 'dien ra o dau', 'dang cai', 'vua pha luoi', 'ghi ban', 'thang ai')):
+                requested_topics['champions_league'] = 'UEFA Champions League'
+                requested_topics['achievements'] = topic_labels['achievements']
+        elif any(p in norm_q for p in ('qua bong vang', 'may qua', 'may qua bong vang', 'ballon d\'or', 'ballon dor')):
+            requested_topics['ballon_dor'] = 'Quả bóng vàng'
+            requested_topics['achievements'] = topic_labels['achievements']
+        elif any(p in norm_q for p in ('thanh tich', 'danh hieu', 'giai thuong', 'huy chuong', 'cup', 'vo dich')):
+            requested_topics['achievements'] = topic_labels['achievements']
+
+        if any(p in norm_q for p in ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh vao ngay', 'sinh ngay bao nhieu', 'sinh ngay nao', 'bao nhieu tuoi')):
             requested_topics['birth_date'] = topic_labels['birth_date']
         if any(p in norm_q for p in ('sinh o dau', 'noi sinh', 'que o dau', 'que quan', 'sinh tai', 'que o')):
             requested_topics['birth_place'] = topic_labels['birth_place']
-        if any(p in norm_q for p in ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'clb nao', 'doi nao', 'dang da', 'thi dau o dau', 'choi o dau')):
+        if any(p in norm_q for p in ('quoc gia nao', 'den tu dau', 'den tu quoc gia', 'o nuoc nao', 'thuoc nuoc nao')):
+            requested_topics['country'] = 'quốc gia'
+            requested_topics['birth_place'] = topic_labels['birth_place']
+        if any(p in norm_q for p in ('la ai', 'gioi thieu', 'tieu su', 'profil', 'la doi nao', 'la doi bong nao', 'la clb nao', 'la doi', 'la clb')):
+            requested_topics['identity'] = topic_labels['identity']
+        elif any(p in norm_q for p in ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'clb nao', 'doi nao', 'dang da', 'thi dau o dau', 'choi o dau', 'da o dau', 'o doi nao', 'thi dau cho clb', 'thi dau cho clb nao')):
             requested_topics['current_club'] = topic_labels['current_club']
         if any(p in norm_q for p in ('trang thai', 'giai nghe', 'con thi dau', 'da gia tu', 'giai nghe chua', 'da giai nghe')):
             requested_topics['status'] = topic_labels['status']
         if any(p in norm_q for p in ('qua trinh thi dau', 'su nghiep', 'tung thi dau', 'cac clb')):
             requested_topics['career'] = topic_labels['career']
-        if any(p in norm_q for p in ('thanh tich', 'danh hieu', 'giai thuong', 'qua bong vang', 'huy chuong', 'cup', 'vo dich')):
-            requested_topics['achievements'] = topic_labels['achievements']
-        if any(p in norm_q for p in ('chieu cao', 'cao bao nhieu')):
+        if any(p in norm_q for p in ('chieu cao', 'cao bao nhieu')) and not any(p in norm_q for p in ('kich thuoc', 'luoi', 'vanh')):
             requested_topics['height'] = 'chiều cao'
         if any(p in norm_q for p in ('can nang', 'nang bao nhieu')):
             requested_topics['weight'] = 'cân nặng'
@@ -807,32 +849,145 @@ class AIAssistantService:
             requested_topics['salary'] = 'tiền lương/thu nhập'
         if any(p in norm_q for p in ('vo', 'ban gai', 'gia dinh', 'con cai', 'ket hon')):
             requested_topics['family'] = 'gia đình/đời tư'
+        if any(p in norm_q for p in ('to chuc o dau', 'dien ra o dau', 'dang cai o dau', 'dia diem to chuc', 'dia diem')):
+            requested_topics['host_location'] = 'địa điểm tổ chức'
+        if any(p in norm_q for p in ('vua pha luoi', 'ghi ban', 'ai ghi ban', 'ghi nhieu ban nhat', 'top scorer', 'cau thu ghi ban')):
+            requested_topics['top_scorer'] = 'vua phá lưới/cầu thủ ghi bàn'
+        if any(p in norm_q for p in ('thang ai', 'danh bai ai', 'ha ai', 'thang doi nao', 'chung ket', 'tran chung ket')):
+            requested_topics['match_result'] = 'kết quả trận đấu'
+        if any(p in norm_q for p in ('thanh lap', 'ngay thanh lap', 'nam thanh lap', 'thanh lap khi nao', 'thanh lap nam nao', 'ra mat khi nao', 'thanh lap vao nam')):
+            requested_topics['founded'] = 'ngày/năm thành lập'
 
         TOPIC_ALIASES = {
             'cầu thủ': 'identity',
             'vận động viên': 'identity',
             'profile': 'identity',
             'tiểu sử': 'identity',
+            'clb bóng đá': ('identity', 'achievements'),
+            'clb bóng đá nữ': ('identity', 'achievements'),
+            'clb bóng đá nam': ('identity', 'achievements'),
+            'đội bóng thái nguyên': ('identity', 'achievements'),
+            'clb bóng đá thái nguyên': ('identity', 'achievements'),
+            'bóng đá nữ thái nguyên': ('identity', 'achievements'),
+            'bóng đá nam thái nguyên': ('identity', 'achievements'),
+            'số lượng clb bóng đá': 'identity',
+            'clb chuyên nghiệp thái nguyên': 'identity',
+            'bóng đá sinh viên ictu': 'identity',
+            'thành tích bóng đá ictu': ('achievements', 'career'),
+            'giải bóng đá ictu cup': 'identity',
+            'bóng đá nữ ictu': 'identity',
+            'bóng đá khoa cntt ictu': 'identity',
+            'bóng đá khoa kỹ thuật công nghệ ictu': 'identity',
+            'phân biệt ictu và thái nguyên t&t': 'identity',
+            'phân biệt ictu và fc thái nguyên': 'identity',
+            'đội bóng sinh viên thái nguyên': 'identity',
+            'phong trào thể thao ictu': 'identity',
+            'cầu lông ictu': 'identity',
+            'bóng chuyền ictu': 'identity',
+            'bóng bàn ictu': 'identity',
+            'pickleball ictu': 'identity',
+            'clb thể thao ictu': 'identity',
+            'tổng quan thể thao thái nguyên': 'identity',
+            'tổng quan thể thao hà nội': 'identity',
+            'clb bóng đá hà nội': 'identity',
+            'clb bóng rổ hà nội': 'identity',
+            'bóng chuyền hà nội': 'identity',
+            'cầu lông hà nội': 'identity',
+            'thể thao đại học hà nội': 'identity',
+            'tổng quan thể thao tp.hcm': 'identity',
+            'clb bóng đá tp.hcm': 'identity',
+            'clb bóng rổ tp.hcm': 'identity',
+            'cầu lông tp.hcm': 'identity',
+            'bóng bàn tp.hcm': 'identity',
+            'bóng chuyền tp.hcm': 'identity',
+            'giải đấu': 'identity',
         }
 
         all_answers = []
         all_citations = []
-        seen_sources = set()
         first_entry = None
 
         is_multi = len([e for e in target_entities if e]) > 1
 
         for ent in target_entities:
             retrieved = entity_retrievals.get(ent, [])
-            if not retrieved or (ent is None and any(k in norm_q for k in ('cau thu', 'vdv', 'van dong vien', 'tay vot', 'hlv', 'huan luyen vien')) and not any(k in norm_q for k in ('cac cau thu', 'cac vdv', 'nhung cau thu', 'phong trao', 'luat', 'kich thuoc', 'tieu chuan', 'huong dan'))):
+            if not retrieved:
                 target_label = ent if ent else "nội dung này"
                 all_answers.append(f"Hiện tại SportHub AI chưa có thông tin kiểm chứng về {target_label} trong cơ sở dữ liệu.")
                 continue
 
+            candidates = [entry for entry, score in retrieved]
+            if ent is None and any(k in norm_q for k in ('cau thu', 'vdv', 'van dong vien', 'tay vot', 'hlv', 'huan luyen vien')) and not any(k in norm_q for k in ('cac cau thu', 'cac vdv', 'nhung cau thu', 'phong trao', 'luat', 'kich thuoc', 'tieu chuan', 'huong dan')):
+                q_words = [w for w in norm_q.split() if len(w) >= 3 and w not in ('cau', 'thu', 'bong', 'hien', 'dang', 'thi', 'dau', 'cho', 'clb', 'nao', 'la', 'ai')]
+                has_relevant_content = any(
+                    any(w in plain(f"{getattr(e, 'question', getattr(e, 'title', ''))} {getattr(e, 'answer', getattr(e, 'snippet', ''))}") for w in q_words)
+                    for e in candidates
+                ) if q_words else bool(candidates)
+                if not has_relevant_content:
+                    all_answers.append("Hiện tại SportHub AI chưa có thông tin kiểm chứng về nội dung này trong cơ sở dữ liệu.")
+                    continue
+
             seen_answers = set()
             selected_entries = []
-            for entry, score in retrieved:
-                norm_ans = plain(entry.answer)
+
+            # If user asks a specific tournament or trophy question, prioritize entries explicitly matching that target
+            target_trophy = getattr(route.entities, 'target_trophy', None)
+            has_specific_target = target_trophy or any(k in requested_topics for k in ('world_cup', 'champions_league', 'ballon_dor', 'current_club', 'birth_date', 'birth_place', 'host_location', 'top_scorer', 'match_result'))
+
+            candidates = [entry for entry, score in retrieved]
+            if has_specific_target:
+                # Filter down to entries that match the specific topic/target
+                filtered_candidates = []
+                for e in candidates:
+                    q_str = getattr(e, 'question', getattr(e, 'title', ''))
+                    a_str = getattr(e, 'answer', getattr(e, 'snippet', ''))
+                    q_norm = plain(q_str)
+                    a_norm = plain(a_str)
+                    combined = f"{q_norm} {a_norm}"
+                    top_k = (getattr(e, 'topic', '') or "").lower()
+                    top_k_val = TOPIC_ALIASES.get(top_k, top_k)
+                    top_k_keys = set(top_k_val) if isinstance(top_k_val, (list, tuple, set)) else {top_k_val}
+
+                    matches_target = False
+                    if 'world_cup' in requested_topics and ('world cup' in combined or 'wc' in combined):
+                        matches_target = True
+                    if 'champions_league' in requested_topics and ('champions league' in combined or 'c1' in combined or 'cúp c1' in combined):
+                        matches_target = True
+                    if 'ballon_dor' in requested_topics and ('quả bóng vàng' in combined or 'ballon' in combined or 'qua bong vang' in combined):
+                        matches_target = True
+                    if 'current_club' in requested_topics and ('current_club' in top_k_keys or any(k in combined for k in ('thi dau cho', 'khoac ao', 'clb', 'choi cho', 'real madrid', 'inter miami', 'al-nassr', 'cong an ha noi', 'becamex', 'phu dong'))):
+                        matches_target = True
+                    if 'birth_date' in requested_topics and ('birth_date' in top_k_keys or 'sinh ngay' in combined or 'ngay sinh' in combined):
+                        matches_target = True
+                    if 'birth_place' in requested_topics and ('birth_place' in top_k_keys or 'country' in requested_topics or 'sinh ra tai' in combined or 'que' in combined or 'phu tho' in combined or 'serbia' in combined):
+                        matches_target = True
+                    if 'country' in requested_topics and ('birth_place' in top_k_keys or 'serbia' in combined or 'quoc gia' in combined or 'my' in combined or 'viet nam' in combined):
+                        matches_target = True
+                    if 'status' in requested_topics and ('status' in top_k_keys or 'chua giai nghe' in combined or 'giai nghe' in combined):
+                        matches_target = True
+                    if 'career' in requested_topics and ('career' in top_k_keys or 'su nghiep' in combined or 'qua trinh' in combined):
+                        matches_target = True
+                    if 'achievements' in requested_topics and ('achievements' in top_k_keys or 'danh hieu' in combined or 'thanh tich' in combined or 'vo dich' in combined):
+                        matches_target = True
+                    if 'host_location' in requested_topics and ('host_location' in top_k_keys or any(k in combined for k in ('to chuc o', 'dien ra tai', 'dang cai', 'dia diem to chuc', 'my', 'canada', 'mexico', 'qatar'))):
+                        matches_target = True
+                    if 'top_scorer' in requested_topics and ('top_scorer' in top_k_keys or any(k in combined for k in ('vua pha luoi', 'ghi ban', 'mbappe', 'ronaldo', 'messi', '8 ban'))):
+                        matches_target = True
+                    if 'match_result' in requested_topics and ('match_result' in top_k_keys or any(k in combined for k in ('thang', 'danh bai', 'ha', 'chung ket', 'phap', 'argentina', 'pen', 'luan luu'))):
+                        matches_target = True
+                    if 'founded' in requested_topics and ('founded' in top_k_keys or any(k in combined for k in ('thanh lap vao', 'ngay thanh lap', 'nam thanh lap', 'thanh lap nam'))):
+                        matches_target = True
+                    if 'identity' in requested_topics and (bool(top_k_keys & {'identity', 'profile', 'cầu thủ', 'vận động viên'}) or any(k in combined for k in ('la cau thu', 'la tien dao', 'tien dao huyen thoai', 'sieu sao', 'la ai', 'profile', 'sinh ra tai', 'khoac ao', 'cau lac bo', 'clb', 'doi bong'))):
+                        matches_target = True
+
+                    if matches_target:
+                        filtered_candidates.append(e)
+
+                if filtered_candidates:
+                    candidates = filtered_candidates
+
+            for entry in candidates:
+                norm_ans = plain(getattr(entry, 'answer', getattr(entry, 'snippet', '')))
                 if norm_ans not in seen_answers:
                     seen_answers.add(norm_ans)
                     selected_entries.append(entry)
@@ -842,15 +997,46 @@ class AIAssistantService:
 
             retrieved_topics = set()
             for e in selected_entries:
-                top_key = (e.topic or "").lower()
-                top_key = TOPIC_ALIASES.get(top_key, top_key)
-                retrieved_topics.add(top_key)
+                top_key = (getattr(e, 'topic', '') or "").lower()
+                top_val = TOPIC_ALIASES.get(top_key, top_key)
+                if isinstance(top_val, (list, tuple, set)):
+                    for tk in top_val:
+                        retrieved_topics.add(tk)
+                elif top_val:
+                    retrieved_topics.add(top_val)
+                combined_e = plain(f"{getattr(e, 'question', '')} {getattr(e, 'answer', getattr(e, 'snippet', ''))}")
+                if 'world cup' in combined_e or 'wc' in combined_e:
+                    retrieved_topics.add('world_cup')
+                    retrieved_topics.add('achievements')
+                if 'champions league' in combined_e or 'c1' in combined_e:
+                    retrieved_topics.add('champions_league')
+                    retrieved_topics.add('achievements')
+                if 'qua bong vang' in combined_e or 'ballon' in combined_e:
+                    retrieved_topics.add('ballon_dor')
+                    retrieved_topics.add('achievements')
+                if 'sinh ngay' in combined_e or 'ngay sinh' in combined_e:
+                    retrieved_topics.add('birth_date')
+                if 'sinh ra tai' in combined_e or 'que o' in combined_e:
+                    retrieved_topics.add('birth_place')
+                if 'thi dau cho' in combined_e or 'khoac ao' in combined_e or 'clb' in combined_e:
+                    retrieved_topics.add('current_club')
+                if 'chua giai nghe' in combined_e or 'da giai nghe' in combined_e:
+                    retrieved_topics.add('status')
+                if 'qua trinh' in combined_e or 'su nghiep' in combined_e:
+                    retrieved_topics.add('career')
+                if any(k in combined_e for k in ('to chuc o', 'dien ra tai', 'dang cai', 'dia diem')):
+                    retrieved_topics.add('host_location')
+                if any(k in combined_e for k in ('vua pha luoi', 'ghi ban', 'mbappe', '8 ban')):
+                    retrieved_topics.add('top_scorer')
+                if any(k in combined_e for k in ('thang', 'danh bai', 'ha', 'chung ket', 'phap')):
+                    retrieved_topics.add('match_result')
 
             missing_labels = []
+            logger.warning('DEBUG missing_labels=%s requested_topics=%s retrieved_topics=%s selected_entries=%s', missing_labels, requested_topics, retrieved_topics, [e.id for e in selected_entries])
             if requested_topics:
                 for top_key, label in requested_topics.items():
                     if top_key not in retrieved_topics:
-                        ans_combined = plain(" ".join(e.answer for e in selected_entries))
+                        ans_combined = plain(" ".join(getattr(e, 'answer', getattr(e, 'snippet', '')) for e in selected_entries))
                         if top_key == 'birth_date' and any(k in ans_combined for k in ('sinh ngay', 'thang', 'nam 19', 'nam 20')):
                             continue
                         if top_key == 'birth_place' and any(k in ans_combined for k in ('sinh ra tai', 'que o', 'huyen', 'tinh', 'thanh pho')):
@@ -859,11 +1045,13 @@ class AIAssistantService:
                             continue
                         if top_key == 'identity' and len(selected_entries) > 0:
                             continue
+                        if top_key in ('world_cup', 'champions_league', 'ballon_dor') and 'achievements' in retrieved_topics:
+                            continue
                         missing_labels.append(label)
 
-            ent_answers = [validate_response(e.answer) for e in selected_entries]
+            ent_answers = [validate_response(getattr(e, 'answer', getattr(e, 'snippet', ''))) for e in selected_entries]
             if missing_labels:
-                entity_name = ent or (selected_entries[0].entity if selected_entries else "")
+                entity_name = ent or (selected_entries[0].entity if selected_entries and hasattr(selected_entries[0], 'entity') else "")
                 entity_str = f" của {entity_name}" if entity_name else ""
                 missing_text = f"(Lưu ý: Hiện tại SportHub AI chưa có thông tin kiểm chứng về {', '.join(missing_labels)}{entity_str} trong cơ sở dữ liệu)."
                 ent_answers.append(missing_text)
@@ -901,8 +1089,12 @@ class AIAssistantService:
             response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
             if route.entities.sports_entities:
                 response['understood']['sports_entities'] = route.entities.sports_entities
-            if route.entities.sports_entity:
-                response['understood']['sports_entity'] = route.entities.sports_entity
+            active_ent = route.entities.active_entity or route.entities.sports_entity
+            if active_ent:
+                response['understood']['active_entity'] = active_ent
+                response['understood']['sports_entity'] = active_ent
+            if route.entities.recent_entities:
+                response['understood']['recent_entities'] = route.entities.recent_entities
             if route.entities.sport_type:
                 response['understood']['sport_type'] = route.entities.sport_type
             response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
@@ -926,18 +1118,39 @@ class AIAssistantService:
         response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
         if route.entities.sports_entities:
             response['understood']['sports_entities'] = route.entities.sports_entities
-        if first_entry and first_entry.entity:
-            response['understood']['sports_entity'] = first_entry.entity
-        elif route.entities.sports_entity:
-            response['understood']['sports_entity'] = route.entities.sports_entity
+        
+        resolved_active = route.entities.active_entity or (first_entry.entity if first_entry else (route.entities.sports_entity or (target_entities[0] if target_entities else None)))
+        if resolved_active:
+            response['understood']['active_entity'] = resolved_active
+            response['understood']['sports_entity'] = resolved_active
+        if route.entities.recent_entities:
+            response['understood']['recent_entities'] = route.entities.recent_entities
 
         if first_entry and first_entry.sport:
             response['understood']['sport_type'] = first_entry.sport
+            response['understood']['sport'] = first_entry.sport
         elif route.entities.sport_type:
             response['understood']['sport_type'] = route.entities.sport_type
+            response['understood']['sport'] = route.entities.sport_type
 
-        if first_entry and getattr(first_entry, 'topic', None):
-            response['understood']['entity_type'] = first_entry.topic
+        if route.entities.entity_type:
+            response['understood']['entity_type'] = route.entities.entity_type
+        elif first_entry and getattr(first_entry, 'entity_type', None):
+            response['understood']['entity_type'] = getattr(first_entry, 'entity_type')
+
+        if route.entities.location:
+            response['understood']['location'] = route.entities.location
+
+        if route.entities.competition:
+            response['understood']['competition'] = route.entities.competition
+
+        if getattr(route.entities, 'year', None):
+            response['understood']['year'] = route.entities.year
+            response['understood']['competition_year'] = route.entities.year
+
+        curr_top = route.entities.current_topic or (first_entry.topic if first_entry else None)
+        if curr_top:
+            response['understood']['current_topic'] = curr_top
 
         response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
         return response
@@ -1213,19 +1426,30 @@ class AIAssistantService:
         )
 
     def _merge_context(self, criteria: SearchCriteria, context: dict[str, Any], query: str):
-        values = {
-            'sport_type': context.get('sport_type'),
-            'court_type': context.get('court_type'),
-            'location': context.get('location'),
-            'max_price': context.get('max_price'),
-            'people': context.get('people'),
-        }
+        b_ctx = context.get('business_context') or {}
+        is_return_biz = getattr(getattr(self, '_active_route', None), 'entities', None) and getattr(self._active_route.entities, 'is_return_to_business', False)
+        if is_return_biz and b_ctx:
+            values = {
+                'sport_type': b_ctx.get('sport_type') or context.get('sport_type'),
+                'court_type': b_ctx.get('court_type') or context.get('court_type'),
+                'location': b_ctx.get('location') or context.get('location'),
+                'max_price': b_ctx.get('max_price') or context.get('max_price'),
+                'people': b_ctx.get('people') or context.get('people'),
+            }
+        else:
+            values = {
+                'sport_type': context.get('sport_type') or b_ctx.get('sport_type'),
+                'court_type': context.get('court_type') or b_ctx.get('court_type'),
+                'location': context.get('location') or b_ctx.get('location'),
+                'max_price': context.get('max_price') or b_ctx.get('max_price'),
+                'people': context.get('people') or b_ctx.get('people'),
+            }
         clearing_court = any(term in query for term in (
             'san khac', 'co so khac', 'con san nao', 'con san khac',
             'vay con san nao', 'con san nao khong', 'san nao khac',
         ))
         if not clearing_court:
-            values['requested_field_id'] = context.get('field_id')
+            values['requested_field_id'] = context.get('field_id') or b_ctx.get('field_id')
         else:
             criteria.requested_field_id = None
         for name, value in values.items():
@@ -1237,15 +1461,17 @@ class AIAssistantService:
                 criteria.sport_type = field_ctx.sport_type
                 if not criteria.location:
                     criteria.location = field_ctx.location
-        if criteria.booking_date is None and context.get('booking_date'):
+        booking_date_val = context.get('booking_date') or b_ctx.get('booking_date')
+        if criteria.booking_date is None and booking_date_val:
             try:
-                criteria.booking_date = date.fromisoformat(str(context['booking_date']))
+                criteria.booking_date = date.fromisoformat(str(booking_date_val))
             except ValueError:
                 pass
         for name, key in (('start_minute', 'start_time'), ('end_minute', 'end_time')):
-            if getattr(criteria, name) is None and context.get(key):
+            val = context.get(key) or b_ctx.get(key)
+            if getattr(criteria, name) is None and val:
                 try:
-                    hour, minute = map(int, str(context[key]).split(':')[:2])
+                    hour, minute = map(int, str(val).split(':')[:2])
                     setattr(criteria, name, hour * 60 + minute)
                 except (TypeError, ValueError):
                     pass
@@ -1279,12 +1505,48 @@ class AIAssistantService:
         entities.update({key: value for key, value in criteria_entities.items() if value is not None})
         understood = self._understood(criteria)
         for key in (
-            'sport_type', 'court_type', 'booking_date', 'start_time', 'end_time', 'location', 'field_id',
+            'sport_type', 'sport', 'court_type', 'booking_date', 'start_time', 'end_time', 'location', 'field_id',
             'time_slot_id', 'max_price', 'people', 'result_field_ids', 'result_time_slot_ids',
-            'result_prices', 'reference_price', 'sports_entity', 'entity_type',
+            'result_prices', 'reference_price', 'sports_entity', 'active_entity', 'recent_entities',
+            'entity_type', 'competition', 'team', 'athlete', 'current_topic', 'scope_domain',
         ):
             if understood.get(key) is None and self._conversation_context.get(key) is not None:
                 understood[key] = self._conversation_context[key]
+        
+        # Populate athlete / team from route if present
+        if route and getattr(route.entities, 'athlete', None) and not understood.get('athlete'):
+            understood['athlete'] = route.entities.athlete
+        if route and getattr(route.entities, 'team', None) and not understood.get('team'):
+            understood['team'] = route.entities.team
+
+        # Maintain dual context: business context snapshot across sports knowledge shifts
+        if is_business_intent(route.intent if route else None):
+            business_ctx = {
+                'sport_type': criteria.sport_type or understood.get('sport_type'),
+                'location': criteria.location or understood.get('location'),
+                'booking_date': criteria.booking_date.isoformat() if criteria.booking_date else understood.get('booking_date'),
+                'start_time': self._format_minutes(criteria.start_minute) or understood.get('start_time'),
+                'end_time': self._format_minutes(criteria.end_minute) or understood.get('end_time'),
+                'max_price': criteria.max_price or understood.get('max_price'),
+                'court_type': criteria.court_type or understood.get('court_type'),
+                'field_id': criteria.requested_field_id or understood.get('field_id'),
+            }
+            understood['business_context'] = {k: v for k, v in business_ctx.items() if v is not None}
+        elif self._conversation_context.get('business_context'):
+            understood['business_context'] = self._conversation_context['business_context']
+        elif (criteria.sport_type or criteria.location) and (route is None or route.intent != AssistantIntent.SPORTS_KNOWLEDGE):
+            business_ctx = {
+                'sport_type': criteria.sport_type or understood.get('sport_type'),
+                'location': criteria.location or understood.get('location'),
+                'booking_date': criteria.booking_date.isoformat() if criteria.booking_date else understood.get('booking_date'),
+                'start_time': self._format_minutes(criteria.start_minute) or understood.get('start_time'),
+                'end_time': self._format_minutes(criteria.end_minute) or understood.get('end_time'),
+                'max_price': criteria.max_price or understood.get('max_price'),
+                'court_type': criteria.court_type or understood.get('court_type'),
+                'field_id': criteria.requested_field_id or understood.get('field_id'),
+            }
+            understood['business_context'] = {k: v for k, v in business_ctx.items() if v is not None}
+
         understood['last_intent'] = route.intent.value if route else intent
         final_reply = reply
         if route and getattr(route, 'is_combined_out_of_scope', False) and route.intent != AssistantIntent.OUT_OF_SCOPE:
@@ -1316,8 +1578,11 @@ class AIAssistantService:
         sanitized = dict(context)
         if mode == AssistantMode.PROFESSIONAL:
             sanitized.pop('sports_entity', None)
+            sanitized.pop('active_entity', None)
+            sanitized.pop('recent_entities', None)
             sanitized.pop('sports_entities', None)
             sanitized.pop('entity_type', None)
+            sanitized.pop('current_topic', None)
             if sanitized.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value:
                 sanitized.pop('last_intent', None)
         return sanitized

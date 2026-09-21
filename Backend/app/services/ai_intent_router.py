@@ -392,9 +392,9 @@ OUT_OF_SCOPE_TERMS = (
     'lich su viet', 'chinh tri', 'suc khoe', 'benh', 'thuoc',
     'tai chinh', 'chung khoan', 'bitcoin', 'crypto', 'tien ao', 'phap luat', 'luat su',
     'viet bai', 'bai tho', 'viet cv', 'tao cv', 'dich thuat', 'dich sang', 'dich tieng anh', 'tieng anh',
-    'thoi tiet', 'tin tuc', 'thit cho', 'mon an', 'nau an', 'cach nau', 'cong thuc', 'lam banh',
+    'thoi tiet', 'tin tuc', 'thit cho', 'mon an', 'nau an', 'cach nau', 'cong thuc', 'lam banh', 'an gi', 'uong gi',
     'phim', 'am nhac', 'du lich', 'chuyen cuoi', 'ke chuyen',
-    'tu van tinh cam', 'tinh yeu', 'sua may tinh', 'cai win',
+    'tu van tinh cam', 'tinh yeu', 'sua may tinh', 'cai win', 'sua xe', 'xe may', 'sua xe may', 'cach sua xe', 'sua o to', 'o to',
     'dich doan', 'dich cau', 'tuyen sinh', 'hoc phi', 'diem chuan', 'nganh hoc', 'nhap hoc', 'xet tuyen',
 )
 DOMAIN_TERMS = (
@@ -430,9 +430,20 @@ class IntentEntities:
     number_of_players: int | None = None
     booking_code: str | None = None
     sports_entity: str | None = None
+    active_entity: str | None = None
+    entity_type: str | None = None
+    competition: str | None = None
+    year: str | None = None
+    recent_entities: list[str] = field(default_factory=list)
+    current_topic: str | None = None
+    target_trophy: str | None = None
+    rewritten_query: str | None = None
     sports_entities: list[str] = field(default_factory=list)
     venue_names: list[str] = field(default_factory=list)
     sport_types: list[str] = field(default_factory=list)
+    athlete: str | None = None
+    team: str | None = None
+    is_return_to_business: bool = False
     is_conditional: bool = False
     conditional_note: str | None = None
     is_meme_or_joke: bool = False
@@ -488,16 +499,16 @@ class IntentRouter:
         if self._is_nonsense(query):
             return IntentRoute(AssistantIntent.NONSENSE, 0.99, fresh_entities, context_reset=True)
 
-        has_unsupported_sport = any(term in query for term in UNSUPPORTED_SPORTS_TERMS)
+        has_unsupported_sport = any(bool(re.search(r'\b' + re.escape(term) + r'\b', query)) for term in UNSUPPORTED_SPORTS_TERMS)
         if has_unsupported_sport and not fresh_entities.sports_entities:
             return IntentRoute(AssistantIntent.OUT_OF_SCOPE, 0.99, fresh_entities, context_reset=True)
 
-        has_out_of_scope = any(term in query for term in OUT_OF_SCOPE_TERMS)
-        has_domain_term = any(term in query for term in (
+        has_out_of_scope = any(bool(re.search(r'\b' + re.escape(term) + r'\b', query)) for term in OUT_OF_SCOPE_TERMS)
+        has_domain_term = any(bool(re.search(r'\b' + re.escape(term) + r'\b', query)) for term in (
             'cho san', 'dat san', 'tim san', 'xem san', 'thue san', 'san con trong',
             'lich trong', 'booking', 'sporthub', 'chu san', 'san nao', 'co san',
             'san the thao', 'san bong', 'san cau long', 'san tennis', 'san pickleball',
-            'khung gio', 'slot'
+            'khung gio', 'slot', 'doi lich', 'doi gio', 'huy san', 'huy booking', 'huy don',
         )) or bool(re.search(r'\bsan\b', query)) or fresh_entities.sport_type is not None or fresh_entities.venue_name is not None
 
         if has_out_of_scope:
@@ -564,6 +575,11 @@ class IntentRouter:
         ))):
             return AssistantIntent.PARTNER_APPLICATION_SUPPORT, 0.98
         if any(term in query for term in (
+            'thoi tim san', 'quay lai tim san', 'quay lai dat san', 'tim san luc nay', 'san luc nay',
+            'dat san luc nay', 'thoi xem san', 'quay lai xem san', 'thoi kiem san', 'tim san bong luc nay',
+        )):
+            return AssistantIntent.SEARCH_VENUE, 0.95
+        if any(term in query for term in (
             'cong suat', 'thap diem', 'cao diem', 'it khach', 'gio vang',
             'chay uu dai', 'khuyen mai luc nao', 'san nao vang', 'lap day', 'ty le lap day',
         )):
@@ -604,7 +620,8 @@ class IntentRouter:
             'huong dan chu san', 'huong dan thanh toan', 'huong dan danh gia', 'huong dan tao san',
             'cach su dung', 'cach dat san', 'lam the nao de dat san', 'lam sao de dat san',
             'sporthub lam duoc gi', 'tro ly nay lam duoc gi', 'lam duoc gi', 'chuc nang', 'tro ly lam gi',
-            'giup toi nhung gi', 'giup duoc gi', 'hoat dong nhu the nao', 'sporthub la gi',
+            'giup toi nhung gi', 'giup duoc gi', 'sporthub la gi',
+            'sporthub hoat dong nhu the nao', 'he thong hoat dong nhu the nao', 'tro ly hoat dong nhu the nao', 'app hoat dong nhu the nao',
             'vai tro', 'phan quyen', 'cac buoc dat san', 'danh gia san', 'lam the nao de danh gia',
             'lam the nao de tim san', 'cach tim san', 'lam sao de tim san',
             'dieu kien dang ky chu san', 'yeu cau dang ky owner', 'can gi de dang ky lam chu san',
@@ -613,7 +630,7 @@ class IntentRouter:
             'chu san quan ly san pham', 'thue vot bong', 'san pham phu tro', 'xem doanh thu chu san',
             'admin quan ly', 'duyet ho so chu san', 'duyet co so', 'phe duyet co so',
             'bao lau thi duyet', 'thoi gian duyet', 'phi dang ky chu san', 'phi duy tri',
-        )) or ('huong dan' in query and any(term in query for term in DOMAIN_TERMS)):
+        )) or (('huong dan' in query or 'hoat dong nhu the nao' in query) and any(term in query for term in ('sporthub', 'he thong', 'tro ly', 'app', 'ung dung', 'san', 'chu san', 'owner', 'booking', 'dat coc', 'tai khoan'))):
             return AssistantIntent.SYSTEM_GUIDE, 0.95
         if any(term in query for term in ('bao nhieu co so', 'co bao nhieu co so', 'so luong co so')):
             return AssistantIntent.SEARCH_VENUE, 0.96
@@ -719,8 +736,9 @@ class IntentRouter:
                     'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'con mon khac', 'mon khac', 'co doi'
                 )):
                     return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
+            effective_sport_type = fresh_entities.sport_type or (entities.sport_type if entities else None) or context.get('sport_type')
             has_supported_sport = (
-                fresh_entities.sport_type in SUPPORTED_SPORTS
+                effective_sport_type in SUPPORTED_SPORTS
                 or any(k in query for k in SPORT_ALIASES)
                 or any(k in query for k in ('vff', 'fifa', 'v-league', 'vba', 'ictu cup', 'cau thu', 'tay vot', 'van dong vien', 'vdv'))
                 or (any(k in query for k in ('clb', 'cau lac bo', 'doi bong', 'doi tuyen')) and any(k in query for k in ('la ai', 'ai la', 'tieu su', 'thanh tich', 'vo dich', 'o dau', 'thanh lap')))
@@ -729,6 +747,7 @@ class IntentRouter:
                 if any(term in query for term in (
                     'la ai', 'ai la', 'tieu su', 'bao nhieu tuoi', 'sinh nam', 'que o dau',
                     'o dau co nhung gi', 'co nhung gi', 'co gi noi bat', 'co nhung ai', 'nhung ai', 'noi tieng',
+                    'ai gioi', 'gioi', 'noi bat', 'tieu bieu', 'xuat sac', 'hang dau', 'co ai',
                     'choi cho doi nao', 'da cho doi nao', 'clb nao', 'doi bong nao', 'doi nao', 'nhung doi nao',
                     'co nhung doi nao', 'co doi nao', 'cac doi nao', 'nhung clb nao', 'co nhung clb nao', 'co clb nao',
                     'doi tuyen', 'tuyen quoc gia', 'tuyen nu', 'tuyen nam',
@@ -747,7 +766,7 @@ class IntentRouter:
                     'san van dong', 'svd', 'khu lien hop', 'cau lac bo', 'clb', 'hoc vien',
                     'o thai nguyen', 'o viet nam', 'the gioi', 'quoc te', 'nhu the nao', 'the nao',
                     'co gi', 'la gi', 'y nghia'
-                )):
+                )) or fresh_entities.current_topic in ('athletes', 'identity', 'achievements'):
                     return AssistantIntent.SPORTS_KNOWLEDGE, 0.94
 
         # General Search / Availability matching
@@ -1002,6 +1021,8 @@ class IntentRouter:
         sports_entities: list[str] = []
         seen_entities = set()
         for _, _, sport, name in sports_matches:
+            if extracted_sport and sport and sport != extracted_sport:
+                continue
             if name not in seen_entities:
                 seen_entities.add(name)
                 sports_entities.append(name)
@@ -1010,6 +1031,9 @@ class IntentRouter:
         sports_res = SportsContextResolver.resolve(query, context)
         if sports_res.sport and extracted_sport is None:
             extracted_sport = sports_res.sport
+        if sports_res.active_entity and sports_res.active_entity not in sports_entities:
+            sports_entities.insert(0, sports_res.active_entity)
+            seen_entities.add(sports_res.active_entity)
         for ent in sports_res.entities:
             if ent not in sports_entities:
                 sports_entities.append(ent)
@@ -1155,7 +1179,9 @@ class IntentRouter:
                 'thi dau cho clb nao', 'thi dau cho doi nao', 'dang da cho', 'dang thi dau', 'dang choi',
                 'sinh nam bao nhieu', 'sinh ngay nao', 'sinh o dau', 'que o dau', 'bao nhieu tuoi', 'co bao nhieu ban thang',
                 'danh hieu', 'vo dich nam nao', 'thanh tich gi', 'da giai nghe chua', 'giai nghe chua',
-                'quoc tich gi', 'trang thai thi dau', 'qua trinh thi dau'
+                'quoc tich gi', 'trang thai thi dau', 'qua trinh thi dau',
+                'thang ai', 'danh bai ai', 'ha ai', 'thang doi nao', 'danh bai doi nao', 'ha doi nao',
+                'to chuc o dau', 'dien ra o dau', 'dang cai o dau', 'vua pha luoi', 'ai ghi ban'
             ))
             if is_loc_followup:
                 prev_str = " ".join(context.get('sports_entities', [])) + " " + str(context.get('sports_entity', '')) + " " + str(context.get('location', ''))
@@ -1187,22 +1213,29 @@ class IntentRouter:
                         sports_entities.append(f"Bóng đá {loc_target}")
                         extracted_sport = 'bóng đá'
 
+            # Do not inherit previous athlete/team if sport has explicitly changed
             if is_followup and not sports_entities:
-                prev_entities = context.get('sports_entities')
-                if prev_entities and isinstance(prev_entities, list):
-                    for pe in prev_entities:
-                        if pe not in sports_entities:
-                            sports_entities.append(pe)
-                elif context.get('sports_entity'):
-                    sports_entities.append(context.get('sports_entity'))
-                if extracted_sport is None:
-                    extracted_sport = context.get('sport_type')
+                prev_sport_type = context.get('sport_type')
+                if not extracted_sport or not prev_sport_type or extracted_sport == prev_sport_type:
+                    prev_entities = context.get('sports_entities')
+                    if prev_entities and isinstance(prev_entities, list):
+                        for pe in prev_entities:
+                            if pe not in sports_entities:
+                                sports_entities.append(pe)
+                    elif context.get('sports_entity'):
+                        sports_entities.append(context.get('sports_entity'))
+                    if extracted_sport is None:
+                        extracted_sport = prev_sport_type
 
         sports_entity = sports_entities[0] if sports_entities else None
-        if extracted_sport is None and sports_matches:
-            extracted_sport = sports_matches[0][2]
-        if extracted_sport is None and sports_res.sport:
+        active_entity = sports_res.active_entity if sports_res.active_entity is not None else sports_entity
+        recent_entities = sports_res.recent_entities
+        if sports_res.is_return_to_business:
+            extracted_sport = None
+        elif sports_res.sport:
             extracted_sport = sports_res.sport
+        elif extracted_sport is None and sports_matches:
+            extracted_sport = sports_matches[0][2]
 
         venue_names = self._venue_names(query)
         venue_name = venue_names[0] if venue_names else None
@@ -1211,7 +1244,7 @@ class IntentRouter:
             sport_type=extracted_sport,
             court_type=self._court_type(query),
             venue_name=venue_name,
-            location=extract_location(query),
+            location=extract_location(query) or sports_res.location,
             date=self._date(query, today),
             start_time=start_time,
             end_time=end_time,
@@ -1220,9 +1253,23 @@ class IntentRouter:
             number_of_players=self._players(query),
             booking_code=self._booking_code(query),
             sports_entity=sports_entity,
+            active_entity=active_entity,
+            entity_type=sports_res.entity_type,
+            competition=sports_res.competition,
+            year=sports_res.year,
+            recent_entities=recent_entities,
+            current_topic=sports_res.topic,
+            target_trophy=sports_res.target_trophy,
+            rewritten_query=sports_res.rewritten_query,
             sports_entities=sports_entities,
             venue_names=venue_names,
             sport_types=sport_types,
+            athlete=sports_res.athlete,
+            team=sports_res.team,
+            is_return_to_business=sports_res.is_return_to_business,
+            is_conditional=sports_res.is_conditional,
+            conditional_note=sports_res.conditional_note,
+            is_meme_or_joke=sports_res.is_meme_or_joke,
         )
         aliases = {
             'sport_type': ('sport_type',), 'court_type': ('court_type',), 'venue_name': ('venue_name', 'field_name'),
@@ -1231,16 +1278,30 @@ class IntentRouter:
             'preferred_time': ('preferred_time',), 'max_price': ('max_price', 'price_max'),
             'number_of_players': ('number_of_players', 'people'),
             'booking_code': ('booking_code',),
+            'active_entity': ('active_entity', 'sports_entity'),
         }
         for target, keys in aliases.items():
             if getattr(result, target) is None:
-                value = next((context.get(key) for key in keys if context.get(key) is not None), None)
+                if target == 'active_entity' and result.sport_type and context.get('sport_type') and result.sport_type != context.get('sport_type'):
+                    continue
+                if sports_res.is_return_to_business and context.get('business_context'):
+                    value = next((context['business_context'].get(key) for key in keys if context['business_context'].get(key) is not None), None)
+                    if value is None:
+                        value = next((context.get(key) for key in keys if context.get(key) is not None), None)
+                else:
+                    value = next((context.get(key) for key in keys if context.get(key) is not None), None)
                 if value is not None:
                     setattr(result, target, value)
         return result
 
     @staticmethod
     def _starts_new_request(query: str, entities: IntentEntities, context: dict[str, Any]) -> bool:
+        if any(term in query for term in (
+            'thoi tim san', 'quay lai tim san', 'quay lai dat san', 'tim san luc nay', 'san luc nay',
+            'dat san luc nay', 'thoi xem san', 'quay lai xem san', 'thoi kiem san', 'tim san bong luc nay',
+            'tiep tuc tim san', 'quay lai san', 'quay lai luc nay', 'quay lai'
+        )):
+            return False
         explicitly_searching = any(term in query for term in (
             'tim san', 'tim co so', 'kiem san', 'goi y san', 'toi muon san', 'muon tim san', 'dat san',
         ))
@@ -1249,15 +1310,20 @@ class IntentRouter:
         previous_sport = context.get('sport_type')
         is_sports_context = context.get('last_intent') == AssistantIntent.SPORTS_KNOWLEDGE.value
         is_sports_followup = is_sports_context and any(term in query for term in (
-            'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'o day', 'con mon', 'mon khac', 'cac mon', 'co doi'
+            'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'o day', 'con mon', 'mon khac', 'cac mon', 'co doi',
+            'con ', 'the con', 'vay con', 'anh ay', 'ong ay', 'ong nay', 'cau thu nay', 'cau thu do'
         ))
         changed_sport = bool(entities.sport_type and previous_sport and entities.sport_type != previous_sport)
-        if is_sports_followup:
+        if is_sports_followup or (is_sports_context and not explicitly_searching):
             changed_sport = False
         previous_location = context.get('location')
         changed_location = bool(entities.location and previous_location and entities.location != previous_location)
-        previous_entity = context.get('sports_entity')
+        if is_sports_context and not explicitly_searching:
+            changed_location = False
+        previous_entity = context.get('active_entity') or context.get('sports_entity')
         changed_entity = bool(entities.sports_entity and previous_entity and entities.sports_entity != previous_entity)
+        if is_sports_context and not explicitly_searching:
+            changed_entity = False
         return explicitly_searching or changed_sport or changed_location or changed_entity or from_sports_to_search or from_search_to_sports
 
     @staticmethod

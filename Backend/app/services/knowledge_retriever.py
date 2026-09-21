@@ -248,6 +248,15 @@ class KnowledgeRetriever:
         'bong da nam thai nguyen': 'Bóng đá nam Thái Nguyên',
         'clb bong da thai nguyen': 'Bóng đá Thái Nguyên',
         'cau lac bo bong da thai nguyen': 'Bóng đá Thái Nguyên',
+        # Tournaments
+        'world cup': 'FIFA World Cup',
+        'fifa world cup': 'FIFA World Cup',
+        'champions league': 'UEFA Champions League',
+        'uefa champions league': 'UEFA Champions League',
+        'c1': 'UEFA Champions League',
+        'cup c1': 'UEFA Champions League',
+        'v-league': 'V-League',
+        'vleague': 'V-League',
         'clb thai nguyen': 'Bóng đá Thái Nguyên',
         'cau lac bo thai nguyen': 'Bóng đá Thái Nguyên',
         'bong da thai nguyen': 'Bóng đá Thái Nguyên',
@@ -428,19 +437,38 @@ class KnowledgeRetriever:
         'cầu lông tp.hcm': 'identity',
         'bóng bàn tp.hcm': 'identity',
         'bóng chuyền tp.hcm': 'identity',
+        'giải đấu': 'identity',
     }
 
     TOPIC_PATTERNS = {
-        'identity': ('la ai', 'gioi thieu', 'tieu su', 'profil', 'ai la', 'la doi nao', 'la doi bong nao', 'la clb nao', 'la doi', 'la clb', 'co nhung doi nao', 'co nhung clb nao', 'co nhung doi bong nao', 'co nhung clb', 'co nhung clb bong ro', 'co nhung mon nao', 'co nhung mon the thao nao', 'ngoai bong da con co mon gi', 'con co mon gi'),
-        'birth_date': ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh ngay bao nhieu', 'sinh ngay nao', 'sinh vao ngay', 'sinh vao ngay nao'),
-        'birth_place': ('sinh o dau', 'noi sinh', 'que o dau', 'que quan', 'sinh tai', 'que o'),
-        'current_club': ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'thi dau cho clb nao', 'thi dau cho doi nao', 'choi cho doi nao', 'da cho clb nao', 'thi dau o dau', 'choi o dau'),
+        'identity': ('la ai', 'gioi thieu', 'tieu su', 'profil', 'ai la', 'la doi nao', 'la doi bong nao', 'la clb nao', 'la doi', 'la clb', 'co nhung doi nao', 'co nhung doi', 'co nhung clb nao', 'co nhung doi bong nao', 'co nhung clb', 'co nhung clb bong ro', 'co nhung mon nao', 'co nhung mon the thao nao', 'ngoai bong da con co mon gi', 'con co mon gi'),
+        'birth_date': ('sinh ngay', 'ngay sinh', 'sinh nam', 'sinh ngay bao nhieu', 'sinh ngay nao', 'sinh vao ngay', 'sinh vao ngay nao', 'bao nhieu tuoi'),
+        'birth_place': ('sinh o dau', 'noi sinh', 'que o dau', 'que quan', 'sinh tai', 'que o', 'quoc gia nao', 'den tu dau', 'den tu quoc gia', 'o nuoc nao', 'thuoc nuoc nao'),
+        'current_club': ('clb hien tai', 'doi hien tai', 'dang choi cho', 'dang thi dau cho', 'khoac ao', 'dang da cho', 'thi dau cho clb nao', 'thi dau cho clb', 'thi dau cho doi nao', 'thi dau cho', 'choi cho doi nao', 'da cho clb nao', 'thi dau o dau', 'choi o dau', 'da o dau', 'dang da', 'dang choi', 'khoac ao doi nao', 'o doi nao', 'clb nao', 'doi nao', 'doi bong nao', 'clb bong chuyen nao', 'clb bong ro nao', 'clb bong da nao'),
         'career': ('qua trinh thi dau', 'su nghiep', 'tung thi dau', 'cac clb', 'qua trinh', 'thi dau o dau', 'thi dau tai dau'),
         'status': ('trang thai', 'giai nghe', 'con thi dau', 'da gia tu', 'giai nghe chua', 'da giai nghe'),
-        'achievements': ('thanh tich', 'danh hieu', 'giai thuong', 'qua bong vang', 'huy chuong', 'cup vo dich', 'chuc vo dich', 'vo dich', 'gianh cup'),
+        'achievements': (
+            'thanh tich', 'danh hieu', 'giai thuong', 'qua bong vang', 'huy chuong', 'cup vo dich',
+            'chuc vo dich', 'vo dich', 'gianh cup', 'cup', 'wc', 'world cup', 'cup wc', 'c1', 'cup c1',
+            'champions league', 'may qua', 'bao nhieu qua', 'bao nhieu cup', 'may cup', 'vo dich chua',
+            'co cup chua', 'da co cup', 'co wc', 'co world cup', 'co c1', 'co qua bong vang', 'ballon d\'or', 'ballon dor'
+        ),
+        'host_location': ('to chuc o dau', 'dien ra o dau', 'dang cai o dau', 'dia diem to chuc', 'dia diem', 'to chuc tai dau', 'dien ra tai dau'),
+        'top_scorer': ('vua pha luoi', 'ghi ban', 'ai ghi ban', 'ghi nhieu ban nhat', 'top scorer', 'cau thu ghi ban', 'chiec giay vang'),
+        'match_result': ('thang ai', 'danh bai ai', 'ha ai', 'thang doi nao', 'danh bai doi nao', 'ha doi nao', 'chung ket', 'tran chung ket', 'vuot qua ai', 'vuot qua doi nao'),
         'founded': ('thanh lap', 'ngay thanh lap', 'nam thanh lap', 'thanh lap nam nao', 'thanh lap khi nao', 'ra mat khi nao', 'thanh lap vao nam'),
         'community': ('phong trao', 'phat trien phong trao', 'phat trien the nao', 'hoat dong sinh vien', 'tap luyen'),
     }
+
+    def _resolve_all_entity_aliases(self, norm_query: str) -> list[str]:
+        """Return all matching canonical entity names in the query."""
+        results = []
+        for alias_key in self._ALIAS_KEYS_SORTED:
+            if alias_key in norm_query:
+                canon = self.ENTITY_ALIASES[alias_key]
+                if canon not in results:
+                    results.append(canon)
+        return results
 
     def _resolve_entity_alias(self, norm_query: str) -> Optional[str]:
         """Return the canonical entity name if the query contains a known alias, else None."""
@@ -468,14 +496,15 @@ class KnowledgeRetriever:
             or (target_norm and (target_norm == norm_ent or target_norm in norm_ent or norm_ent in target_norm))
         )
 
-        # Alias resolution: if direct match failed, check if the query contains a known alias
-        # that resolves to the same canonical entity as this entry.
+        # Alias resolution: if direct match failed, check if any alias in the query
+        # resolves to the same canonical entity as this entry.
         if not matches_entity and norm_ent:
-            resolved = self._resolve_entity_alias(norm_query)
-            if resolved and self._normalize(resolved) == norm_ent:
-                matches_entity = True
-                # Merge resolved canonical entity tokens so non-entity token filtering works correctly
-                ent_tokens = set(self._normalize(resolved).split())
+            resolved_all = self._resolve_all_entity_aliases(norm_query)
+            for resolved in resolved_all:
+                if self._normalize(resolved) == norm_ent:
+                    matches_entity = True
+                    ent_tokens = set(self._normalize(resolved).split())
+                    break
 
         # Strip entity phrases from query when checking topic patterns to prevent false topic matches
         query_for_topic = norm_query
@@ -510,41 +539,53 @@ class KnowledgeRetriever:
 
         # If query is an individual/athlete/person question, prevent matching generic sport rules
         is_person_inquiry = any(p in norm_query for p in (
-            'la ai', 'ai la', 'tieu su', 'profil', 'sinh nam', 'sinh ngay', 'que o', 'que quan', 'chieu cao', 'khoac ao',
+            'la ai', 'ai la', 'tieu su', 'profil', 'sinh nam', 'sinh ngay', 'que o', 'que quan', 'khoac ao',
             'van dong vien', 'vdv', 'cau thu', 'tay vot', 'co ai', 'nhung ai', 'ai gioi', 'ai dang la', 'nguoi choi',
-        ))
+        )) and not any(p in norm_query for p in ('kich thuoc', 'chieu cao luoi', 'chieu cao vanh', 'luat', 'san'))
         entry_id_norm = (getattr(entry, 'id', '') or '').lower()
         entry_top_norm = (entry.topic or '').lower()
-        is_rule_entry = 'rule' in entry_id_norm or entry_top_norm in ('rules', 'luật', 'luật bóng đá', 'luật cầu lông')
+        is_rule_entry = 'rule' in entry_id_norm or entry_top_norm in ('rules', 'luật', 'luật thi đấu', 'luật bóng đá', 'luật cầu lông')
         is_general_sport_rule = is_rule_entry or (entry.entity and self._normalize(entry.entity) in ('bong da', 'cau long', 'bong ro', 'bong chuyen', 'bong ban', 'tennis', 'pickleball', 'the thao'))
         if is_person_inquiry and is_general_sport_rule:
             return 0.10
 
+        has_specific_trophy_in_q = any(k in norm_query for k in ('wc', 'world cup', 'c1', 'champions league', 'qua bong vang', 'ballon d\'or', 'ballon dor', 'qua bong'))
+
         if matches_entity:
             if topic_match:
+                if has_specific_trophy_in_q:
+                    doc_combined = (norm_question + " " + self._normalize(entry.answer))
+                    for k in ('world cup', 'wc', 'champions league', 'c1', 'qua bong vang', 'ballon d\'or', 'ballon dor'):
+                        if k in norm_query and (
+                            k in doc_combined
+                            or ('c1' in norm_query and 'champions league' in doc_combined)
+                            or ('wc' in norm_query and 'world cup' in doc_combined)
+                            or ('qua bong vang' in norm_query and 'ballon d\'or' in doc_combined)
+                        ):
+                            return 0.98
                 return 0.95
+            if topic_mismatch or (has_specific_trophy_in_q and entry_top_norm in ('identity', 'profile', 'cầu thủ', 'vận động viên')):
+                return 0.20
             non_ent_q_tokens = [t for t in q_tokens if t not in ent_tokens]
             if not non_ent_q_tokens:
                 # Pure entity lookup e.g. "Messi", "Đội tuyển Việt Nam"
                 return 0.90
-            if topic_mismatch:
-                return 0.20
             # Common inquiry / question particles in Vietnamese
-            inquiry_tokens = {'co', 'khong', 'la', 'gi', 'the', 'nao', 'o', 'dau', 'cho', 'hoi', 've', 'ra', 'sao', 'nhu', 'nhung', 'ai'}
+            inquiry_tokens = {'co', 'khong', 'la', 'gi', 'the', 'nao', 'o', 'dau', 'cho', 'hoi', 've', 'ra', 'sao', 'nhu', 'nhung', 'ai', 'con', 'sinh', 'va', 'cac'}
             content_non_ent = [t for t in non_ent_q_tokens if t not in inquiry_tokens]
             if not content_non_ent:
-                # Pure entity inquiry e.g. "Thái Nguyên có cầu lông không?", "Giải bóng đá Nữ Quốc gia là gì?"
+                # Pure entity inquiry e.g. "Thái Nguyên có cầu lông không?", "Giải bóng đá Nữ Quốc gia là gì?", "Còn Thùy Linh sinh ở đâu?"
                 return 0.90
             # Follow-up phrases e.g. "con ... thi sao", "anh ay the nao"
             is_followup = any(t in non_ent_q_tokens for t in ('con', 'the', 'sao', 'thi', 'anh', 'ay', 'ong', 'co', 'chi'))
-            doc_ans_tokens = set(self._normalize(entry.answer).split()) if entry.answer else set()
-            matching_non_ent = [t for t in content_non_ent if t in doc_q_tokens or t in doc_ans_tokens]
+            doc_combined_tokens = set(self._normalize(f"{entry.question or ''} {entry.answer or ''} {entry.entity or ''}").split())
+            matching_non_ent = [t for t in content_non_ent if t in doc_combined_tokens]
             non_ent_recall = len(matching_non_ent) / len(content_non_ent) if content_non_ent else 0.0
             if is_followup and len(non_ent_q_tokens) <= 4:
                 return 0.85
             if non_ent_recall == 0.0 and len(content_non_ent) >= 2:
                 return 0.20
-            return 0.60 + 0.35 * non_ent_recall
+            return 0.70 + 0.25 * non_ent_recall
 
         # If the query asks about a specific person/entity ("... là ai?", "... sinh năm nào?", "đang thi đấu cho CLB nào?", etc.) but no entity matched,
         # do not match random general rules or other players.
@@ -556,7 +597,7 @@ class KnowledgeRetriever:
         if is_entity_inquiry:
             return 0.10
 
-        # Fallback if no entity match: check if query is asking for general athletes / players / stars in a sport
+        # Fallback if no entity match: check if query is asking for general athletes / players / stars in a sport, or sport + location overview
         is_sport_athletes_inquiry = any(p in norm_query for p in (
             'van dong vien', 'vdv', 'tay vot', 'cau thu', 'nguoi choi', 'co ai', 'nhung ai',
             'ai dang la', 'ai la van dong vien', 'ai la cau thu', 'ai la tay vot', 'ai gioi',
@@ -564,7 +605,9 @@ class KnowledgeRetriever:
             'cac van dong vien', 'nhung van dong vien', 'cac cau thu', 'nhung cau thu', 'cac tay vot',
             'danh sach van dong vien', 'danh sach cau thu', 'danh sach tay vot'
         ))
-        if is_sport_athletes_inquiry:
+        is_sport_location_inquiry = any(p in norm_query for p in ('phong trao', 'thong tin', 'nhu the nao', 'the nao', 'phat trien', 'co gi', 'co nhung'))
+        
+        if is_sport_athletes_inquiry or is_sport_location_inquiry:
             entry_id = getattr(entry, 'id', '') or ''
             entry_top = (entry.topic or '').lower()
             if 'rule' in entry_id.lower() or entry_top in ('rules', 'luật'):
@@ -573,6 +616,13 @@ class KnowledgeRetriever:
                 entry_sport_norm = self._normalize(entry.sport)
                 query_sport_matches = entry_sport_norm in norm_query
                 if query_sport_matches:
+                    doc_combined = self._normalize(f"{entry.entity or ''} {entry.question or ''} {entry.answer or ''}")
+                    query_loc_matches = any(
+                        loc in norm_query and loc in doc_combined
+                        for loc in ('thai nguyen', 'ha noi', 'tphcm', 'tp hcm', 'da nang', 'viet nam', 'phu tho', 'hai duong', 'dong nai', 'binh duong', 'ninh binh')
+                    )
+                    if query_loc_matches:
+                        return 0.90
                     is_person_profile = entry_top in ('identity', 'profile', 'cầu thủ', 'vận động viên', 'tieu su', 'clb bóng đá')
                     if is_person_profile and entry.entity and self._normalize(entry.entity) not in ('bong da', 'cau long', 'bong ro', 'bong chuyen', 'bong ban', 'tennis', 'pickleball', 'the thao'):
                         return 0.88
@@ -580,6 +630,12 @@ class KnowledgeRetriever:
         seq_ratio = difflib.SequenceMatcher(None, norm_query, norm_question).ratio()
         matching_q_tokens = [t for t in q_tokens if t in doc_q_tokens]
         token_recall = len(matching_q_tokens) / len(q_tokens) if q_tokens else 0.0
+        doc_combined = self._normalize(f"{entry.entity or ''} {entry.question or ''} {entry.answer or ''}")
+        # If query has high token overlap with document title + answer
+        combined_tokens = set(doc_combined.split())
+        combined_overlap = len([t for t in q_tokens if t in combined_tokens]) / len(q_tokens) if q_tokens else 0.0
+        if combined_overlap >= 0.50:
+            return max(0.85, 0.50 * seq_ratio + 0.50 * combined_overlap)
         if len(matching_q_tokens) < 2 and seq_ratio < 0.80:
             return 0.20
         return 0.50 * seq_ratio + 0.50 * token_recall
@@ -639,6 +695,9 @@ class KnowledgeRetriever:
             # Entity focus weighting for follow-up and entity disambiguation
             if entity and entry.entity:
                 norm_target_ent = self._normalize(entity)
+                resolved_target = self._resolve_entity_alias(norm_target_ent)
+                if resolved_target:
+                    norm_target_ent = self._normalize(resolved_target)
                 norm_entry_ent = self._normalize(entry.entity)
                 is_exact_ent = (norm_target_ent == norm_entry_ent)
                 is_partial_ent = (norm_target_ent in norm_entry_ent or norm_entry_ent in norm_target_ent)
@@ -649,7 +708,8 @@ class KnowledgeRetriever:
                     if combined >= 0.58:
                         combined *= 1.15
                 else:
-                    combined *= 0.5
+                    # Conflicting named entity -> heavily penalize to prevent entity contamination
+                    combined *= 0.15
             # Apply geographical priority weight: priority 3 (Thái Nguyên) -> +15%, priority 2 (VN) -> +8%
             if getattr(entry, 'priority', 0) and combined >= 0.58:
                 combined = combined * (1.0 + 0.05 * entry.priority)

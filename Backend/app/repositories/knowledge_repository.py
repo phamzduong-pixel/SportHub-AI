@@ -220,3 +220,8 @@ def get_knowledge_repository(knowledge_root: Optional[str] = None) -> KnowledgeR
 def reset_shared_knowledge_repository() -> None:
     global _shared_repository_instance
     _shared_repository_instance = None
+    try:
+        from app.services.knowledge_service import reset_shared_knowledge_service
+        reset_shared_knowledge_service()
+    except ImportError:
+        pass
