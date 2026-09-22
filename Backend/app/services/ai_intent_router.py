@@ -447,6 +447,7 @@ class IntentEntities:
     is_conditional: bool = False
     conditional_note: str | None = None
     is_meme_or_joke: bool = False
+    explicit_entity_mention: bool = False
 
     @property
     def price_max(self) -> float | None:
@@ -513,7 +514,15 @@ class IntentRouter:
             'domain_context_type',
         ))
         system_domain_followup = self.is_system_domain_followup(query, context)
-        context_reset = has_context and not system_domain_followup and self._starts_new_request(query, fresh_entities, context)
+        unresolved_explicit_entity = (
+            fresh_entities.explicit_entity_mention
+            and not fresh_entities.active_entity
+            and not fresh_entities.sports_entities
+        )
+        context_reset = has_context and not system_domain_followup and (
+            self._starts_new_request(query, fresh_entities, context)
+            or unresolved_explicit_entity
+        )
         if context.get("sports_entities") and any(term in query for term in ("ho dang", "hai nguoi", "hai cau thu", "ca hai", "thi dau o dau", "dang thi dau")):
             context_reset = False
         effective_context = {} if context_reset else context
@@ -752,6 +761,12 @@ class IntentRouter:
 
             if fresh_entities.is_conditional and fresh_entities.sports_entities:
                 return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
+
+            if fresh_entities.explicit_entity_mention and any(term in query for term in (
+                'la ai', 'ai la', 'gioi thieu', 'tieu su', 'dang choi',
+                'thi dau', 'choi mon', 'choi bo mon',
+            )):
+                return AssistantIntent.SPORTS_KNOWLEDGE, 0.75
 
             if effective_sports_ent is not None and not has_academic and (not is_geo_or_school or has_sports_inquiry):
                 return AssistantIntent.SPORTS_KNOWLEDGE, 0.96
@@ -1322,6 +1337,7 @@ class IntentRouter:
             is_conditional=sports_res.is_conditional,
             conditional_note=sports_res.conditional_note,
             is_meme_or_joke=sports_res.is_meme_or_joke,
+            explicit_entity_mention=sports_res.explicit_entity_mention,
         )
         aliases = {
             'sport_type': ('sport_type',), 'court_type': ('court_type',), 'venue_name': ('venue_name', 'field_name'),
@@ -1334,6 +1350,8 @@ class IntentRouter:
         }
         for target, keys in aliases.items():
             if getattr(result, target) is None:
+                if target == 'active_entity' and result.explicit_entity_mention:
+                    continue
                 if target == 'active_entity' and result.sport_type and context.get('sport_type') and result.sport_type != context.get('sport_type'):
                     continue
                 if sports_res.is_return_to_business and context.get('business_context'):

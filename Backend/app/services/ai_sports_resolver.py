@@ -706,6 +706,7 @@ class SportsResolutionResult:
     is_conditional: bool = False
     conditional_note: str | None = None
     is_meme_or_joke: bool = False
+    explicit_entity_mention: bool = False
     rewritten_query: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -733,6 +734,24 @@ class SportsContextResolver:
     AMBIGUOUS_NICKNAMES = {
         'anh 7', 'anh bay', 'anh 10', 'anh muoi', 'tau toc hanh', 'vua dat nen', 'vua san dat nen', 'ninja rua',
     }
+
+    @staticmethod
+    def _looks_like_explicit_entity_reference(norm_query: str) -> bool:
+        text = norm_query.strip()
+        if not text:
+            return False
+        if re.match(r'^(?:anh|chi|chu|ong|ba)\s+(?:ay|nay|do|ta)\b', text):
+            return False
+        non_name_words = {'ay', 'nay', 'do', 'ta', 'ho', 'han', 'dang', 'choi', 'thi', 'la', 'gi', 'nao', 'ai'}
+        honorific = re.search(r'\b(?:anh|chi|chu|ong|ba)\s+([a-z][a-z0-9]*)\b', text)
+        if honorific and honorific.group(1) not in non_name_words:
+            return True
+        identity_terms = ('la ai', 'ai la', 'gioi thieu', 'tieu su', 'dang choi', 'thi dau', 'choi mon')
+        if not any(term in text for term in identity_terms):
+            return False
+        first_word = text.split()[0]
+        generic_words = {'ai', 'nguoi', 'cau', 'thu', 'van dong vien', 'mon', 'the thao', 'bong da', 'cau long', 'pickleball', 'tennis', 'bong ro', 'bong chuyen', 'doi', 'clb', 'san'}
+        return bool(re.fullmatch(r'[a-z][a-z0-9]*', first_word)) and first_word not in generic_words
 
     @classmethod
     def resolve(cls, query: str, context: dict[str, Any] | None = None) -> SportsResolutionResult:
@@ -826,6 +845,11 @@ class SportsContextResolver:
                 if desc.notes and desc.notes not in matched_notes:
                     matched_notes.append(desc.notes)
 
+        # Explicit names not in the catalog must not inherit a previous entity.
+        explicit_entity_mention = bool(
+            [d for d in matched_descriptors if d.entity_type in ('athlete', 'team', 'competition')]
+        ) or cls._looks_like_explicit_entity_reference(norm_query)
+
         # Context-based filtering / disambiguation
         # If multiple athletes match, prioritize one matching effective_sport / effective_location
         resolved_entities: list[str] = []
@@ -889,7 +913,7 @@ class SportsContextResolver:
             # User switched sport (or asked general sport question) -> active athlete from old sport is unset
             active_entity = None
             active_entity_type = 'sport'
-        elif (has_person_pronoun or (is_follow_up_phrase and not detected_sport and not detected_location and not any(p in norm_query for p in ('con mon khac', 'mon khac thi sao', 'con mon nao', 'cac mon khac', 'con mon gi', 'tinh nay', 'thanh pho nay', 'o day')))) and prev_active_entity:
+        elif (not explicit_entity_mention and (has_person_pronoun or (is_follow_up_phrase and not detected_sport and not detected_location and not any(p in norm_query for p in ('con mon khac', 'mon khac thi sao', 'con mon nao', 'cac mon khac', 'con mon gi', 'tinh nay', 'thanh pho nay', 'o day'))))) and prev_active_entity:
             # Pronoun or follow-up referring to previous active entity
             active_entity = prev_active_entity
             active_entity_type = prev_entity_type or 'athlete'
@@ -1079,7 +1103,7 @@ class SportsContextResolver:
 
         if active_entity_type == 'athlete':
             resolved_athlete = active_entity
-        elif not detected_sport and prev_entity_type == 'athlete':
+        elif not explicit_entity_mention and not detected_sport and prev_entity_type == 'athlete':
             resolved_athlete = prev_active_entity
         else:
             resolved_athlete = None
@@ -1104,6 +1128,7 @@ class SportsContextResolver:
             is_conditional=is_conditional,
             conditional_note=conditional_note,
             is_meme_or_joke=is_meme,
+            explicit_entity_mention=explicit_entity_mention,
             rewritten_query=rewritten_query,
             notes=matched_notes,
         )

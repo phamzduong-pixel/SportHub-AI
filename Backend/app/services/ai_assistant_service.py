@@ -1028,6 +1028,19 @@ class AIAssistantService:
                 classification=ScopeClassification.OUT_OF_SCOPE,
                 status='OUT_OF_SCOPE',
             )
+        if (
+            getattr(route.entities, 'explicit_entity_mention', False)
+            and not route.entities.active_entity
+            and not route.entities.sports_entities
+        ):
+            return self._response(
+                'Bạn đang nói đến người hoặc vận động viên nào? Nếu là bạn hoặc một vận động viên cụ thể, bạn cho mình thêm ngữ cảnh nhé.',
+                criteria,
+                [],
+                needs_clarification=True,
+                classification=ScopeClassification.UNCLEAR,
+                status='NEED_MORE_DATA',
+            )
         role = self.current_user.role if self.current_user else 'CUSTOMER'
         sport = route.entities.sport_type
         if route.entities.sport_type and route.entities.active_entity is None and not route.entities.sports_entities:
