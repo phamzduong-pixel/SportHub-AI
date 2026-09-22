@@ -48,6 +48,22 @@ class SystemAdminTests(unittest.TestCase):
         self.assertEqual(owners.status_code,200,owners.text); self.assertEqual(owners.json()['total'],1)
         self.assertEqual(owners.json()['items'][0]['facility_count'],1); self.assertEqual(owners.json()['items'][0]['field_count'],1)
 
+    def test_admin_delete_soft_disables_user_and_excludes_active_list(self):
+        admin = self.headers('admin@test.local', 'Admin@123456')
+        customer = self.headers('customer@test.local', 'Customer@123')
+        deleted = self.client.delete(f"/admin/users/{self.ids['customer']}", headers=admin)
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertFalse(deleted.json()['is_active'])
+
+        active_users = self.client.get('/admin/users', headers=admin, params={'is_active': 'true', 'page_size': 100})
+        self.assertEqual(active_users.status_code, 200, active_users.text)
+        self.assertNotIn(self.ids['customer'], [item['id'] for item in active_users.json()['items']])
+
+        inactive_users = self.client.get('/admin/users', headers=admin, params={'is_active': 'false', 'page_size': 100})
+        self.assertEqual(inactive_users.status_code, 200, inactive_users.text)
+        self.assertIn(self.ids['customer'], [item['id'] for item in inactive_users.json()['items']])
+        self.assertEqual(self.client.get('/auth/me', headers=customer).status_code, 401)
+        self.assertEqual(self.client.post('/auth/login', json={'email': 'customer@test.local', 'password': 'Customer@123'}).status_code, 403)
     def test_customer_cannot_access_owner_apis(self):
         customer=self.headers('customer@test.local','Customer@123')
         self.assertEqual(self.client.get('/facilities',headers=customer).status_code,403)

@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanSpeechText } from '../utils/cleanSpeechText.ts';
-import { splitIntoChunks } from './useSpeechSynthesis.ts';
+import { detectMobileSpeechLanguage, normalizeMobileSpeechText, pickBestVoice, splitIntoChunks } from './useSpeechSynthesis.ts';
 
 // Mock Web Speech API SpeechSynthesis and SpeechSynthesisUtterance
 class MockSpeechSynthesisUtterance {
@@ -463,5 +463,76 @@ describe('splitIntoChunks & Cross-Device Regular Expression Compatibility', () =
       new RegExp('\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)', 'gi');
       new RegExp('(?:ở|tại|quanh)\\s+(.+?)(?:\\s+(?:có|còn|không)|[?.!,]|$)', 'i');
     });
+  });
+});
+
+describe('Mobile TTS voice and conversational pacing', () => {
+  it('does not fall back to an English voice for Vietnamese', () => {
+    const englishOnly = [
+      { name: 'Microsoft David', lang: 'en-US', default: true },
+    ] as SpeechSynthesisVoice[];
+
+    assert.equal(pickBestVoice(englishOnly, 'vi-VN'), null);
+  });
+
+  it('prioritizes vi-VN, then vi-* and vi', () => {
+    const voices = [
+      { name: 'Vietnamese regional', lang: 'vi', default: false },
+      { name: 'Vietnamese alternate', lang: 'vi-HN', default: false },
+      { name: 'Vietnamese exact', lang: 'vi-VN', default: false },
+      { name: 'English', lang: 'en-US', default: true },
+    ] as SpeechSynthesisVoice[];
+
+    assert.equal(pickBestVoice(voices, 'vi-VN')?.name, 'Vietnamese exact');
+  });
+
+  it('prefers Minh inside vi-VN while keeping locale priority', () => {
+    const voices = [
+      { name: 'Google Vietnamese', lang: 'vi-VN', default: true },
+      { name: 'Microsoft Minh - Vietnamese (Vietnam)', lang: 'vi-VN', default: false },
+      { name: 'Minh regional', lang: 'vi-HN', default: false },
+    ] as SpeechSynthesisVoice[];
+
+    assert.equal(
+      pickBestVoice(voices, 'vi-VN', { preferMinh: true })?.name,
+      'Microsoft Minh - Vietnamese (Vietnam)',
+    );
+  });
+  it('does not silently choose another voice when Minh is unavailable', () => {
+    const voices = [
+      { name: 'Google Vietnamese', lang: 'vi-VN', default: true },
+    ] as SpeechSynthesisVoice[];
+
+    assert.equal(pickBestVoice(voices, 'vi-VN', { preferMinh: true }), null);
+  });
+  it('keeps a mixed Vietnamese + English sentence as one Vietnamese utterance plan', () => {
+    const text = 'SportHub h\u1ed7 tr\u1ee3 AI t\u00ecm s\u00e2n football, badminton v\u00e0 pickleball.';
+    assert.equal(detectMobileSpeechLanguage(text, 'vi-VN'), 'vi-VN');
+    assert.equal(normalizeMobileSpeechText(text), text);
+    assert.ok(text.includes('SportHub'));
+    assert.ok(text.includes('AI'));
+    assert.ok(text.includes('football'));
+    assert.ok(text.includes('badminton'));
+    assert.ok(text.includes('pickleball'));
+  });
+
+  it('uses English only for an all-English sentence', () => {
+    assert.equal(
+      detectMobileSpeechLanguage('SportHub supports football and badminton.', 'vi-VN'),
+      'en-US',
+    );
+  });
+
+  it('uses Vietnamese for an all-Vietnamese sentence', () => {
+    const text = 'Xin ch\u00e0o, t\u00f4i c\u1ea7n t\u00ecm s\u00e2n c\u1ea7u l\u00f4ng.';
+    assert.equal(detectMobileSpeechLanguage(text, 'vi-VN'), 'vi-VN');
+  });
+
+  it('keeps punctuation as pause markers and never creates spoken punctuation content', () => {
+    const text = 'Ch\u00e0o bạn . T\u00ecm s\u00e2n, ki\u1ec3m tra gi\u00e1; x\u00e1c nh\u1eadn!';
+    const normalized = normalizeMobileSpeechText(text);
+    assert.equal(normalized, 'Ch\u00e0o bạn. T\u00ecm s\u00e2n, ki\u1ec3m tra gi\u00e1; x\u00e1c nh\u1eadn!');
+    assert.equal(normalized.includes('ch\u1ea5m'), false);
+    assert.equal(normalized.includes('ph\u1ea9y'), false);
   });
 });

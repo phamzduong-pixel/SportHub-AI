@@ -121,3 +121,36 @@ Natural se resolve semantic/entity/context roi truy van System Domain Context va
 - Khong nham dung cu the thao generic voi product/service dang co trong SportHub.
 - Khong de Natural early fallback chan live system lookup.
 - Khong bien system context thanh autonomous agent hoac business router thu hai.
+
+
+---
+
+## CP-SESSION-2026-09-22 — TTS mobile và Admin User Management
+
+### Hạng mục đã hoàn thành
+
+#### TTS mobile
+
+- Bổ sung ưu tiên nhận diện voice tiếng Việt theo thứ tự `vi-VN` → `vi-*` → `vi`, đồng thời ưu tiên voice Minh/Nam Minh khi browser cung cấp.
+- Giữ cơ chế chờ `voiceschanged`/retry để xử lý trường hợp mobile tải danh sách voice trễ.
+- Bổ sung log chẩn đoán trong `useSpeechSynthesis.ts`:
+  - toàn bộ voice từ `speechSynthesis.getVoices()` với `name`, `lang`, `default`;
+  - `targetLang` và voice được chọn khi `speak()`;
+  - `utterance.lang`, `utterance.voice.name` và `utterance.voice.lang` ngay trước khi gọi `synth.speak()`.
+- Không thay đổi Natural Mode, Professional Mode, Speech Recognition hoặc business flow. Việc voice nào thực sự phát ra vẫn phụ thuộc danh sách voice mà Safari/iPhone cung cấp tại runtime; nếu không có Minh/Nam Minh thì log sẽ thể hiện rõ.
+
+#### Admin — Quản lý người dùng
+
+- Khi khóa tài khoản qua status action, tài khoản bị loại khỏi danh sách người dùng hiện tại ngay sau khi API thành công.
+- Khi vô hiệu hóa mềm bằng thao tác xóa, tài khoản cũng được loại khỏi danh sách users/owners hiện tại; dữ liệu lịch sử và bản ghi tài khoản vẫn được giữ.
+- Cập nhật nội dung hộp xác nhận và thông báo để phản ánh đúng hành vi “vô hiệu hóa và ẩn khỏi danh sách”.
+- Khi mở chức năng “Người dùng”, bộ lọc trạng thái mặc định là **“Mọi trạng thái”**.
+- Các bộ lọc vai trò/trạng thái, thao tác xem, sửa, mở khóa và các module nghiệp vụ khác được giữ nguyên.
+
+### Kiểm tra
+
+- Frontend tests: **54/54 passed**.
+- Typecheck: **passed**.
+- Production build: **passed**.
+- Diff check: **passed**.
+- Chưa commit/push thay đổi.

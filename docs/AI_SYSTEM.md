@@ -558,3 +558,13 @@ Các nguyên tắc đang áp dụng:
 ### Phạm vi bảo toàn
 
 CP-SYS-03 chỉ điều chỉnh context resolution và routing trực tiếp liên quan. Các flow booking/search khi người dùng thực sự muốn tìm sân, schema dữ liệu, RAG và mutation DB được giữ nguyên.
+
+---
+
+## Ghi nhận cập nhật gần nhất — TTS mobile và quản trị người dùng
+
+- TTS mobile đã có logging runtime để xác định chính xác danh sách voice Safari cung cấp, voice được chọn và voice gắn vào utterance; ưu tiên voice tiếng Việt và Minh/Nam Minh khi có sẵn.
+- Trang System Admin đã xử lý việc ẩn tài khoản ngay khỏi danh sách hiện tại sau khi khóa/vô hiệu hóa mềm, trong khi dữ liệu tài khoản và lịch sử vẫn được giữ.
+- Bộ lọc trạng thái tại chức năng **Người dùng** mặc định là **Mọi trạng thái** khi truy cập.
+- Đã giữ nguyên Natural Mode, Professional Mode, Speech Recognition và các business flow không liên quan.
+- Validation frontend gần nhất: test **54/54**, typecheck và production build đều đạt; chưa commit/push.
