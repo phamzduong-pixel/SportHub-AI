@@ -38,7 +38,7 @@ export function VenueBookingPanel({ venue }: { venue: Venue }) {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [date, setDate] = useState(searchParams.get('date') || '');
+  const [date, setDate] = useState(searchParams.get('date') || localToday());
   const [courtId, setCourtId] = useState(venue.courts[0]?.id ?? '');
   const [slots, setSlots] = useState<AvailableSlot[]>([]);
   const [slotIds, setSlotIds] = useState<number[]>([]);

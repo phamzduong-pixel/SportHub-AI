@@ -28,7 +28,9 @@ export function LoginPage() {
       else localStorage.removeItem('sporthub_remembered_email');
       toast(`Chào mừng ${user.full_name}!`, 'success');
       const requested = (location.state as { from?: string } | null)?.from;
-      const target = user.role === 'CUSTOMER' && requested?.startsWith('/booking/') ? requested : homeForRole(user.role);
+      const target = user.role === 'CUSTOMER'
+        ? requested?.startsWith('/booking/') ? requested : '/'
+        : homeForRole(user.role);
       navigate(target, { replace: true });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Đăng nhập thất bại.';
@@ -128,10 +130,10 @@ export function RegisterPage() {
   };
   return (
     <AuthFrame title="Tạo tài khoản khách hàng" description="Đăng ký tài khoản thành viên SportHub AI.">
-      <form onSubmit={submit} noValidate className="grid gap-4 sm:grid-cols-2">
-        <Input label="Họ và tên" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (errors.name) setErrors({ ...errors, name: '' }); }} error={errors.name} />
-        <Input label="Số điện thoại" type="tel" inputMode="numeric" maxLength={10} value={form.phone} onChange={(e) => { const phone = e.target.value.replace(/\D/g, '').slice(0, 10); setForm({ ...form, phone }); setErrors({ ...errors, phone: phone && !/^0[0-9]{9}$/.test(phone) ? 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.' : '' }); }} error={errors.phone} />
-        <Input className="sm:col-span-2" label="Email" type="email" value={form.email} onChange={(e) => { setForm({ ...form, email: e.target.value }); if (errors.email) setErrors({ ...errors, email: '' }); }} error={errors.email} />
+      <form onSubmit={submit} noValidate className="grid min-w-0 gap-4 sm:grid-cols-2">
+        <Input className="h-12 text-sm sm:h-12" label="Họ và tên" value={form.name} onChange={(e) => { setForm({ ...form, name: e.target.value }); if (errors.name) setErrors({ ...errors, name: '' }); }} error={errors.name} />
+        <Input className="h-12 text-sm sm:h-12" label="Số điện thoại" type="tel" inputMode="numeric" maxLength={10} value={form.phone} onChange={(e) => { const phone = e.target.value.replace(/\D/g, '').slice(0, 10); setForm({ ...form, phone }); setErrors({ ...errors, phone: phone && !/^0[0-9]{9}$/.test(phone) ? 'Số điện thoại phải gồm đúng 10 chữ số và bắt đầu bằng 0.' : '' }); }} error={errors.phone} />
+        <Input className="h-12 text-sm sm:h-12" label="Email" type="email" value={form.email} onChange={(e) => { setForm({ ...form, email: e.target.value }); if (errors.email) setErrors({ ...errors, email: '' }); }} error={errors.email} />
         <PasswordField label="Mật khẩu" value={form.password} show={show} onShow={setShow} onChange={(value) => { setForm({ ...form, password: value }); if (errors.password) setErrors({ ...errors, password: '' }); }} error={errors.password} />
         <PasswordField label="Xác nhận mật khẩu" value={form.confirm} show={show} onShow={setShow} onChange={(value) => { setForm({ ...form, confirm: value }); if (errors.confirm) setErrors({ ...errors, confirm: '' }); }} error={errors.confirm} />
         <Check value={form.accepted} onChange={(value) => { setForm({ ...form, accepted: value }); if (errors.accepted) setErrors({ ...errors, accepted: '' }); }} error={errors.accepted}>Tôi đồng ý với Điều khoản sử dụng và Chính sách quyền riêng tư.</Check>
