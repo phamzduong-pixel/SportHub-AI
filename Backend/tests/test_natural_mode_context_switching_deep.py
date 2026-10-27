@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from app.services.ai_sports_resolver import SportsContextResolver
 from app.services.ai_intent_router import IntentRouter, AssistantIntent
@@ -62,6 +63,18 @@ class NaturalModeContextSwitchingDeepTests(unittest.TestCase):
         self.assertEqual(r.sport, "bóng rổ")
         self.assertTrue(r.is_follow_up)
 
+    def test_followup_no_resolves_the_tracked_athlete(self):
+        ctx = {
+            "active_entity": "Lionel Messi",
+            "entity_type": "athlete",
+            "sport": "bóng đá",
+            "last_intent": "SPORTS_KNOWLEDGE",
+        }
+        r = SportsContextResolver.resolve("Nó đã vô địch World Cup chưa?", context=ctx)
+        self.assertEqual(r.active_entity, "Lionel Messi")
+        self.assertTrue(r.is_follow_up)
+        self.assertIn("Lionel Messi", r.rewritten_query)
+
     def test_followup_con_giai_do(self):
         # Context with V-League
         ctx = {
@@ -87,6 +100,59 @@ class NaturalModeContextSwitchingDeepTests(unittest.TestCase):
         self.assertEqual(r.sport, "bóng chuyền")
         self.assertTrue(r.is_follow_up)
         self.assertIn("môn bóng chuyền", r.rewritten_query)
+
+    def test_followup_mon_day_rewrites_from_tracked_sport(self):
+        ctx = {
+            "sport": "bóng rổ",
+            "sport_type": "bóng rổ",
+            "last_intent": "SPORTS_KNOWLEDGE",
+        }
+        r = SportsContextResolver.resolve("Vậy có ai xuất sắc môn đấy?", context=ctx)
+        self.assertEqual(r.sport, "bóng rổ")
+        self.assertTrue(r.is_follow_up)
+        self.assertIn("môn bóng rổ", r.rewritten_query)
+
+    def test_history_without_resolved_subject_remains_ambiguous(self):
+        self.assertTrue(AIAssistantService._natural_ambiguous_query(
+            "Nó thì sao?",
+            {"conversation_messages": [{"role": "user", "content": "Xin chào"}]},
+        ))
+
+    def test_history_restores_a_known_sport_for_followup(self):
+        context = {
+            "conversation_messages": [
+                {"role": "user", "content": "Bóng rổ Việt Nam có gì nổi bật?"},
+                {"role": "assistant", "content": "Thông tin về bóng rổ Việt Nam."},
+                {"role": "user", "content": "Vậy có ai xuất sắc môn đấy?"},
+            ],
+        }
+        restored = self.assistant._enrich_natural_context_from_history(
+            context,
+            "Vậy có ai xuất sắc môn đấy?",
+        )
+        self.assertEqual(restored["sport_type"], "bóng rổ")
+        self.assertEqual(restored["last_intent"], "SPORTS_KNOWLEDGE")
+
+    def test_sport_switch_then_deictic_athlete_question_uses_the_new_sport(self):
+        first = self.assistant.ask(
+            "Môn thể thao cầu lông có ai xuất sắc?",
+            assistant_mode=AssistantMode.NATURAL,
+        )
+        switched = self.assistant.ask(
+            "Còn môn bóng rổ",
+            context=first["understood"],
+            assistant_mode=AssistantMode.NATURAL,
+        )
+        follow_up = self.assistant.ask(
+            "Vậy có ai xuất sắc môn đấy?",
+            context=switched["understood"],
+            assistant_mode=AssistantMode.NATURAL,
+        )
+
+        self.assertEqual(follow_up["status"], "OK")
+        self.assertEqual(follow_up["intent"], AssistantIntent.SPORTS_KNOWLEDGE.value)
+        self.assertIn("LeBron James", follow_up["reply"])
+        self.assertEqual(follow_up["understood"]["sport_type"], "bóng rổ")
 
     def test_followup_o_viet_nam_thi_sao(self):
         # Context with Tennis
@@ -165,7 +231,19 @@ class NaturalModeContextSwitchingDeepTests(unittest.TestCase):
     # ─────────────────────────────────────────────────────────────────
     def test_knowledge_to_business_to_knowledge_flow(self):
         # Turn 1: Sports Knowledge (Ronaldo World Cup)
-        res1 = self.assistant.ask("Ronaldo đã vô địch World Cup chưa?", assistant_mode=AssistantMode.NATURAL)
+        class FakeSportsProcessor:
+            last_generation_status = 'success'
+
+            @staticmethod
+            def understand_query(*args, **kwargs):
+                return None
+
+            @staticmethod
+            def generate_grounded_response(*args, **kwargs):
+                return SimpleNamespace(answer="Ronaldo chưa từng vô địch World Cup.", citations=[])
+
+        with patch('app.services.ai_assistant_service.get_llm_sports_processor', return_value=FakeSportsProcessor()):
+            res1 = self.assistant.ask("Ronaldo đã vô địch World Cup chưa?", assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res1["status"], "OK")
         self.assertIn("chưa từng vô địch", res1["reply"])
 

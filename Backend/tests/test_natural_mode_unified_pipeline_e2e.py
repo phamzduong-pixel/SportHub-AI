@@ -10,6 +10,7 @@ from app.services.ai_sports_resolver import SportsContextResolver
 from app.services.ai_assistant_service import AIAssistantService, AIRepository
 from app.services.ai_domain_policy import ScopeClassification, ScopeDecision, evaluate_mode_scope, generate_out_of_scope_redirect
 from app.schemas.ai import AssistantMode
+from tests.sports_knowledge_test_fixtures import authorized_sports_knowledge_service
 
 
 class UnifiedMockRankingProvider:
@@ -29,8 +30,17 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
     def setUpClass(cls):
         reset_shared_knowledge_service()
         reset_shared_knowledge_repository()
+        cls.knowledge_service_patch = patch(
+            'app.services.rag_guardrail.get_knowledge_service',
+            return_value=authorized_sports_knowledge_service(),
+        )
+        cls.knowledge_service_patch.start()
         cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=UnifiedMockRankingProvider())
         cls.provider_patch.start()
+        cls.llm_processor_patch = patch('app.services.ai_assistant_service.get_llm_sports_processor')
+        cls.llm_processor = cls.llm_processor_patch.start()
+        cls.llm_processor.return_value.understand_query.return_value = None
+        cls.llm_processor.return_value.generate_grounded_response.return_value = None
         cls.client = TestClient(app)
         cls.context = cls.client.__enter__()
         cls.router = IntentRouter()
@@ -42,7 +52,9 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
             cls.client.__exit__(None, None, None)
         finally:
             cls.client.close()
+            cls.llm_processor_patch.stop()
             cls.provider_patch.stop()
+            cls.knowledge_service_patch.stop()
             reset_shared_knowledge_service()
             reset_shared_knowledge_repository()
 
@@ -76,36 +88,47 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
         q2 = "Họ đã thắng ai ở trận chung kết?"
         res2 = self.assistant.ask(q2, context=context, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res2["status"], "OK")
-        self.assertIn("Pháp", res2["reply"])
+        self.assertIn("Argentina", res2["reply"])
+        self.assertTrue("France" in res2["reply"] or "Pháp" in res2["reply"])
+        self.assertIn("3–3", res2["reply"])
+        self.assertIn("2–2", res2["reply"])
+        self.assertIn("4–2", res2["reply"])
+        self.assertIn("openfootball/worldcup.json 2022", res2["reply"])
 
     # Matrix 3: Entity switching between athletes
     def test_matrix_03_entity_switching_athletes(self):
         # Turn 1: Thùy Linh (Badminton)
         res1 = self.assistant.ask("Nguyễn Thùy Linh sinh năm bao nhiêu?", assistant_mode=AssistantMode.NATURAL)
-        self.assertIn("1997", res1["reply"])
+        self.assertEqual(res1["status"], "OK")
+        self.assertIn("chưa có thông tin kiểm chứng", res1["reply"])
+        self.assertNotIn("1997", res1["reply"])
 
         # Turn 2: Switch to Quang Hải (Football)
         context = {"sports_entity": "Nguyễn Thùy Linh", "sport_type": "cầu lông", "last_intent": "SPORTS_KNOWLEDGE"}
         q2 = "Còn Nguyễn Quang Hải thì sao?"
         res2 = self.assistant.ask(q2, context=context, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res2["status"], "OK")
-        self.assertIn("Quang Hải", res2["reply"])
-        self.assertNotIn("cầu lông", res2["reply"].lower())
+        self.assertIn("chưa có thông tin kiểm chứng", res2["reply"])
+        self.assertNotIn("Al-Nassr", res2["reply"])
+        self.assertNotIn("1997", res2["reply"])
 
     # Matrix 4: Sport switching
     def test_matrix_04_sport_switching(self):
         # Turn 1: Football in Thai Nguyen
         q1 = "Ở Thái Nguyên có những CLB bóng đá nào?"
         res1 = self.assistant.ask(q1, assistant_mode=AssistantMode.NATURAL)
-        self.assertIn("FC Thái Nguyên", res1["reply"])
-        self.assertIn("Thái Nguyên T&T", res1["reply"])
+        self.assertIn("chưa có thông tin kiểm chứng", res1["reply"])
+        self.assertNotIn("FC Thái Nguyên", res1["reply"])
+        self.assertNotIn("Thái Nguyên T&T", res1["reply"])
+        self.assertNotIn("4-3-3", res1["reply"])
 
         # Turn 2: Switch to another sport inquiry
         context = {"sports_entity": "Bóng đá Thái Nguyên", "sport_type": "bóng đá", "last_intent": "SPORTS_KNOWLEDGE"}
         q2 = "Thế còn môn cầu lông Việt Nam có tay vợt nào tiêu biểu?"
         res2 = self.assistant.ask(q2, context=context, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res2["status"], "OK")
-        self.assertTrue("Thùy Linh" in res2["reply"] or "Tiến Minh" in res2["reply"])
+        self.assertIn("chưa có thông tin kiểm chứng", res2["reply"])
+        self.assertNotIn("tay vợt nữ số 1 Việt Nam", res2["reply"])
 
     # Matrix 5: Year / competition disambiguation
     def test_matrix_05_competition_year_disambiguation(self):
@@ -122,7 +145,8 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
         # Turn 1: Sports question
         res1 = self.assistant.ask("Ronaldo hiện đang thi đấu cho câu lạc bộ nào?", assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res1["status"], "OK")
-        self.assertIn("Al-Nassr", res1["reply"])
+        self.assertIn("chưa có thông tin kiểm chứng", res1["reply"])
+        self.assertNotIn("Al-Nassr", res1["reply"])
 
         # Turn 2: User switches to searching for a football court
         q2 = "Tìm sân bóng đá ở Cầu Giấy tối nay"
@@ -141,7 +165,8 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
 
         res2 = self.assistant.ask(q2, context=turn1_context, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res2["status"], "OK")
-        self.assertIn("1997", res2["reply"])
+        self.assertIn("chưa có thông tin kiểm chứng", res2["reply"])
+        self.assertNotIn("1997", res2["reply"])
 
     # Matrix 8: Returning to prior topic / search
     def test_matrix_08_return_to_prior_search(self):
@@ -187,8 +212,9 @@ class NaturalModeUnifiedPipelineE2ETests(unittest.TestCase):
         q = "Messi sinh ngày nào?"
         res = self.assistant.ask(q, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res["status"], "OK")
-        self.assertIn("24 tháng 6 năm 1987", res["reply"])
-        self.assertTrue("FIFA" in res["reply"] or "https://" in res["reply"])
+        self.assertIn("chưa có thông tin kiểm chứng", res["reply"])
+        self.assertNotIn("24 tháng 6 năm 1987", res["reply"])
+        self.assertNotIn("Nguồn:", res["reply"])
 
     # Matrix 13: Regression protection for core business & Professional Mode
     def test_matrix_13_core_business_and_professional_mode_integrity(self):

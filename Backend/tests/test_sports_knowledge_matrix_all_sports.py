@@ -66,7 +66,9 @@ class SportsKnowledgeMatrixTests(unittest.TestCase):
         query = "Có bao nhiêu giải Grand Slam trong môn tennis và gồm những giải nào?"
         res = self.assistant.ask(query, assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(res["status"], "OK")
-        self.assertTrue("Wimbledon" in res["reply"] or "Australian Open" in res["reply"] or "Roland Garros" in res["reply"])
+        self.assertIn("4 giải", res["reply"])
+        for tournament in ("Australian Open", "Roland Garros", "Wimbledon", "US Open"):
+            self.assertIn(tournament, res["reply"])
 
     def test_tennis_vietnam_local(self):
         query = "Tay vợt Lý Hoàng Nam của Việt Nam có những thành tích nổi bật nào?"

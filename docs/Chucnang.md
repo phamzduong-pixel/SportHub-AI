@@ -1,6 +1,6 @@
 # Sơ đồ chức năng SportHub AI
 
-> Cập nhật theo source code và kiểm thử ngày **13/09/2026**. Tài liệu chi tiết: [`FUNCTIONAL_HIERARCHY.md`](FUNCTIONAL_HIERARCHY.md), [`SESSION_PROGRESS_2026-09-13.md`](SESSION_PROGRESS_2026-09-13.md).
+> Các module nghiệp vụ được tổng hợp từ snapshot trước; mục AI được đồng bộ lại với source và regression ngày **27/10/2026**. Tài liệu AI: [`AI/AI_ARCHITECTURE.md`](AI/AI_ARCHITECTURE.md); phân cấp chức năng: [`FUNCTIONAL_HIERARCHY.md`](FUNCTIONAL_HIERARCHY.md).
 
 ## Ký hiệu
 
@@ -206,6 +206,19 @@ mindmap
         Context hội thoại
         Dữ liệu backend theo quyền
         Không tự mutation booking hoặc payment
+      ✅ Hai chế độ trợ lý
+        Natural: sports knowledge theo policy; Gemini general fallback khi provider được cấu hình
+        Professional: chỉ nghiệp vụ/System Domain; sports knowledge bị chặn trước retrieval
+      ✅ Kiểm soát Sports Knowledge
+        Tách quyền display_answer, prompt_llm_external, display_citation
+        Review ledger gắn quyết định với record fingerprint và mục đích sử dụng
+        Local fallback không được đưa lại record đã bị policy chặn
+      ✅ Cá nhân hóa Natural
+        Explicit User Memory theo tài khoản
+        Booking Behavior Profile và Conversation Topic Profile
+        Không dùng các profile như evidence/citation
+      ✅ Context reset
+        Context rỗng tường minh không khôi phục snapshot hoặc lịch sử cũ
       ✅ Hỏi sản phẩm và giá
         Chỉ đọc giá và số lượng backend hiện tại
       ✅ Gợi ý sân CUSTOMER

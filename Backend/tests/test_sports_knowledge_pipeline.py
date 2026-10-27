@@ -8,6 +8,10 @@ from app.repositories.knowledge_repository import KnowledgeRepository
 from app.services.knowledge_retriever import KnowledgeRetriever
 from app.services.knowledge_service import KnowledgeService
 from app.services.rag_guardrail import RAGGuardrail
+from tests.sports_knowledge_test_fixtures import (
+    SyntheticReviewAuthorizer,
+    authorized_sports_knowledge_service,
+)
 
 
 class AssistantRankingProvider:
@@ -22,8 +26,22 @@ class AssistantRankingProvider:
 class SportsKnowledgePipelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.knowledge_service_patch = patch(
+            'app.services.rag_guardrail.get_knowledge_service',
+            return_value=authorized_sports_knowledge_service(),
+        )
+        cls.knowledge_service_patch.start()
+        cls.review_ledger_patch = patch(
+            'app.services.ai_assistant_service.load_review_ledger',
+            return_value=SyntheticReviewAuthorizer(),
+        )
+        cls.review_ledger_patch.start()
         cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=AssistantRankingProvider())
         cls.provider_patch.start()
+        cls.llm_processor_patch = patch('app.services.ai_assistant_service.get_llm_sports_processor')
+        cls.llm_processor = cls.llm_processor_patch.start()
+        cls.llm_processor.return_value.understand_query.return_value = None
+        cls.llm_processor.return_value.generate_grounded_response.return_value = None
         cls.client = TestClient(app)
         cls.context = cls.client.__enter__()
 
@@ -33,7 +51,10 @@ class SportsKnowledgePipelineTests(unittest.TestCase):
             cls.client.__exit__(None, None, None)
         finally:
             cls.client.close()
+            cls.llm_processor_patch.stop()
+            cls.review_ledger_patch.stop()
             cls.provider_patch.stop()
+            cls.knowledge_service_patch.stop()
 
     # ----------------------------------------------------
     # 1. Query with Matching Evidence -> Grounded Answer

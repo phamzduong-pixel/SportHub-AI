@@ -26,6 +26,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Badge, Button } from '@/components/common';
 import { WebSourcePreviewPanel } from '@/components/ai/WebSourcePreviewPanel';
+import { AssistantMarkdown } from '@/components/ai/AssistantMarkdown';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
@@ -63,6 +64,7 @@ type Message = {
   id: number;
   role: 'assistant' | 'user';
   text: string;
+  isStreaming?: boolean;
   suggestions?: AssistantSuggestion[];
   venueResults?: AssistantVenueResult[];
   classification?: 'IN_SCOPE' | 'OUT_OF_SCOPE' | 'UNCLEAR';
@@ -750,13 +752,15 @@ export function AIAssistantPage() {
                   )}
                   <div className={`min-w-0 max-w-[94%] sm:max-w-[88%] ${message.role === 'user' ? 'order-first' : ''}`}>
                     <div
-                      className={`rounded-2xl px-4 py-3 text-sm leading-6 break-words whitespace-pre-wrap ${
+                      className={`rounded-2xl px-4 py-3 text-sm leading-6 break-words ${message.role === 'user' ? 'whitespace-pre-wrap' : 'whitespace-normal'} ${
                         message.role === 'user'
                           ? 'rounded-tr-md bg-brand-800 text-white'
                           : 'rounded-tl-md border border-slate-200 bg-white text-slate-700 shadow-sm'
                       }`}
                     >
-                      {message.role === 'assistant' ? parsedCitations.bodyText : message.text}
+                      {message.role === 'assistant' ? (
+                        <AssistantMarkdown content={parsedCitations.bodyText} streaming={message.isStreaming} />
+                      ) : message.text}
                     </div>
 
                     {/* Source citations chips if message contains sources */}

@@ -13,6 +13,7 @@ from .notification import Notification
 from .product import BookingProductItem, FacilityProduct, ProductCatalogItem, ProductSport, ProductStockMovement
 from .password_reset import PasswordResetChallenge
 from .ai_conversation import AIConversation, AIMessage
+from .user_ai_memory import UserAIMemory
 
 __all__ = [
     'User', 'UserFavoriteField', 'UserRole', 'Facility', 'FacilityDocument', 'FacilityImage', 'FacilityReviewEvent', 'FacilityStatus', 'OwnerApplication', 'OwnerApplicationStatus', 'Field', 'FieldStatus', 'Booking',
@@ -20,6 +21,6 @@ __all__ = [
     'RefundRequest', 'RefundStatus', 'BookingActivity',
     'FieldBlock', 'BookingComplaint', 'AuditLog', 'FieldMaintenance', 'MaintenanceStatus', 'Notification',
     'FacilityProduct', 'ProductCatalogItem', 'ProductSport', 'BookingProductItem', 'ProductStockMovement', 'PasswordResetChallenge',
-    'AIConversation', 'AIMessage',
+    'AIConversation', 'AIMessage', 'UserAIMemory',
 ]
 

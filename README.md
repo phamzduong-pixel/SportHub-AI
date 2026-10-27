@@ -157,7 +157,9 @@ Product/Inventory/Booking/Payment/Invoice tests: 21/21 thành công
 Frontend TypeScript + Vite production build: thành công
 ```
 
-## Cập nhật AI Trợ lý SportHub — 07/08/2026
+## Cập nhật AI Trợ lý SportHub — 07/08/2026 (tài liệu lịch sử)
+
+> Nội dung phần này là ghi chép checkpoint cũ. Mô tả trạng thái đang chạy được cập nhật tại mục “Trạng thái hiện tại trợ lý AI” ngay dưới đây và trong `docs/AI/AI_ARCHITECTURE.md`.
 
 ### Giới hạn domain và phân quyền — 10/08/2026
 
@@ -200,17 +202,28 @@ AIAssistantPage
 
 AI chỉ đọc dữ liệu hiện có qua repository/service theo quyền. Schema hiện có thực thể `Facility` riêng; `Field` là từng sân/court thuộc cơ sở. AI không tự tạo dữ liệu thay thế khi database không có kết quả.
 
+## Trạng thái hiện tại trợ lý AI — 27/10/2026
+
+- **Natural:** điều phối intent/context, nghiệp vụ SportHub qua backend, Sports Knowledge có policy/review, World Cup local lookup riêng và Gemini general-knowledge fallback khi không có evidence được phép và provider đã cấu hình.
+- **Professional:** nghiệp vụ SportHub và System Domain; Sports Knowledge bị chặn trước World Cup lookup, Sports RAG và sports web retrieval. Không nạp các profile cá nhân vào prompt.
+- Quyền dùng record cho câu trả lời, gửi nội dung tới LLM bên ngoài và hiển thị citation được kiểm tra riêng. Thiếu review ledger hoặc thiếu quyền không được xem là đã phê duyệt.
+- Context hội thoại hỗ trợ follow-up nhưng không phải bằng chứng. Context rỗng gửi tường minh reset snapshot và ngăn lịch sử cũ được chèn lại.
+- Natural có ba profile cá nhân hóa tách biệt: explicit memory, booking behavior và conversation topic. Các profile không phải Sports Knowledge evidence/citation.
+- Giá, sân, availability, booking và thanh toán vẫn dựa trên backend/database; LLM không tự tạo booking hoặc giao dịch.
+- Nhóm regression policy/runtime/router gần nhất: **168 passed, 24 subtests passed** ngày 27/10/2026. Đây không phải full suite hay kiểm thử provider thật.
+
+Luồng chi tiết, giới hạn và nguồn code: [Kiến trúc AI hiện hành](docs/AI/AI_ARCHITECTURE.md). Hướng dẫn demo: [Kịch bản demo AI](docs/AI/DEMO_SCENARIOS.md).
+
 ## Tài liệu
 
-- [Báo cáo tiến độ phiên 20/09/2026 — Hoàn thiện Natural Sports Assistant & Multi-Turn Context Resolution](docs/SESSION_PROGRESS_2026-09-20.md)
-- [Báo cáo tiến độ phiên 17/09/2026 — Multi-Attribute RAG, Tri thức Thể thao & Controlled Web Retrieval](docs/SESSION_PROGRESS_2026-09-17.md)
-- [Báo cáo tiến độ phiên 13/09/2026 — Chuẩn hóa Bộ lọc, Đồng bộ Hệ thống & Tối ưu Giao diện](docs/SESSION_PROGRESS_2026-09-13.md)
+- [Tổng quan và đồng bộ toàn hệ thống](docs/system.md)
 - [Báo cáo Kiến trúc Trợ lý AI (SportHub AI Assistant Architecture)](docs/AI_ASSISTANT_ARCHITECTURE_REPORT.md)
+- [Kiến trúc AI hiện hành và ranh giới Natural/Professional](docs/AI/AI_ARCHITECTURE.md)
+- [Kịch bản demo Natural/Professional hiện hành](docs/AI/DEMO_SCENARIOS.md)
 - [Báo cáo Chi tiết Hệ thống AI (SportHub AI System Report)](docs/AI_SYSTEM.md)
 - [Báo cáo Đánh giá Thực nghiệm Hệ thống AI](docs/AI_EVALUATION.md)
 - [Bàn giao OWNER Facility, Mobile UX và Booking Service — 16/08/2026](docs/SECTION_HANDOFF_2026-08-16_OWNER_FACILITY_MOBILE_BOOKING_SERVICE.md)
 - [Bàn giao AI hỗ trợ CUSTOMER đăng ký OWNER — 14/08/2026](docs/SECTION_HANDOFF_2026-08-14_AI_PARTNER_SUPPORT.md)
-- [Báo cáo tiến độ phiên 10/08/2026](docs/SESSION_PROGRESS_2026-08-10.md)
 - [Frontend](Frontend/README.md)
 - [Backend](Backend/README.md)
 - [Tiến độ chức năng đặt sân có đặt cọc](docs/DEPOSIT_BOOKING_PROGRESS.md)

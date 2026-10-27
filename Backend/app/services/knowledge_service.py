@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple, Optional, Any
+from typing import Callable, List, Tuple, Optional, Any
 
 from ..models.knowledge_entry import KnowledgeEntry
 from .knowledge_retriever import KnowledgeRetriever
@@ -29,6 +29,7 @@ class KnowledgeService:
         entity: Optional[str] = None,
         top_k: int = KnowledgeRetriever.DEFAULT_TOP_K,
         relevance_threshold: float = KnowledgeRetriever.RELEVANCE_THRESHOLD,
+        candidate_filter: Optional[Callable[[KnowledgeEntry], bool]] = None,
     ) -> List[Tuple[KnowledgeEntry, float]]:
         """Return a list of (entry, score) or ``NO_KNOWLEDGE``.
 
@@ -51,7 +52,7 @@ class KnowledgeService:
         """
         if intent and intent.upper() == "OUT_OF_SCOPE":
             return []
-        results = self.retriever.retrieve(
+        retrieval_options = dict(
             query=query,
             role=role,
             intent=intent,
@@ -60,6 +61,9 @@ class KnowledgeService:
             top_k=top_k,
             relevance_threshold=relevance_threshold,
         )
+        if candidate_filter is not None:
+            retrieval_options["candidate_filter"] = candidate_filter
+        results = self.retriever.retrieve(**retrieval_options)
         if not results:
             return []
         return results

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.models.knowledge_entry import KnowledgeEntry
 from app.repositories.knowledge_repository import KnowledgeRepository
@@ -9,11 +9,21 @@ from app.services.sports_knowledge_updater import (
     KnowledgeUpdateAction,
     SportsKnowledgeUpdater,
 )
+from app.services.sports_knowledge_policy import KnowledgeUseDecision, PolicyOutcome
 from app.services.sports_web_retriever import SportsWebEvidence, SportsWebRetriever
 
 
 class SportsKnowledgeUpdaterTests(unittest.TestCase):
     def setUp(self):
+        self.store_policy_patch = patch(
+            "app.services.sports_knowledge_updater.evaluate_reviewed_knowledge_use",
+            return_value=KnowledgeUseDecision(
+                PolicyOutcome.ALLOWED,
+                "synthetic updater-mechanics test seam",
+            ),
+        )
+        self.store_policy_patch.start()
+        self.addCleanup(self.store_policy_patch.stop)
         self.mock_repo = MagicMock(spec=KnowledgeRepository)
         self.mock_repo.knowledge_root = "test_knowledge"
         self.sample_entries = [
@@ -91,7 +101,7 @@ class SportsKnowledgeUpdaterTests(unittest.TestCase):
         self.assertEqual(updated_entry.source_name, "FIFA")
 
     # 3. Duplicate detection
-    def test_duplicate_fact_is_skipped(self):
+    def test_duplicate_claim_with_newer_collection_date_updates_metadata(self):
         # Exact same answer
         fact = ExtractedSportsFact(
             sport="bóng đá",
@@ -108,9 +118,9 @@ class SportsKnowledgeUpdaterTests(unittest.TestCase):
         )
 
         result = self.updater.apply_fact_update(fact, persist_markdown=False)
-        self.assertEqual(result.action, KnowledgeUpdateAction.DUPLICATE_SKIPPED)
+        self.assertEqual(result.action, KnowledgeUpdateAction.UPDATED)
         self.assertEqual(result.entry_id, "PLY-FB-MESSI-003")
-        self.assertIn("Duplicate skipped", result.message)
+        self.assertIn("Metadata updated", result.message)
         # Entry count remains 1
         self.assertEqual(len(self.mock_repo._entries), 1)
         # Timestamp refreshed
@@ -385,7 +395,7 @@ class SportsKnowledgeUpdaterTests(unittest.TestCase):
             answer="Lionel Messi hiện đang thi đấu cho Inter Miami.",
             source_name="FIFA",
             source_url="https://fifa.com/players/lionel-messi",
-            collected_at="2026-09-17",
+            collected_at="2026-01-01",
             priority=1,
             is_confirmed=True,
             reliability_score=0.95,

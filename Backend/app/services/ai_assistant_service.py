@@ -25,6 +25,17 @@ from .rag_response_validator import validate_response
 from .ai_system_knowledge import match_system_knowledge
 from .llm_sports_processor import get_llm_sports_processor
 from .system_domain_context_service import SystemDomainContextService
+from .product_service import ProductService
+from .sports_knowledge_policy import citation_deduplication_key
+from .sports_knowledge_policy_enforcement import (
+    filter_reviewed_knowledge_evidence,
+    reviewed_use_is_allowed,
+)
+from .sports_knowledge_review_ledger import load_review_ledger
+from .world_cup_lookup import format_world_cup_answer, lookup_world_cup_query
+from .user_ai_memory_service import UserAIMemoryService
+from .booking_behavior_profile_service import BookingBehaviorProfileService
+from .conversation_topic_profile_service import ConversationTopicProfileService
 
 
 
@@ -33,6 +44,16 @@ SPORT_ALIASES = {
     'cau long': 'cầu lông', 'badminton': 'cầu lông',
     'pickleball': 'pickleball', 'tennis': 'tennis',
     'bong ro': 'bóng rổ', 'bong chuyen': 'bóng chuyền',
+}
+
+# Retrieval aliases that are valid only for Natural Mode sports knowledge.
+# They bridge a router canonical entity to the entity label in the local
+# knowledge record without changing the shared retriever's contract.
+NATURAL_SPORTS_ENTITY_RETRIEVAL_ALIASES = {
+    "Bóng đá Thái Nguyên": "FC Thai Nguyen",
+}
+NATURAL_RULE_SOURCE_SPORTS = {
+    "fivb": "bóng chuyền",
 }
 WEEKDAYS = {
     'thu hai': 0, 'thu ba': 1, 'thu tu': 2, 'thu nam': 3,
@@ -58,7 +79,15 @@ _PRODUCT_SIGS: tuple[str, ...] = (
 _AMENITY_SIGS: tuple[str, ...] = (
     'tien ich', 'do tien ich', 'tien nghi', 'co so vat chat',
     'tien ich gi', 'tien ich nao', 'nhung tien ich', 'co nhung tien ich',
-    'trang thiet bi', 'trang bi gi', 'co gi',
+    'trang thiet bi', 'trang bi gi',
+)
+# Physical venue features are separate from products/services selectable when
+# booking. Generic "tiện ích" queries follow the same product options as Find Courts.
+_FACILITY_FEATURE_SIGS: tuple[str, ...] = (
+    'co so vat chat', 'bai xe', 'giu xe', 'cho do xe', 'dau xe',
+    'den led', 'den chieu sang', 'he thong den', 'may lanh', 'dieu hoa',
+    'phong thay do', 'phong tam', 'nha ve sinh', 'wifi', 'wi-fi',
+    'tu do', 'khu nghi', 'mai che', 'trong nha', 'ngoai troi',
 )
 # Terms that reference the current venue from context
 _VENUE_REF_TERMS: tuple[str, ...] = (
@@ -74,6 +103,141 @@ _SPORT_REF_TERMS: tuple[str, ...] = (
 def plain(value: str) -> str:
     normalized = unicodedata.normalize('NFD', value.casefold())
     return ''.join(char for char in normalized if unicodedata.category(char) != 'Mn').replace('đ', 'd')
+
+
+def _sports_knowledge_conversation_history(
+    messages: list[dict] | None, current_query: str,
+) -> list[dict]:
+    """Keep dialogue for follow-ups, without repeating the current user turn."""
+    if not messages:
+        return []
+    history = [
+        message for message in messages
+        if isinstance(message, dict) and message.get('role') in ('user', 'assistant')
+        and isinstance(message.get('content'), str)
+    ]
+    if history and history[-1]['role'] == 'user' and plain(history[-1]['content']).strip() == plain(current_query).strip():
+        history.pop()
+    return history[-10:]
+
+
+def _has_contextual_reference(query: str) -> bool:
+    normalized = plain(query).strip().rstrip('?!.')
+    return _is_context_dependent_followup(normalized) or any(
+        re.search(r'(?<!\w)' + re.escape(term) + r'(?!\w)', normalized)
+        for term in ('no', 'cai do', 'mon day', 'bo mon day', 'mon the thao day')
+    )
+
+
+_VOLATILE_SPORTS_FACT_TERMS = (
+    'hien tai', 'hien nay', 'moi nhat', 'gan nhat', 'mua nay', 'nam nay',
+    'dang thi dau cho', 'dang choi cho', 'clb nao', 'cau lac bo nao', 'doi nao',
+    'chuyen nhuong', 'hop dong', 'xep hang', 'thu hang', 'ranking',
+    'phong do', 'so lieu', 'so ban', 'huy chuong', 'ky luc', 'nhieu nhat', 'lich thi dau',
+)
+_REALTIME_SPORTS_FACT_TERMS = ('truc tiep', 'live', 'dang dien ra')
+_NEAR_TERM_SPORTS_FACT_TERMS = ('hom nay', 'toi nay', 'ngay mai', 'sap toi', 'tuan nay')
+_MATCH_SCHEDULE_TERMS = ('ty so', 'ket qua', 'tran dau', 'lich thi dau', 'lich dau', 'fixture')
+BACKGROUND_VOLATILE_WARNING = 'Thông tin này có thể đã thay đổi, mình chưa có nguồn xác nhận.'
+
+
+def _contains_any_phrase(query: str, phrases: tuple[str, ...]) -> bool:
+    return any(re.search(r'(?<!\w)' + re.escape(phrase) + r'(?!\w)', query) for phrase in phrases)
+_SPORTS_TOPIC_LABELS = {
+    'achievements': 'thành tích hoặc kỷ lục',
+    'statistics': 'số liệu thống kê',
+    'rules': 'luật thi đấu',
+    'current_club': 'đội hoặc câu lạc bộ hiện tại',
+    'match_result': 'kết quả thi đấu',
+    'identity': 'thông tin vận động viên',
+    'career': 'sự nghiệp',
+}
+
+
+def _classify_background_sports_question(
+    query: str,
+    topic: str | None,
+    context_topic: str | None = None,
+) -> str:
+    """Classify a Sports Knowledge question when no authorized evidence exists."""
+    normalized = plain(query)
+    topics = {plain(str(value)) for value in (topic, context_topic) if value}
+    has_historical_year = bool(re.search(r'\b(?:19|20)\d{2}\b', normalized))
+    if _contains_any_phrase(normalized, _REALTIME_SPORTS_FACT_TERMS) or (
+        _contains_any_phrase(normalized, _NEAR_TERM_SPORTS_FACT_TERMS)
+        and _contains_any_phrase(normalized, _MATCH_SCHEDULE_TERMS)
+    ):
+        return 'BACKGROUND_REALTIME'
+    if _contains_any_phrase(normalized, _VOLATILE_SPORTS_FACT_TERMS) or topics.intersection(
+        {'current_club', 'status', 'statistics'}
+    ) or ('match_result' in topics and not has_historical_year):
+        return 'BACKGROUND_VOLATILE_WARNED'
+    return 'BACKGROUND_STABLE'
+
+
+def _background_answer_without_citations(answer: str) -> str:
+    """Do not present model-generated source links as verified citations."""
+    answer = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', answer)
+    answer = re.sub(r'https?://\S+', '', answer)
+    return '\n'.join(
+        line for line in answer.splitlines()
+        if not re.match(r'^\s*(?:nguồn|source)\s*:', line, re.IGNORECASE)
+    ).strip()
+
+
+def _is_context_dependent_followup(query: str) -> bool:
+    normalized = plain(query).strip().rstrip('?!.')
+    return (
+        normalized.startswith(('con mon ', 'the viet nam thi sao', 'the con ', 'con nam ', 'con giai ', 'vay con ', 'vay thi '))
+        or normalized in (
+            'ban noi ro hon duoc khong', 'noi ro hon', 'giai thich ro hon', 'con cai do thi sao',
+            'cai do thi sao', 'no thi sao', 'con no thi sao', 'con mon day thi sao',
+        )
+    )
+
+
+def _is_team_listing_query(query: str) -> bool:
+    normalized = plain(query)
+    return any(term in normalized for term in (
+        'co nhung clb', 'co nhung cau lac bo', 'nhung clb', 'cac clb',
+        'nhung cau lac bo', 'cac cau lac bo', 'bao nhieu clb',
+        'bao nhieu cau lac bo', 'nhung doi bong nao', 'cac doi bong',
+        'nhung doi nao', 'cac doi nao', 'co nhung doi nao',
+        'co nhung doi bong nao', 'liet ke cac clb', 'liet ke cac doi',
+    ))
+
+
+def _is_specific_thai_nguyen_team_query(query: str) -> bool:
+    normalized = plain(query)
+    return not _is_team_listing_query(query) and any(term in normalized for term in (
+        'doi thai nguyen', 'doi bong thai nguyen', 'fc thai nguyen', 'clb thai nguyen',
+    ))
+
+
+def _is_rule_or_court_query(query: str) -> bool:
+    normalized = plain(query)
+    return any(term in normalized for term in (
+        'luat', 'quy tac', 'kich thuoc', 'chieu cao luoi', 'san thi dau',
+        'san bong', 'court dimensions', 'net height',
+    ))
+
+
+def _is_natural_sport_rule_entry(entry, sport: str, query: str) -> bool:
+    sport_key = plain(sport)
+    if plain(getattr(entry, 'sport', '') or '') != sport_key:
+        return False
+    if plain(getattr(entry, 'entity', '') or '') != sport_key:
+        return False
+
+    topic = plain(getattr(entry, 'topic', '') or '')
+    entry_id = (getattr(entry, 'id', '') or '').casefold()
+    if not (any(term in topic for term in ('luat', 'rule', 'san bai', 'court', 'kich thuoc')) or entry_id.startswith('rule-')):
+        return False
+
+    query_text = plain(query)
+    entry_text = plain(f"{getattr(entry, 'question', '')} {getattr(entry, 'answer', '')}")
+    query_subjects = ('kich thuoc', 'chieu cao luoi', 'san bong', 'san thi dau', 'court dimensions', 'net height')
+    return any(term in query_text and term in entry_text for term in query_subjects)
 
 
 @dataclass
@@ -150,7 +314,7 @@ class AIAssistantService:
         if any(term in normalized for term in ("thoi tiet", "du bao thoi tiet")):
             return "Mình chưa tra cứu thời tiết trực tiếp trong phiên này. Nếu bạn muốn chơi thể thao, mình có thể giúp tìm sân hoặc kiểm tra lịch trống."
         if any(term in normalized for term in ("thit cho", "che buoi", "pho bo", "mon an", "nau an", "am thuc")):
-            return f"Mình chưa hỗ trợ sâu về ẩm thực hoặc món ăn. Mình vẫn có thể giúp bạn tiếp tục với {context.get("sport_type")} hoặc tìm sân và trao đổi về 6 môn thể thao của SportHub." if (context or {}).get("sport_type") else "Mình chưa hỗ trợ sâu về ẩm thực hoặc món ăn. Mình vẫn có thể giúp bạn tìm sân và trao đổi về 6 môn thể thao của SportHub."
+            return f"Mình chưa hỗ trợ sâu về ẩm thực hoặc món ăn. Mình vẫn có thể giúp bạn tiếp tục với {context.get('sport_type')} hoặc tìm sân và trao đổi về 6 môn thể thao của SportHub." if (context or {}).get("sport_type") else "Mình chưa hỗ trợ sâu về ẩm thực hoặc món ăn. Mình vẫn có thể giúp bạn tìm sân và trao đổi về 6 môn thể thao của SportHub."
         if any(term in normalized for term in ("sua xe", "ky thuat", "dien", "may moc")):
             return "Mình chưa hỗ trợ sâu về sửa chữa hoặc kỹ thuật. Mình vẫn có thể giúp bạn tìm sân thể thao và kiểm tra lịch trống tại SportHub."
         if any(term in normalized for term in ("chung khoan", "tai chinh", "co phieu")):
@@ -176,14 +340,231 @@ class AIAssistantService:
             return "HTTP là giao thức giúp trình duyệt và máy chủ trao đổi dữ liệu trên web."
         if normalized in ("bong da co nhung vi tri nao", "cac vi tri trong bong da la gi"):
             return "Các vị trí phổ biến trong bóng đá gồm thủ môn, hậu vệ, tiền vệ và tiền đạo; trong từng tuyến có thể chia nhỏ như trung vệ, hậu vệ biên, tiền vệ trung tâm hoặc tiền đạo cắm."
+        admin_terms = ("admin", "quan tri vien", "quan tri")
+        contact_terms = ("so dien thoai", "sdt", "lien he", "goi cho", "thong tin lien he", "so admin", "so quan tri", "xin so")
+        if any(a in normalized for a in admin_terms) and any(c in normalized for c in contact_terms):
+            return "Số điện thoại của admin SportHub là 0866606729."
         return None
+
+    def _answer_account_name_question(self, query: str) -> str | None:
+        normalized = plain(query).strip().rstrip('?! .')
+        if normalized not in {
+            'ban biet toi ten la gi khong', 'ban co biet toi ten la gi khong',
+            'toi ten la gi', 'toi ten gi', 'ten toi la gi', 'ten cua toi la gi',
+            'minh ten la gi', 'ten minh la gi',
+            'ban biet ten toi khong', 'ban co biet ten toi khong',
+            'ban biet ten cua toi khong', 'ban co biet ten cua toi khong',
+            'ban nho ten toi khong', 'ban co nho ten cua toi khong',
+            'ban nho toi ten la gi khong', 'ban co nho toi ten la gi khong',
+        }:
+            return None
+        name = getattr(self.current_user, 'full_name', None) if self.current_user else None
+        if isinstance(name, str) and name.strip():
+            return f'Tên trong hồ sơ SportHub của bạn là {name.strip()}.'
+        return 'Mình chưa biết tên của bạn từ hồ sơ tài khoản. Bạn muốn mình gọi bạn là gì?'
+
+    def _enrich_natural_context_from_history(self, context: dict[str, Any], query: str) -> dict[str, Any]:
+        """Recover a prior sports subject only for an explicit follow-up reference.
+
+        Conversation text is used to identify the subject, never as evidence for
+        the answer. A non-sports turn cannot silently make an ambiguous question
+        look resolved.
+        """
+        if not _has_contextual_reference(query):
+            return context
+        if any(context.get(key) for key in ('active_entity', 'sports_entity', 'sport_type', 'sport')):
+            return context
+
+        history = _sports_knowledge_conversation_history(context.get('conversation_messages'), query)
+        for message in reversed(history):
+            if message.get('role') != 'user':
+                continue
+            prior_query = str(message.get('content') or '').strip()
+            if not prior_query:
+                continue
+            try:
+                prior_route = self.intent_router.route(prior_query, {}, today=datetime.now(self.tz).date())
+            except Exception:
+                logger.warning('Could not derive Natural Mode context from a prior turn', exc_info=True)
+                return context
+            if prior_route.intent != AssistantIntent.SPORTS_KNOWLEDGE:
+                continue
+
+            entities = prior_route.entities
+            entity = entities.active_entity or entities.sports_entity
+            sport = entities.sport_type
+            if not entity and not sport:
+                continue
+            enriched = dict(context)
+            if entity:
+                enriched['active_entity'] = entity
+                enriched['sports_entity'] = entity
+            if sport:
+                enriched['sport_type'] = sport
+                enriched['sport'] = sport
+            if entities.current_topic:
+                enriched['current_topic'] = entities.current_topic
+            enriched['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+            logger.info('Natural conversation context restored from prior sports turn')
+            return enriched
+        return context
 
     @staticmethod
     def _natural_ambiguous_query(query: str, context: dict[str, Any]) -> bool:
-        if any(context.get(key) for key in ("last_intent", "active_entity", "sports_entity", "sport_type", "field_id")):
+        has_context = any(context.get(key) for key in (
+            "last_intent", "active_entity", "sports_entity", "sport_type", "field_id", "current_topic",
+        ))
+        if has_context:
             return False
         normalized = plain(query).strip().rstrip("?!.")
-        return normalized in ("cai do thi sao", "con cai kia", "cho toi xem them", "the con no")
+        return (
+            normalized in ("cai do thi sao", "con cai kia", "cho toi xem them", "the con no", "no thi sao")
+            or _is_context_dependent_followup(normalized)
+        )
+
+    def _sports_knowledge_generation_error_response(
+        self,
+        query: str,
+        route: IntentRoute,
+        criteria: SearchCriteria,
+        sport: str | None,
+        target_entities: list,
+        topic: str | None,
+        *,
+        reason: str,
+        provider_status: str | None = None,
+    ) -> dict[str, Any]:
+        context = self._conversation_context or {}
+        prior_user_query = next((
+            str(message.get('content') or '')
+            for message in reversed(context.get('conversation_messages') or [])
+            if isinstance(message, dict)
+            and message.get('role') == 'user'
+            and plain(str(message.get('content') or '')).strip() != plain(query).strip()
+        ), '')
+        inferred_topic = topic or route.entities.current_topic or context.get('current_topic') or context.get('entity_type')
+        prior_normalized = plain(prior_user_query)
+        if not inferred_topic and prior_normalized:
+            if any(term in prior_normalized for term in ('huy chuong', 'ky luc', 'vo dich', 'thanh tich', 'danh hieu')):
+                inferred_topic = 'achievements'
+            elif any(term in prior_normalized for term in ('luat', 'quy tac', 'cach choi', 'tinh diem')):
+                inferred_topic = 'rules'
+            elif any(term in prior_normalized for term in ('ky thuat', 'chien thuat')):
+                inferred_topic = 'technique'
+
+        sport_label = sport or context.get('sport_type') or context.get('sport')
+
+        needs_clarification = False
+        status = 'OK'
+        if reason == 'retrieval_error':
+            reply = 'Mình đang gặp trục trặc khi tra cứu kiến thức thể thao nên chưa thể xác nhận câu trả lời. Bạn thử lại sau một chút nhé.'
+            status = 'ERROR'
+        elif reason == 'llm_unavailable':
+            reply = 'Mình chưa thể hoàn tất câu trả lời này ngay lúc này. Bạn thử lại sau ít phút hoặc diễn đạt câu hỏi theo cách khác nhé.'
+            status = 'ERROR'
+        elif reason == 'provider_error' or provider_status == 'failed':
+            reply = 'Mình chưa thể hoàn tất câu trả lời này ngay lúc này. Bạn thử lại sau ít phút hoặc diễn đạt câu hỏi theo cách khác nhé.'
+            status = 'ERROR'
+        else:
+                raise ValueError(f'Unsupported sports knowledge generation failure: {reason}')
+
+        response = self._response(
+            reply,
+            criteria,
+            [],
+            needs_clarification=needs_clarification,
+            classification=ScopeClassification.IN_SCOPE,
+            status=status,
+        )
+        response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+        if sport_label:
+            response['understood']['sport_type'] = sport_label
+            response['understood']['sport'] = sport_label
+        if inferred_topic:
+            response['understood']['current_topic'] = inferred_topic
+        if route.entities.entity_type:
+            response['understood']['entity_type'] = route.entities.entity_type
+        elif inferred_topic:
+            response['understood']['entity_type'] = inferred_topic
+        return response
+
+    def _natural_local_rag_response(
+        self,
+        evidence_entries: list,
+        citation_evidence: list,
+        criteria: SearchCriteria,
+        route: IntentRoute,
+        sport: str | None,
+        target_entities: list,
+        target_topic: str | None,
+    ) -> dict[str, Any] | None:
+        """Answer only from display-authorized local evidence without using a provider."""
+        entries = [entry for entry, _score in evidence_entries if str(getattr(entry, 'answer', '') or '').strip()]
+        if not entries:
+            return None
+
+        requested_entities = [entity for entity in target_entities if entity]
+        selected: list[tuple[str | None, Any]] = []
+        if len(requested_entities) > 1:
+            for entity in requested_entities:
+                entry = next((item for item in entries if plain(getattr(item, 'entity', '') or '') == plain(entity)), None)
+                if entry:
+                    selected.append((entity, entry))
+        if not selected:
+            selected = [(None, entries[0])]
+
+        sections = []
+        citations = []
+        allowed_citation_keys = {
+            key
+            for entry, _score in citation_evidence
+            if (key := citation_deduplication_key(
+                getattr(entry, 'source_name', None) or getattr(entry, 'source', None),
+                getattr(entry, 'source_url', None),
+                record_id=getattr(entry, 'id', None),
+            )) is not None
+        }
+        for requested_entity, entry in selected:
+            answer = str(getattr(entry, 'answer', '') or '').strip()
+            entity = requested_entity or getattr(entry, 'entity', None)
+            sections.append(f"**{entity}**: {answer}" if len(selected) > 1 and entity else answer)
+
+            source_name = getattr(entry, 'source_name', None) or getattr(entry, 'source', None)
+            source_url = getattr(entry, 'source_url', None)
+            citation_key = citation_deduplication_key(
+                source_name, source_url, record_id=getattr(entry, 'id', None),
+            )
+            if source_name and citation_key in allowed_citation_keys:
+                citation = f"Nguồn: {source_name}"
+                if source_url:
+                    citation += f", {source_url}"
+                if citation not in citations:
+                    citations.append(citation)
+
+        first_entry = selected[0][1]
+        response = self._response(
+            "\n\n".join(sections) + (f"\n\n({'; '.join(citations)})" if citations else ''),
+            criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK',
+        )
+        response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+        resolved_entity = selected[0][0] or getattr(first_entry, 'entity', None) or route.entities.active_entity
+        if resolved_entity:
+            response['understood']['active_entity'] = resolved_entity
+            response['understood']['sports_entity'] = resolved_entity
+        context_entities = requested_entities or list(getattr(route.entities, 'sports_entities', None) or [])
+        if context_entities:
+            response['understood']['sports_entities'] = context_entities
+        elif resolved_entity:
+            response['understood']['sports_entities'] = [resolved_entity]
+        if sport or getattr(first_entry, 'sport', None):
+            response['understood']['sport_type'] = sport or first_entry.sport
+            response['understood']['sport'] = sport or first_entry.sport
+        if target_topic or getattr(first_entry, 'topic', None):
+            response['understood']['current_topic'] = target_topic or first_entry.topic
+            response['understood']['entity_type'] = route.entities.entity_type or target_topic or first_entry.topic
+        logger.info('Natural sports knowledge decision=LOCAL_RAG')
+        return response
+
     @staticmethod
     def _natural_simple_math(query: str) -> str | None:
         normalized = plain(query).strip().rstrip("?!.")
@@ -199,6 +580,50 @@ class AIAssistantService:
         rendered = int(result) if isinstance(result, float) and result.is_integer() else result
         return f"{left} {operator} {right} = {rendered} 😄"
 
+    def _generate_natural_llm_response(
+        self,
+        query: str,
+        evidences: list,
+        criteria: SearchCriteria | None = None,
+        is_out_of_scope: bool = False,
+        intent: str | None = None,
+        action: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if self._assistant_mode != AssistantMode.NATURAL:
+            return None
+        llm_processor = get_llm_sports_processor()
+        conversation_messages = self._conversation_context.get('conversation_messages')
+        grounded = llm_processor.generate_grounded_response(
+            query,
+            evidences,
+            conversation_messages=conversation_messages,
+            is_out_of_scope=is_out_of_scope,
+            intent=intent,
+            personal_memories=self._personal_memories,
+            behavior_profile=self._booking_behavior_profile,
+            conversation_topic_profile=(
+                [] if is_out_of_scope else self._relevant_conversation_topics(query)
+            ),
+        )
+        if grounded and grounded.answer:
+            status = "OUT_OF_SCOPE" if is_out_of_scope else "OK"
+            classification = ScopeClassification.OUT_OF_SCOPE if is_out_of_scope else ScopeClassification.IN_SCOPE
+            resp = self._response(
+                grounded.answer,
+                criteria or SearchCriteria(),
+                [],
+                classification=classification,
+                status=status,
+                action=action,
+            )
+            return resp
+        return None
+
+    def _relevant_conversation_topics(self, query: str) -> list[dict]:
+        return ConversationTopicProfileService.relevant_to_query(
+            self._conversation_topic_profile, query,
+        )
+
     def _answer_natural_equipment(self, sport: str):
         equipment = {
             "bóng đá": "Bóng, giày đá bóng, tất, quần áo thi đấu, bảo vệ ống đồng và găng tay thủ môn nếu cần.",
@@ -208,8 +633,18 @@ class AIAssistantService:
             "bóng rổ": "Bóng rổ, giày bóng rổ, trang phục thể thao và phụ kiện bảo vệ nếu cần.",
             "bóng chuyền": "Bóng chuyền, giày sân, trang phục thể thao và băng bảo vệ đầu gối nếu cần.",
         }
-        answer = equipment.get(sport, f"Mình có thể liệt kê dụng cụ phù hợp cho môn {sport}.")
-        response = self._response(answer + "\n\n" + self._natural_bridge("sports", sport), SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
+        answer = equipment.get(sport, f"Dụng cụ phù hợp cho môn {sport}.")
+        if self._assistant_mode == AssistantMode.NATURAL:
+            evidences = [{"source_name": "Sport Equipment Guide", "sport": sport, "content": answer}]
+            res = self._generate_natural_llm_response(f"Dụng cụ cần thiết cho môn {sport} là gì?", evidences, intent="SPORTS_EQUIPMENT")
+            if res:
+                res["understood"].update({
+                    "sport_type": sport, "sport": sport, "active_entity": sport,
+                    "sports_entity": sport, "last_intent": AssistantIntent.SPORTS_KNOWLEDGE.value,
+                    "scope_decision": ScopeDecision.SPORTS_KNOWLEDGE.value,
+                })
+                return res
+        response = self._response(answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
         response["understood"].update({
             "sport_type": sport, "sport": sport, "active_entity": sport,
             "sports_entity": sport, "last_intent": AssistantIntent.SPORTS_KNOWLEDGE.value,
@@ -221,21 +656,24 @@ class AIAssistantService:
         """
         Detect if query is asking about SportHub system source-of-truth products/amenities.
         Returns (kind, sport_type, field_id)
-        kind: 'sport_products' | 'sport_amenities' | 'venue_amenities' | 'venue_products' | 'none'
+        kind: 'sport_products' | 'sport_amenities' | 'sport_facility_features' |
+              'venue_amenities' | 'venue_products' | 'venue_orderable_options' | 'none'
         """
         norm = plain(query)
         is_prod = any(term in norm for term in _PRODUCT_SIGS)
         is_amen = any(term in norm for term in _AMENITY_SIGS)
+        is_facility_feature = any(term in norm for term in _FACILITY_FEATURE_SIGS)
 
         previous_kind = context.get("domain_context_type")
         is_contextual_followup = IntentRouter.is_system_domain_followup(norm, context)
-        if is_contextual_followup and not (is_prod or is_amen):
+        if is_contextual_followup and not (is_prod or is_amen or is_facility_feature):
             # The operation is semantic context, not something that must be
             # repeated in every short follow-up.
-            is_prod = previous_kind in ("sport_products", "venue_products")
-            is_amen = previous_kind in ("sport_amenities", "venue_amenities")
+            is_prod = previous_kind in ("sport_products", "venue_products", "venue_orderable_options")
+            is_amen = previous_kind == "sport_amenities"
+            is_facility_feature = previous_kind in ("sport_facility_features", "venue_amenities")
 
-        if not (is_prod or is_amen):
+        if not (is_prod or is_amen or is_facility_feature):
             return ('none', None, None)
 
         # Resolve an explicitly named venue before inheriting the previous one.
@@ -256,23 +694,27 @@ class AIAssistantService:
 
         # Venue-specific priority if field_id is present
         if field_id:
-            if is_prod:
-                return ('venue_products', sport, field_id)
-            if is_amen:
+            if is_facility_feature:
                 return ('venue_amenities', sport, field_id)
+            if is_prod or is_amen:
+                return ('venue_orderable_options', sport, field_id)
 
         # Sport-level fallback
         if sport:
+            if is_facility_feature:
+                return ('sport_facility_features', sport, None)
             if is_prod:
                 return ('sport_products', sport, None)
             if is_amen:
                 return ('sport_amenities', sport, None)
 
         # General products/amenities query without sport or venue
+        if is_facility_feature:
+            return ('sport_facility_features', sport, None)
         if is_prod:
             return ('sport_products', sport or 'bóng đá', None)
         if is_amen:
-            return ('sport_amenities', sport or 'bóng đá', None)
+            return ('sport_amenities', sport, None)
 
         return ('none', None, None)
 
@@ -283,6 +725,13 @@ class AIAssistantService:
         is_prof = self._assistant_mode == AssistantMode.PROFESSIONAL
         criteria = SearchCriteria(sport_type=sport, requested_field_id=field_id)
 
+        if kind in {'sport_amenities', 'sport_facility_features'} and not sport:
+            return self._response(
+                "Bạn muốn xem tiện ích có thể chọn khi đặt hay cơ sở vật chất của môn thể thao nào?",
+                criteria, [], needs_clarification=True, classification=ScopeClassification.UNCLEAR,
+                status="NEED_MORE_DATA",
+            )
+
         if kind == 'sport_products' and sport:
             res = svc.get_sport_products(sport)
             if res.source in ('live', 'both'):
@@ -291,25 +740,28 @@ class AIAssistantService:
                     status_str = "đang sẵn có" if p.is_available else "tạm hết hàng"
                     fac_str = f" tại {p.facility_name}" if p.facility_name else ""
                     prods_text.append(f"- **{p.name}** ({p.product_type}): {p.price:,.0f} VNĐ/{p.unit} ({status_str}{fac_str})")
-
-                body = f"Các sản phẩm & dịch vụ đang được cung cấp cho môn **{res.sport}** trên SportHub ({res.contributing_facility_count} cơ sở):\n" + "\n".join(prods_text)
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("sports", res.sport)
+                raw_body = f"Các sản phẩm & dịch vụ đang được cung cấp cho môn **{res.sport}** trên SportHub ({res.contributing_facility_count} cơ sở):\n" + "\n".join(prods_text)
             elif res.source == 'catalog':
                 cat_text = [f"- **{c.name}** ({c.product_type})" for c in res.catalog_items]
-                body = (
+                raw_body = (
                     f"Hiện chưa có cơ sở nào đăng bán sản phẩm trực tiếp cho môn **{res.sport}**.\n"
                     f"Gợi ý danh mục hệ thống SportHub cho môn này:\n" + "\n".join(cat_text) + "\n\n"
                     f"*(Lưu ý: Các danh mục trên là gợi ý từ hệ thống, chưa phải sản phẩm đang có sẵn tại cơ sở).* "
                 )
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("sports", res.sport)
             else:
-                body = f"Hiện chưa có thông tin sản phẩm hay dịch vụ nào cho môn **{sport}** trên hệ thống SportHub."
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("sports", sport)
+                raw_body = f"Hiện chưa có thông tin sản phẩm hay dịch vụ nào cho môn **{sport}** trên hệ thống SportHub."
 
-            resp = self._response(body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+            if not is_prof:
+                evidences = [{"source_name": "SportHub System Domain Data", "sport": res.sport, "content": raw_body}]
+                llm_res = self._generate_natural_llm_response(query, evidences, criteria, intent="SYSTEM_DOMAIN")
+                if llm_res:
+                    llm_res["understood"].update({
+                        "sport_type": res.sport, "domain_context_type": "sport_products",
+                        "live_count": len(res.live_products), "catalog_count": len(res.catalog_items),
+                    })
+                    return llm_res
+
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
             resp["understood"].update({
                 "sport_type": res.sport, "domain_context_type": "sport_products",
                 "live_count": len(res.live_products), "catalog_count": len(res.catalog_items),
@@ -317,25 +769,66 @@ class AIAssistantService:
             return resp
 
         if kind == 'sport_amenities' and sport:
+            canonical_sport = SystemDomainContextService.resolve_sport(sport) or sport
+            option_names = ProductService(self.repository.db).sport_product_names(canonical_sport)
+            if option_names:
+                options_text = "\n".join(f"- {name}" for name in option_names)
+                raw_body = (
+                    f"Các tiện ích và dịch vụ có trong bộ lọc Tìm sân cho môn **{canonical_sport}** gồm:\n"
+                    f"{options_text}\n\n"
+                    "Lưu ý: Danh sách này đồng bộ với tùy chọn theo môn trên Tìm sân. Sản phẩm thực tế và khả dụng khi đặt sân tùy từng cơ sở."
+                )
+            else:
+                raw_body = f"Hiện chưa có tùy chọn tiện ích hoặc dịch vụ cho môn **{canonical_sport}** trên Tìm sân."
+
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+            resp["understood"].update({
+                "sport_type": canonical_sport, "domain_context_type": "sport_amenities",
+                "amenity_count": len(option_names),
+            })
+            return resp
+
+        if kind == 'sport_facility_features' and sport:
             res = svc.get_sport_amenities(sport)
             if res.has_data:
-                amenities_str = ", ".join(res.amenities)
-                body = (
-                    f"Các tiện ích được ghi nhận tại các cơ sở hỗ trợ môn **{res.sport}** ({res.source_facility_count} cơ sở):\n"
-                    f"- {amenities_str}\n\n"
-                    f"*(Lưu ý: Đây là tổng hợp tiện ích từ các cơ sở có môn {res.sport}. Không phải mọi sân của môn này đều có đầy đủ tất cả tiện ích trên).* "
+                features_text = ", ".join(res.amenities)
+                raw_body = (
+                    f"Cơ sở vật chất được ghi nhận tại các cơ sở hỗ trợ môn **{res.sport}** "
+                    f"({res.source_facility_count} cơ sở):\n- {features_text}\n\n"
+                    f"*(Đây là thông tin về cơ sở vật chất, không phải danh sách sản phẩm/dịch vụ có thể đặt kèm.)*"
                 )
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("sports", res.sport)
             else:
-                body = f"Chưa có thông tin tiện ích cụ thể cho các cơ sở hỗ trợ môn **{sport}** trên hệ thống."
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("sports", sport)
-
-            resp = self._response(body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+                raw_body = f"Chưa có thông tin cơ sở vật chất cho các cơ sở hỗ trợ môn **{sport}** trên hệ thống."
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
             resp["understood"].update({
-                "sport_type": res.sport, "domain_context_type": "sport_amenities",
-                "amenity_count": len(res.amenities),
+                "sport_type": res.sport, "domain_context_type": "sport_facility_features",
+                "facility_feature_count": len(res.amenities),
+            })
+            return resp
+
+        if kind == 'venue_orderable_options' and field_id:
+            field_obj = svc.resolve_field(field_id)
+            if field_obj and field_obj.facility_id:
+                products = InventoryService(self.repository.db).public_available(
+                    field_obj.facility_id, sport or field_obj.sport_type,
+                )
+            else:
+                products = []
+            if products:
+                product_lines = [
+                    f"- **{item['name']}**: {item['price']:,.0f} VNĐ/{item['unit']}"
+                    for item in products
+                ]
+                raw_body = (
+                    f"Sản phẩm và dịch vụ có thể chọn khi đặt tại **{field_obj.facility.name if field_obj.facility else field_obj.name}** "
+                    f"cho môn **{field_obj.sport_type}**:\n" + "\n".join(product_lines)
+                )
+            else:
+                raw_body = "Sân/cơ sở này hiện chưa có sản phẩm hoặc dịch vụ bổ sung khả dụng để chọn khi đặt."
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+            resp["understood"].update({
+                "field_id": field_id, "domain_context_type": "venue_orderable_options",
+                "live_count": len(products),
             })
             return resp
 
@@ -343,14 +836,21 @@ class AIAssistantService:
             res = svc.get_venue_amenities(field_id)
             if res:
                 all_a = res.all_amenities
-                amen_str = ", ".join(all_a) if all_a else "Không có ghi nhận tiện ích đặc biệt."
-                body = f"Tiện ích tại **{res.field_name}** ({res.facility_name or 'Cơ sở'}):\n- {amen_str}"
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("general")
+                amen_str = ", ".join(all_a) if all_a else "Không có ghi nhận cơ sở vật chất đặc biệt."
+                raw_body = f"Cơ sở vật chất tại **{res.field_name}** ({res.facility_name or 'Cơ sở'}):\n- {amen_str}\n\n*(Đây là thông tin của địa điểm, không phải sản phẩm/dịch vụ có thể đặt kèm.)*"
             else:
-                body = "Không tìm thấy thông tin tiện ích cho sân này trên hệ thống."
+                raw_body = "Không tìm thấy thông tin tiện ích cho sân này trên hệ thống."
 
-            resp = self._response(body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+            if not is_prof:
+                evidences = [{"source_name": "SportHub System Domain Data", "field_id": field_id, "content": raw_body}]
+                llm_res = self._generate_natural_llm_response(query, evidences, criteria, intent="SYSTEM_DOMAIN")
+                if llm_res:
+                    llm_res["understood"].update({
+                        "field_id": field_id, "domain_context_type": "venue_amenities",
+                    })
+                    return llm_res
+
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
             resp["understood"].update({
                 "field_id": field_id, "domain_context_type": "venue_amenities",
             })
@@ -366,13 +866,21 @@ class AIAssistantService:
                     status_str = "đang sẵn có" if p.is_available else "tạm hết hàng"
                     prods_text.append(f"- **{p.name}** ({p.product_type}): {p.price:,.0f} VNĐ/{p.unit} ({status_str})")
                 fac_name = prods[0].facility_name or "Cơ sở"
-                body = f"Sản phẩm & dịch vụ tại **{fac_name}**:\n" + "\n".join(prods_text)
-                if not is_prof:
-                    body += "\n\n" + self._natural_bridge("general")
+                raw_body = f"Sản phẩm & dịch vụ tại **{fac_name}**:\n" + "\n".join(prods_text)
             else:
-                body = "Cơ sở này hiện chưa có sản phẩm hoặc dịch vụ nào đang được cung cấp trực tiếp."
+                raw_body = "Cơ sở này hiện chưa có sản phẩm hoặc dịch vụ nào đang được cung cấp trực tiếp."
 
-            resp = self._response(body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
+            if not is_prof:
+                evidences = [{"source_name": "SportHub System Domain Data", "field_id": field_id, "content": raw_body}]
+                llm_res = self._generate_natural_llm_response(query, evidences, criteria, intent="SYSTEM_DOMAIN")
+                if llm_res:
+                    llm_res["understood"].update({
+                        "field_id": field_id, "domain_context_type": "venue_products",
+                        "live_count": len(prods),
+                    })
+                    return llm_res
+
+            resp = self._response(raw_body, criteria, [], classification=ScopeClassification.IN_SCOPE, status="OK")
             resp["understood"].update({
                 "field_id": field_id, "domain_context_type": "venue_products",
                 "live_count": len(prods),
@@ -400,6 +908,10 @@ class AIAssistantService:
         self.guardrail = guardrail or RAGGuardrail()
         self._active_route: IntentRoute | None = None
         self._conversation_context: dict[str, Any] = {}
+        self._personal_memories: list[dict[str, str]] = []
+        self._booking_behavior_profile: dict | None = None
+        self._conversation_topic_profile: list[dict] = []
+        self._personal_memory_load_failed = False
         self._assistant_mode: AssistantMode = AssistantMode.NATURAL
         self._mode_evaluation: ModeScopeEvaluation | None = None
 
@@ -424,7 +936,56 @@ class AIAssistantService:
         if context_field_id and not router_context.get('field_id'):
             router_context['field_id'] = context_field_id
         router_context = self._sanitize_context_for_mode(router_context, self._assistant_mode)
+        if self._assistant_mode == AssistantMode.NATURAL:
+            router_context = self._enrich_natural_context_from_history(router_context, query)
         self._conversation_context = router_context
+        self._personal_memories = []
+        self._booking_behavior_profile = None
+        self._conversation_topic_profile = []
+        self._personal_memory_load_failed = False
+        if self._assistant_mode == AssistantMode.NATURAL and self.current_user is not None:
+            db = getattr(self.repository, 'db', None)
+            if db is not None:
+                try:
+                    self._personal_memories = UserAIMemoryService.prompt_memories(db, self.current_user.id)
+                except Exception:
+                    self._personal_memory_load_failed = True
+                    db.rollback()
+                    logger.warning('Could not load personal assistant memory', exc_info=True)
+                try:
+                    self._booking_behavior_profile = BookingBehaviorProfileService.build(db, self.current_user.id)
+                except Exception:
+                    self._booking_behavior_profile = None
+                    db.rollback()
+                    logger.warning('Could not build booking behavior profile', exc_info=True)
+                try:
+                    self._conversation_topic_profile = ConversationTopicProfileService.build(db, self.current_user.id)
+                except Exception:
+                    self._conversation_topic_profile = []
+                    db.rollback()
+                    logger.warning('Could not build conversation topic profile', exc_info=True)
+
+        if self._assistant_mode == AssistantMode.NATURAL:
+            account_name_answer = self._answer_account_name_question(query)
+            if account_name_answer is not None:
+                self._active_route = None
+                return self._response(
+                    account_name_answer,
+                    SearchCriteria(),
+                    [],
+                    intent=AssistantIntent.ACCOUNT_SUPPORT.value,
+                    classification=ScopeClassification.IN_SCOPE,
+                    status='OK',
+                )
+            personal_answer = self._answer_personal_memory_question(query)
+            if personal_answer is not None:
+                return self._response(
+                    personal_answer,
+                    SearchCriteria(),
+                    [],
+                    classification=ScopeClassification.IN_SCOPE,
+                    status='OK',
+                )
         
         # Scope Router domain classification
         scope_domain = ScopeRouter.classify_domain(query, router_context, self._assistant_mode)
@@ -432,41 +993,18 @@ class AIAssistantService:
         route = self.intent_router.route(message, router_context, today=datetime.now(self.tz).date())
         self._active_route = route
 
-        # Natural-only semantic answers must run before fixed business/out-of-scope fallbacks.
+        # Natural-only control check: Ambiguous query without context requests clarification.
         if self._assistant_mode == AssistantMode.NATURAL:
-            context_answer = self._natural_context_answer(query, router_context)
-            if context_answer:
-                return self._response(context_answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
-            direct_answer = self._natural_direct_answer(query)
-            if direct_answer:
-                return self._response(direct_answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
             if self._natural_ambiguous_query(query, router_context):
                 return self._response("Bạn đang muốn xem thêm về nội dung hoặc kết quả nào? Hãy cho mình biết tên môn thể thao, sân hoặc chủ đề nhé.", SearchCriteria(), [], needs_clarification=True, classification=ScopeClassification.UNCLEAR, status="NEED_MORE_DATA")
-            conversational_answer = self._natural_conversation_answer(route.intent)
-            if conversational_answer:
-                return self._response(conversational_answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
-            context_answer = self._natural_context_answer(query, router_context)
-            if context_answer:
-                return self._response(context_answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
-            direct_answer = self._natural_direct_answer(query)
-            if direct_answer:
-                return self._response(direct_answer, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK")
-            if self._natural_ambiguous_query(query, router_context):
-                return self._response("Bạn đang muốn xem thêm về nội dung hoặc kết quả nào? Hãy cho mình biết tên môn thể thao, sân hoặc chủ đề nhé.", SearchCriteria(), [], needs_clarification=True, classification=ScopeClassification.UNCLEAR, status="NEED_MORE_DATA")
-            # System Domain Context: sport-level / venue-level products & amenities
-            # Runs BEFORE generic equipment handler to catch SportHub-specific queries
-            sys_domain = self._detect_system_domain_query(query, router_context)
-            if sys_domain[0] != 'none':
-                return self._answer_system_domain(query, sys_domain[0], sys_domain[1], sys_domain[2], router_context)
-            equipment_sport = self._natural_sport_equipment(query, router_context)
-            if equipment_sport:
-                return self._answer_natural_equipment(equipment_sport)
-            simple_math = self._natural_simple_math(query)
-            if simple_math:
-                return self._response(
-                    simple_math + "\n\n" + self._natural_bridge("general"),
-                    SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK",
-                )
+            role = self.current_user.role if self.current_user else None
+            sys_entry, static_reply, action_dict = match_system_knowledge(query, role)
+            if static_reply:
+                evidences = [{"source_name": "SportHub System Knowledge", "content": static_reply, "entity": getattr(sys_entry, "key", "system")}]
+                llm_res = self._generate_natural_llm_response(query, evidences, intent="SYSTEM_KNOWLEDGE", action=action_dict)
+                if llm_res:
+                    return llm_res
+                return self._response(static_reply, SearchCriteria(), [], classification=ScopeClassification.IN_SCOPE, status="OK", action=action_dict)
         effective_context = {} if route.context_reset else router_context
         if route.context_reset and router_context.get('business_context'):
             effective_context['business_context'] = router_context['business_context']
@@ -480,10 +1018,9 @@ class AIAssistantService:
         )
         # Professional mode: system domain context takes priority over business routing
         # for queries about SportHub's live product/amenity data
-        if self._assistant_mode == AssistantMode.PROFESSIONAL:
-            sys_domain = self._detect_system_domain_query(query, effective_context)
-            if sys_domain[0] != 'none':
-                return self._answer_system_domain(query, sys_domain[0], sys_domain[1], sys_domain[2], effective_context)
+        sys_domain = self._detect_system_domain_query(query, effective_context)
+        if self._assistant_mode == AssistantMode.PROFESSIONAL and sys_domain[0] != 'none':
+            return self._answer_system_domain(query, sys_domain[0], sys_domain[1], sys_domain[2], effective_context)
 
         if not eval_res.is_allowed:
             if self._assistant_mode == AssistantMode.NATURAL and eval_res.scope_decision == ScopeDecision.OUT_OF_SCOPE:
@@ -528,6 +1065,11 @@ class AIAssistantService:
                 reply_text, SearchCriteria(), [], needs_clarification=False,
                 classification=ScopeClassification.OUT_OF_SCOPE, status='OUT_OF_SCOPE',
             )
+
+        if self._assistant_mode == AssistantMode.NATURAL and sys_domain[0] in {
+            'sport_amenities', 'sport_facility_features', 'venue_amenities', 'venue_orderable_options',
+        }:
+            return self._answer_system_domain(query, sys_domain[0], sys_domain[1], sys_domain[2], effective_context)
 
         if route.intent == AssistantIntent.GREETING:
             if self._assistant_mode == AssistantMode.PROFESSIONAL:
@@ -679,6 +1221,17 @@ class AIAssistantService:
         criteria = self._extract(query, context_field_id)
         fresh_end_minute = criteria.end_minute
         self._merge_context(criteria, effective_context, query)
+        # A bare "sân bóng" is underspecified for a multi-sport venue catalog.
+        # Keep the budgeted form useful (it can show football venues under the
+        # requested cap), while asking for sport/location/date for the bare form.
+        if (
+            plain(query).strip().rstrip('?!.') in {'san bong', 'tim san bong'}
+            and not any((criteria.max_price, criteria.location, criteria.booking_date, criteria.start_minute))
+            and not effective_context.get('sport_type')
+        ):
+            criteria.sport_type = None
+            if self._active_route:
+                self._active_route.entities.sport_type = None
         if route.entities.start_time and not route.entities.end_time and fresh_end_minute is None:
             criteria.end_minute = None
         self._resolve_result_reference(criteria, query, effective_context)
@@ -705,7 +1258,8 @@ class AIAssistantService:
             bool(criteria.location) or (
                 criteria.start_minute is None
                 and any(term in query for term in ('co san', 'san nao', 'toi muon san', 'muon san'))
-            )
+            ) or criteria.max_price is not None
+            or criteria.sport_type is None
         )
         if route.intent in venue_search_intents and location_first_request:
             venue_response = self._venue_search_response(criteria)
@@ -738,7 +1292,11 @@ class AIAssistantService:
             allow_alternatives=criteria.allow_alternatives,
         ))
         if ranked_result['status'] != 'OK':
-            if ranked_result['status'] == 'NO_AVAILABLE_SLOT' or any(term in query for term in ('ngay nao trong', 'ngay trong', 'ngay khac')) or criteria.allow_alternatives:
+            if ranked_result['status'] == 'NO_AVAILABLE_SLOT' or any(term in query for term in (
+                'ngay nao trong', 'ngay trong', 'ngay khac', 'vay con ngay nao',
+                'con ngay nao', 'ngay nao khac', 'ngay nao con san',
+            )) or criteria.allow_alternatives:
+                alternative_days = 14 if criteria.allow_alternatives else 7
                 alternative_suggestions = self._search_alternative_dates(SlotRecommendationRequest(
                     sport_type=criteria.sport_type, booking_date=criteria.booking_date or datetime.now(self.tz).date(),
                     court_type=criteria.court_type,
@@ -752,9 +1310,18 @@ class AIAssistantService:
                     duration_minutes=criteria.duration_minutes,
                     max_price=criteria.max_price, location=criteria.location,
                     allow_alternatives=True,
-                ))
+                ), days=alternative_days)
                 if alternative_suggestions:
                     return self._format_alternative_dates_response(alternative_suggestions, criteria, route.intent)
+                if criteria.allow_alternatives:
+                    response = self._response(
+                        f'Mình chưa tìm thấy khung giờ trống trong {alternative_days} ngày tiếp theo với các lựa chọn hiện tại. '
+                        'Bạn muốn đổi khu vực, khung giờ hoặc mức giá để mình tìm tiếp không?',
+                        criteria, [], status='NO_AVAILABLE_SLOT',
+                    )
+                    response['needs_clarification'] = True
+                    response['missing_fields'] = ['date_or_filters']
+                    return response
 
             return self._response(
                 ranked_result['message'], criteria, [], status=ranked_result['status'],
@@ -860,7 +1427,7 @@ class AIAssistantService:
         facility_name = court.facility.name if court.facility else court.name
         reply = (
             f'{facility_name} – {court.name}, môn {court.sport_type}, địa chỉ {court.location}. '
-            f'{price_text}; sức chứa {court.capacity} người; tiện ích: {amenities}.'
+            f'{price_text}; sức chứa {court.capacity} người; cơ sở vật chất ghi nhận: {amenities}.'
         )
         if self._active_route:
             self._active_route.entities.venue_name = court.name
@@ -903,28 +1470,43 @@ class AIAssistantService:
         )
 
     def _venue_search_response(self, criteria: SearchCriteria):
-        if not criteria.location:
+        if not criteria.location and criteria.max_price is None:
             if criteria.sport_type:
                 return self._response(
-                    f'Bạn muốn tìm sân {criteria.sport_type} ở khu vực nào?', criteria, [],
-                    needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location'],
+                    f'Bạn muốn tìm sân {criteria.sport_type} ở khu vực nào và vào ngày nào?', criteria, [],
+                    needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location', 'date'],
                 )
             return self._response(
                 'Được chứ! Bạn cho mình biết môn thể thao (bóng đá, cầu lông, pickleball, tennis...), khu vực và ngày muốn chơi nhé.', criteria, [],
-                needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['location', 'sport_type'],
+                needs_clarification=True, status='NEED_MORE_DATA', missing_fields=['sport_type', 'location', 'date'],
             )
         fields = self.repository.search_venues(
             location=criteria.location, sport_type=criteria.sport_type,
             court_type=criteria.court_type, max_price=criteria.max_price, limit=6,
         )
         if not fields:
-            label = criteria.location
+            label = criteria.location or 'toàn hệ thống'
             sport = f' cho môn {criteria.sport_type}' if criteria.sport_type else ''
+            price = f' có giá không quá {criteria.max_price:,.0f}đ/giờ'.replace(',', '.') if criteria.max_price is not None else ''
             return self._response(
-                f'Hiện tại mình chưa tìm thấy cơ sở SportHub{sport} phù hợp ở {label} trong dữ liệu hệ thống.',
+                f'Mình chưa tìm thấy sân SportHub{sport}{price} ở {label}. Bạn có thể cho mình biết khu vực hoặc mức giá khác không?',
                 criteria, [], venue_results=[], status='NO_RESULT',
             )
         results = [self._venue_result(field) for field in fields]
+        if not criteria.location:
+            price_text = f' có giá không quá {criteria.max_price:,.0f}đ/giờ'.replace(',', '.')
+            if not criteria.sport_type:
+                prompt = 'Bạn muốn ưu tiên môn thể thao nào, khu vực nào và ngày nào để mình lọc chính xác hơn?'
+                missing_fields = ['sport_type', 'location', 'date']
+            else:
+                prompt = f'Bạn muốn tìm ở khu vực nào và chơi vào ngày nào để mình kiểm tra lịch trống?'
+                missing_fields = ['location', 'date']
+            response = self._response(
+                f'Mình tìm thấy {len(results)} sân{f" {criteria.sport_type}" if criteria.sport_type else ""}{price_text} trên SportHub. {prompt}',
+                criteria, [], venue_results=results, needs_clarification=True,
+                status='NEED_MORE_DATA', missing_fields=missing_fields,
+            )
+            return self._with_venue_context(response, results)
         if not criteria.sport_type:
             response = self._response(
                 f'Mình tìm thấy {len(results)} sân/cơ sở thực tế ở {criteria.location}. Bạn muốn chơi môn nào để mình lọc chính xác hơn?',
@@ -939,6 +1521,49 @@ class AIAssistantService:
                 status='NEED_MORE_DATA', missing_fields=['date'],
             )
             return self._with_venue_context(response, results)
+        return None
+
+    def _answer_personal_memory_question(self, query: str) -> str | None:
+        normalized = plain(query).strip().rstrip('?!.')
+        values: dict[str, list[str]] = {}
+        for item in self._personal_memories:
+            memory_type = item.get('memory_type')
+            value = item.get('value')
+            if memory_type and isinstance(value, str) and value and value not in values.setdefault(memory_type, []):
+                values[memory_type].append(value)
+
+        def present(items: list[str]) -> str:
+            return ', '.join(items[:-1]) + (f" và {items[-1]}" if len(items) > 1 else items[0])
+
+        if any(term in normalized for term in (
+            'cau thu nao toi thich', 'cau thu nao toi yeu thich',
+            'ai la cau thu yeu thich cua toi', 'cau thu toi yeu thich la ai',
+            'toi thich cau thu nao', 'toi yeu thich cau thu nao',
+        )):
+            athletes = values.get('favorite_athlete', [])
+            if athletes:
+                return f"Bạn từng chia sẻ rằng mình thích {present(athletes)}."
+            if self._personal_memory_load_failed:
+                return 'Mình đang gặp trục trặc khi đọc thông tin cá nhân đã lưu, nên chưa thể trả lời câu này lúc này.'
+            return 'Mình chưa lưu thông tin về cầu thủ bạn yêu thích, nên hiện chưa biết.'
+        if any(term in normalized for term in (
+            'mon nao toi thuong choi', 'toi thuong choi mon gi', 'mon the thao nao toi choi',
+        )):
+            sports = values.get('usual_sport', [])
+            if sports:
+                return f"Bạn từng chia sẻ rằng mình thường chơi {present(sports)}."
+            if self._personal_memory_load_failed:
+                return 'Mình đang gặp trục trặc khi đọc thông tin cá nhân đã lưu, nên chưa thể trả lời câu này lúc này.'
+            return 'Mình chưa lưu thông tin về môn thể thao bạn thường chơi, nên hiện chưa biết.'
+        if any(term in normalized for term in (
+            'toi thuong tim san o dau', 'khu vuc nao toi thuong tim san', 'toi hay tim san o dau',
+        )):
+            areas = values.get('preferred_area', [])
+            if areas:
+                return f"Bạn từng chia sẻ rằng mình thường tìm sân ở {present(areas)}."
+            if self._personal_memory_load_failed:
+                return 'Mình đang gặp trục trặc khi đọc thông tin cá nhân đã lưu, nên chưa thể trả lời câu này lúc này.'
+            return 'Mình chưa lưu khu vực bạn thường tìm sân, nên hiện chưa biết.'
         return None
 
     def _answer_venue_count(self, criteria: SearchCriteria):
@@ -1028,10 +1653,39 @@ class AIAssistantService:
                 classification=ScopeClassification.OUT_OF_SCOPE,
                 status='OUT_OF_SCOPE',
             )
+        # Natural-only deterministic historical lookup. Keep this after the
+        # Professional guard and before any model, RAG, or web retrieval.
+        athlete_achievement_question = bool(
+            route.entities.athlete and route.entities.current_topic == 'achievements'
+        )
+        wc_result = None if athlete_achievement_question else lookup_world_cup_query(
+            query,
+            competition=getattr(route.entities, 'competition', None),
+            route_year=getattr(route.entities, 'year', None),
+            context=self._conversation_context,
+        )
+        if wc_result is not None:
+            response = self._response(
+                format_world_cup_answer(wc_result),
+                criteria,
+                [],
+                needs_clarification=wc_result.status == 'needs_year',
+                classification=ScopeClassification.IN_SCOPE,
+                status='NEED_MORE_DATA' if wc_result.status == 'needs_year' else 'OK',
+            )
+            response['understood'].update({
+                'competition': 'FIFA World Cup',
+                'year': wc_result.years[0] if len(wc_result.years) == 1 else None,
+                'competition_year': wc_result.years[0] if len(wc_result.years) == 1 else None,
+                'current_topic': 'match_result',
+                'source': 'openfootball/worldcup.json',
+            })
+            return response
         if (
             getattr(route.entities, 'explicit_entity_mention', False)
             and not route.entities.active_entity
             and not route.entities.sports_entities
+            and not route.entities.sport_type
         ):
             return self._response(
                 'Bạn đang nói đến người hoặc vận động viên nào? Nếu là bạn hoặc một vận động viên cụ thể, bạn cho mình thêm ngữ cảnh nhé.',
@@ -1041,6 +1695,36 @@ class AIAssistantService:
                 classification=ScopeClassification.UNCLEAR,
                 status='NEED_MORE_DATA',
             )
+        # Review decisions are purpose- and content-version-specific. If the
+        # authenticated ledger is unavailable, this Natural Mode route fails closed.
+        review_ledger = load_review_ledger()
+        policy_blocked_candidates_found = False
+
+        def sports_candidate_is_eligible(entry):
+            nonlocal policy_blocked_candidates_found
+            # Natural Mode may read the local sports corpus directly. It never
+            # forwards an unreviewed record to an external provider.
+            if self._assistant_mode == AssistantMode.NATURAL:
+                return True
+            try:
+                allowed = reviewed_use_is_allowed(entry, 'retrieve_internal', review_ledger)
+            except Exception:
+                logger.exception('Sports knowledge policy evaluation failed')
+                allowed = False
+            if not allowed:
+                policy_blocked_candidates_found = True
+            return allowed
+
+        def filter_reviewed_evidence(entries, purpose):
+            nonlocal policy_blocked_candidates_found
+            source_entries = list(entries or [])
+            if self._assistant_mode == AssistantMode.NATURAL and purpose == 'retrieve_internal':
+                return source_entries
+            accepted = filter_reviewed_knowledge_evidence(source_entries, purpose, review_ledger)
+            if len(accepted) < len(source_entries):
+                policy_blocked_candidates_found = True
+            return accepted
+
         role = self.current_user.role if self.current_user else 'CUSTOMER'
         sport = route.entities.sport_type
         if route.entities.sport_type and route.entities.active_entity is None and not route.entities.sports_entities:
@@ -1050,22 +1734,136 @@ class AIAssistantService:
                 [route.entities.active_entity] if route.entities.active_entity
                 else ([route.entities.sports_entity] if route.entities.sports_entity else [])
             )
+        if athlete_achievement_question:
+            # A named player's World Cup achievements are distinct from the
+            # competition's final result and must retain the player as subject.
+            target_entities = [route.entities.athlete]
+        is_natural_team_listing = (
+            self._assistant_mode == AssistantMode.NATURAL and _is_team_listing_query(query)
+        )
+        is_natural_specific_thai_nguyen_team = (
+            self._assistant_mode == AssistantMode.NATURAL and _is_specific_thai_nguyen_team_query(query)
+        )
+        group_entity_keys = {plain(entity) for entity in NATURAL_SPORTS_ENTITY_RETRIEVAL_ALIASES}
+        is_natural_group_listing = is_natural_team_listing and any(
+            plain(entity) in group_entity_keys for entity in target_entities if entity
+        )
+        if is_natural_specific_thai_nguyen_team:
+            target_entities = [
+                NATURAL_SPORTS_ENTITY_RETRIEVAL_ALIASES.get(entity, entity)
+                for entity in target_entities
+            ]
+
+        natural_rule_source_sport = None
+        if self._assistant_mode == AssistantMode.NATURAL and _is_rule_or_court_query(query):
+            source_targets = target_entities or ([route.entities.competition] if route.entities.competition else [])
+            if len(source_targets) == 1:
+                source_key = plain(source_targets[0])
+                source_sport = NATURAL_RULE_SOURCE_SPORTS.get(source_key)
+                if (
+                    source_sport
+                    and sport
+                    and plain(sport) == plain(source_sport)
+                    and source_key in plain(query)
+                ):
+                    natural_rule_source_sport = sport
+                    # The federation names the rule source; retrieve only sport-level
+                    # law/court knowledge for this sport.
+                    target_entities = [sport]
+
+        is_grand_slam_competition_listing = (
+            self._assistant_mode == AssistantMode.NATURAL
+            and plain(route.entities.competition or '') == 'grand slam'
+            and any(term in plain(query) for term in (
+                'bao nhieu giai', 'gom nhung giai', 'nhung giai nao',
+                'nhung giai dau nao', 'cac giai grand slam',
+            ))
+        )
         if route.entities.competition == "ICTU CUP" or "ictu cup" in query.casefold():
             target_entities = ["ICTU CUP"]
         guardrail = self.guardrail
+        retrieval_candidates_found = False
+        retrieval_error = False
+
+        def retrieve_context(*args, **kwargs):
+            nonlocal retrieval_candidates_found, retrieval_error
+            if retrieval_error:
+                return []
+            try:
+                kwargs.setdefault('candidate_filter', sports_candidate_is_eligible)
+                results = guardrail.retrieve_context(*args, **kwargs)
+                retrieval_candidates_found = retrieval_candidates_found or bool(results)
+                return results
+            except Exception:
+                retrieval_error = True
+                logger.exception('Sports knowledge retrieval failed')
+                return []
+
+        def retrieve_web_context(*args, **kwargs):
+            nonlocal retrieval_candidates_found, retrieval_error
+            if retrieval_error:
+                return []
+            try:
+                results = guardrail.retrieve_web_context(*args, **kwargs)
+                retrieval_candidates_found = retrieval_candidates_found or bool(results)
+                return results
+            except Exception:
+                retrieval_error = True
+                logger.exception('Sports knowledge web retrieval failed')
+                return []
+
+        def evaluate_freshness(query_text, entries):
+            nonlocal retrieval_error
+            if retrieval_error:
+                return False
+            try:
+                result = guardrail.evaluate_freshness_and_sufficiency(query_text, entries)
+                return bool(getattr(result, 'needs_fresh_web', False))
+            except Exception:
+                retrieval_error = True
+                logger.exception('Sports knowledge sufficiency evaluation failed')
+                return False
+
+        def merge_evidence(query_text, internal_entries, web_entries):
+            nonlocal retrieval_error
+            if retrieval_error:
+                return internal_entries
+            try:
+                return guardrail.merge_and_prefer_evidence(query_text, internal_entries, web_entries)
+            except Exception:
+                retrieval_error = True
+                logger.exception('Sports knowledge evidence merge failed')
+                return internal_entries
 
         # ── Query Rewriting & Normalization ────────────────────────────
-        # Use deterministic rewrite first if available
-        effective_query = getattr(route.entities, 'rewritten_query', None) or query
+        # Keep explicit Natural Mode category/competition/rule-source questions intact.
+        # Their deterministic route rewrite can change the requested information type.
+        keep_original_query = (
+            is_natural_group_listing
+            or is_natural_specific_thai_nguyen_team
+            or natural_rule_source_sport is not None
+            or is_grand_slam_competition_listing
+        )
+        effective_query = (
+            query if keep_original_query
+            else (getattr(route.entities, 'rewritten_query', None) or query)
+        )
 
         # ── LLM Query Understanding Phase ─────────────────────────────
         # Use LLM to resolve entities/aliases, detect follow-up, rewrite query.
         # Falls back to deterministic extraction if LLM is unavailable.
         llm_processor = get_llm_sports_processor()
-        conversation_messages = self._conversation_context.get('conversation_messages')
-        llm_understanding = llm_processor.understand_query(
-            query, conversation_messages=conversation_messages, context=self._conversation_context,
+        # Previous assistant turns may contain claims whose source permissions
+        # are unknown. Keep user turns for follow-up resolution, but do not
+        # send prior assistant text back to an external provider.
+        conversation_messages = _sports_knowledge_conversation_history(
+            self._conversation_context.get('conversation_messages'), query,
         )
+        llm_understanding = None
+        if not keep_original_query:
+            llm_understanding = llm_processor.understand_query(
+                query, conversation_messages=conversation_messages, context=self._conversation_context,
+            )
         if llm_understanding:
             logger.info(
                 'LLM understanding: entities=%s sport=%s topic=%s follow_up=%s rewrite=%s',
@@ -1085,33 +1883,68 @@ class AIAssistantService:
             # Use LLM rewritten query if available
             if llm_understanding.rewritten_query and llm_understanding.rewritten_query != query:
                 effective_query = llm_understanding.rewritten_query
+        if athlete_achievement_question:
+            target_entities = [route.entities.athlete]
 
         # ── RAG Retrieval Phase ────────────────────────────────────────
         # If no specific entities detected, perform broad sports retrieval
+        scoped_retrieval_top_k = 10 if (is_natural_group_listing or natural_rule_source_sport) else 5
         if not target_entities:
-            retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
-            eval_res = guardrail.evaluate_freshness_and_sufficiency(effective_query, retrieved)
-            if eval_res.needs_fresh_web or re.search(r"\\b202[5-9]\\b", effective_query):
-                web_evidences = guardrail.retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
-                retrieved = guardrail.merge_and_prefer_evidence(effective_query, retrieved, web_evidences)
+            retrieved = retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+            retrieved = filter_reviewed_evidence(retrieved, 'retrieve_internal')
+            needs_fresh_web = evaluate_freshness(effective_query, retrieved)
+            if not keep_original_query and (needs_fresh_web or re.search(r"\\b202[5-9]\\b", effective_query)):
+                web_evidences = retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+                retrieved = merge_evidence(effective_query, retrieved, web_evidences)
+                retrieved = filter_reviewed_evidence(retrieved, 'retrieve_internal')
             target_entities = [None]
             entity_retrievals = {None: retrieved or []}
         else:
             entity_retrievals = {}
             for ent in target_entities:
-                retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
+                retrieved = retrieve_context(
+                    effective_query, role, route.intent.name, sport=sport, entity=ent,
+                    top_k=scoped_retrieval_top_k, assistant_mode=self._assistant_mode,
+                )
                 if not retrieved and ent:
                     search_query = f"{ent} {effective_query}"
-                    retrieved = guardrail.retrieve_context(search_query, role, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
-                if not retrieved and route.entities.competition:
-                    retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=route.entities.competition, assistant_mode=self._assistant_mode)
-                if not retrieved:
-                    retrieved = guardrail.retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+                    retrieved = retrieve_context(
+                        search_query, role, route.intent.name, sport=sport, entity=ent,
+                        top_k=scoped_retrieval_top_k, assistant_mode=self._assistant_mode,
+                    )
+                if not retrieved and ent and is_natural_specific_thai_nguyen_team:
+                    # The shared retriever has a conflicting legacy alias for FC Thai Nguyen.
+                    # Search this sport without an entity constraint, then keep only exact
+                    # entity matches before any evidence reaches policy or answer handling.
+                    scoped_candidates = retrieve_context(
+                        effective_query, role, route.intent.name, sport=sport, entity=None,
+                        top_k=scoped_retrieval_top_k, assistant_mode=self._assistant_mode,
+                    )
+                    target_entity_key = plain(ent)
+                    retrieved = [
+                        (entry, score) for entry, score in scoped_candidates
+                        if plain(getattr(entry, 'entity', '') or '') == target_entity_key
+                    ]
+                if not retrieved and route.entities.competition and not keep_original_query:
+                    retrieved = retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=route.entities.competition, assistant_mode=self._assistant_mode)
+                if not retrieved and not ent:
+                    retrieved = retrieve_context(effective_query, role, route.intent.name, sport=sport, entity=None, assistant_mode=self._assistant_mode)
+                if is_natural_group_listing:
+                    group_key = plain(ent or '')
+                    retrieved = [
+                        (entry, score) for entry, score in retrieved
+                        if plain(getattr(entry, 'entity', '') or '') == group_key
+                    ]
+                if natural_rule_source_sport:
+                    retrieved = [
+                        (entry, score) for entry, score in retrieved
+                        if _is_natural_sport_rule_entry(entry, natural_rule_source_sport, query)
+                    ]
                 if route.entities.competition == "ICTU CUP" or "ictu cup" in query.casefold():
-                    exact_retrieved = guardrail.retrieve_context("ICTU CUP 2024 " + effective_query, role, route.intent.name, sport=None, entity="ICTU CUP", assistant_mode=self._assistant_mode)
+                    exact_retrieved = retrieve_context("ICTU CUP 2024 " + effective_query, role, route.intent.name, sport=None, entity="ICTU CUP", assistant_mode=self._assistant_mode)
                     if exact_retrieved:
                         retrieved = exact_retrieved
-                if retrieved and (route.entities.competition or "ictu cup" in plain(effective_query)):
+                if retrieved and not natural_rule_source_sport and (route.entities.competition or "ictu cup" in plain(effective_query)):
                     competition_key = plain(str(route.entities.competition))
                     focused = [(entry, score) for entry, score in retrieved if competition_key in plain(f"{getattr(entry, 'entity', '')} {getattr(entry, 'question', '')} {getattr(entry, 'answer', '')}")]
                     if focused:
@@ -1120,10 +1953,12 @@ class AIAssistantService:
                         exact_ictu = [(entry, score) for entry, score in retrieved if getattr(entry, "id", "") == "TN-SPT-022" or "8 doi" in plain(getattr(entry, "answer", ""))]
                         if exact_ictu:
                             retrieved = exact_ictu
-                eval_res = guardrail.evaluate_freshness_and_sufficiency(effective_query, retrieved)
-                if eval_res.needs_fresh_web or re.search(r"\\b202[5-9]\\b", effective_query):
-                    web_evidences = guardrail.retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
-                    retrieved = guardrail.merge_and_prefer_evidence(effective_query, retrieved, web_evidences)
+                retrieved = filter_reviewed_evidence(retrieved, 'retrieve_internal')
+                needs_fresh_web = evaluate_freshness(effective_query, retrieved)
+                if not keep_original_query and (needs_fresh_web or re.search(r"\\b202[5-9]\\b", effective_query)):
+                    web_evidences = retrieve_web_context(effective_query, route.intent.name, sport=sport, entity=ent, assistant_mode=self._assistant_mode)
+                    retrieved = merge_evidence(effective_query, retrieved, web_evidences)
+                    retrieved = filter_reviewed_evidence(retrieved, 'retrieve_internal')
                 entity_retrievals[ent] = retrieved or []
 
         # ── LLM Grounded Response Generation Phase ─────────────────────
@@ -1133,7 +1968,20 @@ class AIAssistantService:
             all_evidence.extend(entity_retrievals.get(ent, []))
 
         target_ent = target_entities[0] if (target_entities and target_entities[0]) else (route.entities.active_entity or route.entities.sports_entity)
-        target_top = (llm_understanding.topic if llm_understanding else None) or route.entities.current_topic
+        target_top = (
+            (None if athlete_achievement_question else (llm_understanding.topic if llm_understanding else None))
+            or route.entities.current_topic
+            or self._conversation_context.get('current_topic')
+            or self._conversation_context.get('entity_type')
+        )
+        if not target_top:
+            normalized_effective_query = plain(effective_query)
+            if any(term in normalized_effective_query for term in ('huy chuong', 'ky luc', 'vo dich', 'thanh tich', 'danh hieu')):
+                target_top = 'achievements'
+            elif any(term in normalized_effective_query for term in ('luat', 'quy tac', 'cach choi', 'tinh diem')):
+                target_top = 'rules'
+            elif any(term in normalized_effective_query for term in ('ky thuat', 'chien thuat')):
+                target_top = 'technique'
         if route.entities.competition == "ICTU CUP" or "ictu cup" in query.casefold():
             for entity_key, entity_rows in list(entity_retrievals.items()):
                 exact_rows = [(entry, score) for entry, score in entity_rows if getattr(entry, "id", "") == "TN-SPT-022"]
@@ -1143,29 +1991,137 @@ class AIAssistantService:
             for ent in target_entities:
                 all_evidence.extend(entity_retrievals.get(ent, []))
 
-        grounded = llm_processor.generate_grounded_response(
-            effective_query,
-            all_evidence,
-            conversation_messages=conversation_messages,
-            target_entity=target_ent,
-            target_topic=target_top,
-        )
+        # Retrieval permission is separate from permission to send content to
+        # an external model and permission to display a resulting claim.
+        answer_evidence = filter_reviewed_evidence(all_evidence, 'display_answer')
+        prompt_evidence = filter_reviewed_evidence(answer_evidence, 'prompt_llm_external')
+        citation_evidence = filter_reviewed_evidence(prompt_evidence, 'display_citation')
+        local_citation_evidence = filter_reviewed_evidence(answer_evidence, 'display_citation')
+        allowed_citation_keys = {
+            key
+            for entry, _score in citation_evidence
+            if (key := citation_deduplication_key(
+                getattr(entry, 'source_name', None) or getattr(entry, 'source', None),
+                getattr(entry, 'source_url', None),
+                record_id=getattr(entry, 'id', None),
+            )) is not None
+        }
+
+        if answer_evidence and not prompt_evidence:
+            local_rag_response = self._natural_local_rag_response(
+                answer_evidence, local_citation_evidence, criteria, route, sport,
+                target_entities, target_top,
+            )
+            if local_rag_response:
+                return local_rag_response
+
+        if not answer_evidence:
+            background_reason = _classify_background_sports_question(
+                f'{query} {effective_query}', target_top,
+                self._conversation_context.get('current_topic'),
+            )
+            provider_failed = False
+            try:
+                grounded = llm_processor.generate_grounded_response(
+                    effective_query,
+                    [],
+                    conversation_messages=conversation_messages,
+                    target_entity=target_ent,
+                    target_topic=target_top,
+                    citation_scope='sports_knowledge',
+                    allow_general_knowledge=True,
+                    background_level=(
+                        'realtime' if background_reason == 'BACKGROUND_REALTIME'
+                        else 'volatile' if background_reason == 'BACKGROUND_VOLATILE_WARNED'
+                        else 'stable'
+                    ),
+                )
+            except Exception:
+                grounded = None
+                provider_failed = True
+            if grounded and grounded.answer:
+                answer_text = _background_answer_without_citations(validate_response(grounded.answer))
+                if answer_text:
+                    if background_reason == 'BACKGROUND_VOLATILE_WARNED' and BACKGROUND_VOLATILE_WARNING not in answer_text:
+                        answer_text += f'\n\n{BACKGROUND_VOLATILE_WARNING}'
+                    logger.info('Natural sports knowledge decision=%s', background_reason)
+                    response = self._response(
+                        answer_text,
+                        criteria,
+                        [],
+                        classification=ScopeClassification.IN_SCOPE,
+                        status='OK',
+                    )
+                    response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
+                    if sport:
+                        response['understood']['sport_type'] = sport
+                        response['understood']['sport'] = sport
+                    if target_ent:
+                        response['understood']['active_entity'] = target_ent
+                        response['understood']['sports_entity'] = target_ent
+                        response['understood']['sports_entities'] = [
+                            entity for entity in target_entities if entity
+                        ]
+                    if route.entities.recent_entities:
+                        response['understood']['recent_entities'] = route.entities.recent_entities
+                    if target_top:
+                        response['understood']['current_topic'] = target_top
+                    if route.entities.entity_type or target_top:
+                        response['understood']['entity_type'] = route.entities.entity_type or target_top
+                    return response
+
+            provider_status = 'failed' if provider_failed else getattr(llm_processor, 'last_generation_status', None)
+            decision = 'GEMINI_PROVIDER_FAILED' if provider_status == 'failed' else 'GEMINI_UNAVAILABLE'
+            logger.info('Natural sports knowledge decision=%s', decision)
+            return self._sports_knowledge_generation_error_response(
+                effective_query,
+                route,
+                criteria,
+                sport,
+                target_entities,
+                target_top,
+                reason='provider_error' if provider_status == 'failed' else 'llm_unavailable',
+                provider_status=provider_status,
+            )
+
+        grounded = None
+        if prompt_evidence:
+            grounded = llm_processor.generate_grounded_response(
+                effective_query,
+                prompt_evidence,
+                conversation_messages=conversation_messages,
+                target_entity=target_ent,
+                target_topic=target_top,
+                citation_scope='sports_knowledge',
+                personal_memories=self._personal_memories,
+                behavior_profile=self._booking_behavior_profile,
+                conversation_topic_profile=self._relevant_conversation_topics(query),
+            )
         if grounded and grounded.answer:
             # LLM generated a natural response — use it with citations
             answer_text = validate_response(grounded.answer)
             if grounded.citations:
                 citation_parts = []
+                emitted_citation_keys = set()
                 for cit in grounded.citations:
+                    citation_key = citation_deduplication_key(
+                        cit.get('source_name'), cit.get('source_url'),
+                        record_id=cit.get('record_id'),
+                    )
+                    if citation_key is None or citation_key not in allowed_citation_keys or citation_key in emitted_citation_keys:
+                        continue
+                    emitted_citation_keys.add(citation_key)
                     part = f"Nguồn: {cit['source_name']}"
                     if cit.get('source_url'):
                         part += f", {cit['source_url']}"
                     if cit.get('collected_at'):
                         part += f", cập nhật {cit['collected_at']}"
                     citation_parts.append(part)
-                answer_text += f"\n\n({'; '.join(citation_parts)})"
+                if citation_parts:
+                    answer_text += f"\n\n({'; '.join(citation_parts)})"
 
             # Build response using existing _response method
-            first_entry = all_evidence[0][0] if all_evidence else None
+            first_entry = prompt_evidence[0][0] if prompt_evidence else None
             response = self._response(answer_text, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
             context_entities = route.entities.sports_entities or [e for e in target_entities if e]
             if len(context_entities) > 1:
@@ -1183,28 +2139,57 @@ class AIAssistantService:
                 response['understood']['sport_type'] = sport
             if target_top:
                 response['understood']['current_topic'] = target_top
-                response['understood']['entity_type'] = target_top
+                response['understood']['entity_type'] = route.entities.entity_type or target_top
             elif first_entry and getattr(first_entry, 'topic', None):
-                response['understood']['entity_type'] = first_entry.topic
                 response['understood']['current_topic'] = first_entry.topic
+                response['understood']['entity_type'] = route.entities.entity_type or first_entry.topic
             response['understood']['last_intent'] = AssistantIntent.SPORTS_KNOWLEDGE.value
             return response
 
         # ── Deterministic Fallback Response (existing logic) ───────────
         # If LLM response generation failed/unavailable, use original concatenation
         return self._answer_sports_knowledge_deterministic(
-            query, route, criteria, role, sport, target_entities, entity_retrievals, guardrail,
+            query, route, criteria, role, sport, target_entities, entity_retrievals, guardrail, review_ledger,
         )
 
     def _answer_sports_knowledge_deterministic(
         self, query: str, route: IntentRoute, criteria: SearchCriteria,
         role: str, sport: str | None, target_entities: list,
-        entity_retrievals: dict, guardrail: RAGGuardrail,
+        entity_retrievals: dict, guardrail: RAGGuardrail, review_ledger=None,
     ):
         """Deterministic sports knowledge response builder — used as fallback when LLM is unavailable."""
         norm_q = plain(query)
+        review_ledger = review_ledger or load_review_ledger()
+        def filter_reviewed(entries, purpose):
+            return filter_reviewed_knowledge_evidence(entries, purpose, review_ledger)
+
+        candidate_filter = lambda entry: reviewed_use_is_allowed(entry, 'retrieve_internal', review_ledger)
+        # This method includes an ICTU-specific requery. Enforce both internal
+        # retrieval and answer-display permission before composing any record.
+        entity_retrievals = {
+            key: filter_reviewed(
+                filter_reviewed(rows, 'retrieve_internal'),
+                'display_answer',
+            )
+            for key, rows in entity_retrievals.items()
+        }
         if "ictu cup" in query.casefold():
-            exact = guardrail.retrieve_context("ICTU CUP 2024", role, AssistantIntent.SPORTS_KNOWLEDGE.name, sport=None, entity="ICTU CUP", assistant_mode=self._assistant_mode)
+            try:
+                exact = guardrail.retrieve_context(
+                    "ICTU CUP 2024", role, AssistantIntent.SPORTS_KNOWLEDGE.name,
+                    sport=None, entity="ICTU CUP", assistant_mode=self._assistant_mode,
+                    candidate_filter=candidate_filter,
+                )
+            except Exception:
+                logger.exception('ICTU deterministic knowledge lookup failed')
+                if not any(entity_retrievals.values()):
+                    return self._sports_knowledge_generation_error_response(
+                        query, route, criteria, sport, target_entities, route.entities.current_topic,
+                        reason='retrieval_error',
+                    )
+                exact = []
+            exact = filter_reviewed(exact, 'retrieve_internal')
+            exact = filter_reviewed(exact, 'display_answer')
             if exact:
                 entity_retrievals = {"ICTU CUP": [(entry, score) for entry, score in exact if getattr(entry, "id", "") == "TN-SPT-022"]}
         if route.entities.competition == "ICTU CUP" or "ictu cup" in query.casefold():
@@ -1323,7 +2308,14 @@ class AIAssistantService:
             retrieved = entity_retrievals.get(ent, [])
             if not retrieved:
                 target_label = ent if ent else "nội dung này"
-                all_answers.append(f"Hiện tại SportHub AI chưa có thông tin kiểm chứng về {target_label} trong cơ sở dữ liệu.")
+                missing_topic = _SPORTS_TOPIC_LABELS.get(
+                    plain(str(route.entities.current_topic or self._conversation_context.get('current_topic') or '')),
+                    'thông tin bạn hỏi',
+                )
+                all_answers.append(
+                    f"Mình chưa có thông tin kiểm chứng về {missing_topic} của {target_label}. "
+                    "Nếu bạn nêu rõ giải đấu hoặc giai đoạn muốn xem, mình có thể giúp thu hẹp câu hỏi."
+                )
                 continue
 
             candidates = [entry for entry, score in retrieved]
@@ -1469,11 +2461,14 @@ class AIAssistantService:
             ent_citations = []
             ent_seen_sources = set()
             for e in selected_entries:
+                if not filter_reviewed([(e, 1.0)], 'display_citation'):
+                    continue
                 src_name = getattr(e, 'source_name', None) or getattr(e, 'source', None)
                 src_url = getattr(e, 'source_url', None)
                 updated = getattr(e, 'collected_at', None)
-                if src_name and src_name not in ent_seen_sources:
-                    ent_seen_sources.add(src_name)
+                citation_key = citation_deduplication_key(src_name, src_url, record_id=getattr(e, 'id', None))
+                if src_name and citation_key is not None and citation_key not in ent_seen_sources:
+                    ent_seen_sources.add(citation_key)
                     cit = f"Nguồn: {src_name}"
                     if src_url:
                         cit += f", {src_url}"
@@ -1493,8 +2488,8 @@ class AIAssistantService:
         if not all_answers:
             entity_label = f" về {', '.join(e for e in target_entities if e)}" if any(target_entities) else (f" về môn {sport}" if sport else "")
             reply = (
-                f"Hiện tại SportHub AI chưa có thông tin kiểm chứng{entity_label} trong kho dữ liệu thể thao. "
-                "Tôi chỉ cung cấp thông tin đã được xác thực trong phạm vi các môn SportHub hỗ trợ."
+                f"Mình chưa tìm thấy nguồn phù hợp để xác nhận câu hỏi{entity_label}. "
+                "Bạn có thể giới hạn theo giải đấu hoặc thời gian, hay gửi một nguồn cụ thể để mình cùng đối chiếu."
             )
             response = self._response(reply, criteria, [], classification=ScopeClassification.IN_SCOPE, status='OK')
             if route.entities.sports_entities:
@@ -1660,9 +2655,24 @@ class AIAssistantService:
         # Check static knowledge first for system_help, general workflows, or guides
         entry, static_reply, action_dict = match_system_knowledge(query, current_role)
         if static_reply:
+            if self._assistant_mode == AssistantMode.NATURAL:
+                evidences = [{"source_name": "SportHub System Knowledge", "content": static_reply, "entity": getattr(entry, "key", "system")}]
+                llm_res = self._generate_natural_llm_response(query, evidences, criteria, intent=intent, action=action_dict)
+                if llm_res:
+                    return llm_res
             return self._response(static_reply, criteria, [], intent=intent, action=action_dict)
 
         if intent == 'system_help':
+            if self._assistant_mode == AssistantMode.NATURAL:
+                help_text = (
+                    'Tôi là trợ lý AI của SportHub. Tôi có thể giúp bạn tìm sân thể thao và kiểm tra lịch trống thực tế theo ngày, giờ, khu vực; '
+                    'gợi ý khung giờ phù hợp và báo giá niêm yết; xem thông tin đặt sân và hướng dẫn thanh toán/hủy sân; '
+                    'phân tích công suất vận hành (dành cho chủ sân OWNER) và hỗ trợ hồ sơ đối tác; giải đáp kiến thức về 6 môn thể thao.'
+                )
+                evidences = [{"source_name": "SportHub System Guide", "content": help_text}]
+                llm_res = self._generate_natural_llm_response(query, evidences, criteria, intent=intent)
+                if llm_res:
+                    return llm_res
             return self._response(
                 'Tôi là trợ lý AI chuyên biệt của SportHub. Tôi có thể giúp bạn: \n• Tìm sân thể thao và kiểm tra lịch trống thực tế theo ngày, giờ, khu vực.\n• Gợi ý khung giờ phù hợp và báo giá niêm yết.\n• Xem thông tin đặt sân và hướng dẫn thanh toán/hủy sân.\n• Phân tích công suất vận hành (dành cho chủ sân OWNER) và hỗ trợ hồ sơ đối tác.',
                 criteria, [], intent=intent,
@@ -1828,7 +2838,11 @@ class AIAssistantService:
             people=self._people(query),
             special_requirements=self._special_requirements(query),
             requested_field_id=requested,
-            allow_alternatives=any(term in query for term in ('khong co thi', 'gio khac', 'san khac', 'gan nhat', 'con san nao')),
+            allow_alternatives=any(term in query for term in (
+                'khong co thi', 'gio khac', 'san khac', 'gan nhat', 'con san nao',
+                'vay con ngay nao', 'con ngay nao', 'ngay nao khac',
+                'ngay nao con trong', 'ngay nao con san',
+            )),
             prefer_cheap=any(term in query for term in ('re mot chut', 'gia re', 're nhat', 're hon', 'tiet kiem')),
             near_me=any(term in query for term in ('gan day', 'gan toi', 'quanh day')),
             invalid_date=invalid_date,

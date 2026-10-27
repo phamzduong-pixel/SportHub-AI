@@ -345,6 +345,14 @@ class SystemDomainContextService:
                 func.lower(Field.sport_type) == canonical.lower(),
             )
         ).all()
+        matching_fields = [
+            field for field in matching_fields
+            if not field.facility_id or (
+                field.facility is not None
+                and field.facility.status == FacilityStatus.APPROVED.value
+                and field.facility.is_active is True
+            )
+        ]
 
         # Step 2: Find Facilities that list this sport in their sports JSON
         # Load all APPROVED/active facilities, filter in Python (DB-agnostic JSON search)

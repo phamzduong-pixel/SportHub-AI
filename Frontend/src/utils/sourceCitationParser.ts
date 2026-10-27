@@ -110,8 +110,10 @@ export function parseCitationsFromText(text: string | null | undefined): {
   const seenUrls = new Set<string>();
   const seenNames = new Set<string>();
 
-  // 1. Match bracketed citation blocks: (Nguồn: ... )
-  const citationBlockRegex = /\(\s*Nguồn:\s*([\s\S]*?)\)/gi;
+  // 1. Match a complete, line-contained citation block. URLs can themselves
+  // contain parentheses (for example, Wikibooks' Football_(Soccer) path), so
+  // stopping at the first `)` would leave part of the URL in the message body.
+  const citationBlockRegex = /\(\s*Nguồn:\s*([^\r\n]*)\)(?=\s*(?:\r?\n|$))/gi;
   let match: RegExpExecArray | null;
 
   while ((match = citationBlockRegex.exec(text)) !== null) {
@@ -124,7 +126,7 @@ export function parseCitationsFromText(text: string | null | undefined): {
       if (!trimmed) continue;
 
       // URL matching (supports https://, http://, www.)
-      const urlMatch = trimmed.match(/(?:https?:\/\/|www\.)[^\s,;)]+/i);
+      const urlMatch = trimmed.match(/(?:https?:\/\/|www\.)[^\s,;]+/i);
       let url = urlMatch ? urlMatch[0] : undefined;
       if (url && url.toLowerCase().startsWith('www.')) {
         url = `https://${url}`;
@@ -194,7 +196,7 @@ export function parseCitationsFromText(text: string | null | undefined): {
   }
 
   // 3. Remove raw citation blocks from the main body display so bodyText is clean
-  let bodyText = text.replace(/\(\s*Nguồn:[\s\S]*?\)/gi, '').trim();
+  let bodyText = text.replace(citationBlockRegex, '').trim();
   bodyText = bodyText.replace(/(?:\r?\n|^)\s*Nguồn:\s*[\s\S]*$/gi, '').trim();
 
   return {

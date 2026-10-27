@@ -165,6 +165,16 @@ describe('sourceCitationParser', () => {
       assert.equal(bodyText, 'Lionel Messi đang thi đấu cho CLB Inter Miami CF tại giải bóng đá Nhà nghề Mỹ (MLS).');
     });
 
+    it('removes a citation whose URL contains parentheses', () => {
+      const text = 'Các vị trí trong bóng đá có vai trò khác nhau.\n\n(Nguồn: Wikibooks contributors, https://en.wikibooks.org/w/index.php?title=Football_(Soccer)/Printable_version&oldid=3998926)';
+      const { citations, bodyText } = parseCitationsFromText(text);
+
+      assert.equal(citations.length, 1);
+      assert.equal(citations[0].name, 'Wikibooks contributors');
+      assert.equal(citations[0].url, 'https://en.wikibooks.org/w/index.php?title=Football_(Soccer)/Printable_version&oldid=3998926');
+      assert.equal(bodyText, 'Các vị trí trong bóng đá có vai trò khác nhau.');
+    });
+
     it('should normalize www. URLs without explicit protocol to https://', () => {
       const text = 'Thông tin giải đấu VBA.\n\n(Nguồn: VBA Official, www.vba.vn, cập nhật 2026-09-10)';
       const { citations } = parseCitationsFromText(text);

@@ -1,5 +1,7 @@
 # Kịch bản Demo Chuẩn hóa — SportHub AI Assistant (CP-11B)
 
+> **Lưu ý đồng bộ 27/10/2026:** Đây là các ví dụ minh họa, không phải cam kết rằng từng record có citation hợp lệ trong mọi môi trường. Dùng điều kiện evidence/policy ở bảng dưới; báo cáo hiện hành là [`AI_ARCHITECTURE.md`](AI_ARCHITECTURE.md). Nhóm regression mới nhất đạt 168 passed, 24 subtests; không phải full suite hoặc gọi provider thật.
+
 Tài liệu này cung cấp kịch bản demo trực tiếp các tính năng của Trợ lý AI SportHub trên 2 chế độ: **Tự nhiên (Natural)** và **Chuyên nghiệp (Professional)**.
 
 ---
@@ -13,12 +15,12 @@ Frontend: Chọn chế độ "🌿 Tự nhiên"
 
 | Bước | Người dùng nhập (Prompt) | Hành vi mong đợi của AI | Luồng kỹ thuật & Nguồn dữ liệu |
 | :---: | :--- | :--- | :--- |
-| **1** | `"Messi là ai?"` | Trả lời đầy đủ thông tin tiểu sử, quốc tịch Argentina, câu lạc bộ hiện tại của Lionel Messi kèm nguồn trích dẫn. | `SPORTS_KNOWLEDGE` $\rightarrow$ Sports RAG $\rightarrow$ `docs/AI/knowledge/sports/players/players.md` |
-| **2** | `"Anh ấy sinh ở đâu?"` *(Follow-up)* | Nhận diện đại từ *"Anh ấy"* là Lionel Messi và trả lời nơi sinh (Rosario, Argentina). | Multi-turn Context $\rightarrow$ Sports RAG $\rightarrow$ Entity Continuity |
+| **1** | `"Messi là ai?"` | Nếu có record được policy và review ledger cho phép, trả lời theo record và citation được phép. Nếu không, Natural có thể trả lời kiến thức nền qua Gemini khi cấu hình; không gắn citation kiểm chứng. | `SPORTS_KNOWLEDGE` $\rightarrow$ reviewed evidence hoặc general-knowledge fallback |
+| **2** | `"Anh ấy sinh ở đâu?"` *(Follow-up)* | Dùng hội thoại để hiểu đối tượng được nhắc đến; câu trả lời thực tế phụ thuộc evidence được phép hoặc Gemini. Lịch sử không được coi là nguồn xác minh. | Context đa lượt $\rightarrow$ Sports Knowledge / general-knowledge fallback |
 | **3** | `"Tìm sân bóng đá gần tôi lúc 19h tối nay"` | Chuyển mượt sang nghiệp vụ SportHub, hỏi khu vực hoặc gợi ý danh sách sân bóng đá phù hợp giờ trống. | `SEARCH_VENUE` / `CHECK_AVAILABILITY` $\rightarrow$ SportHub PostgreSQL DB |
-| **4** | `"Giá thuê sân cầu lông khoảng bao nhiêu tiền?"` | Trả lời thông tin bảng giá trung bình của các sân cầu lông trên hệ thống SportHub. | `SPORT_HUB_BUSINESS` $\rightarrow$ SportHub DB / Internal RAG |
-| **5** | `"Thái Nguyên có những đội bóng nào?"` | Cung cấp thông tin có bằng chứng về CLB Nữ Thái Nguyên T&T và FC Thái Nguyên kèm link nguồn kiểm chứng (*Báo Thái Nguyên*). | `SPORTS_KNOWLEDGE` $\rightarrow$ Sports RAG (`thai_nguyen.md`) + Citation |
-| **6** | `"Cầu thủ bóng đá Zyxw Vuivui là ai?"` | Trả về thông báo fallback có kiểm soát: *"Hiện tại SportHub AI chưa có thông tin kiểm chứng..."*, không tự bịa đặt profile. | Safe Fallback Guardrail (Không có bằng chứng $\rightarrow$ Không hallucinate) |
+| **4** | `"Tìm sân cầu lông trong ngân sách ..."` | Hỏi thêm khu vực/ngày/giờ nếu thiếu; kết quả chỉ lấy từ dữ liệu sân và availability hiện có. | Business intent $\rightarrow$ SportHub database |
+| **5** | `"Thái Nguyên có những đội bóng nào?"` | Chỉ khẳng định record/citation nếu evidence vượt qua policy và review. Nếu không, câu trả lời nền (nếu provider khả dụng) không được ghi là đã kiểm chứng. | `SPORTS_KNOWLEDGE` $\rightarrow$ reviewed evidence hoặc Natural fallback |
+| **6** | Câu hỏi về kết quả đang diễn ra | Không đoán tỷ số/live schedule; trả lời rõ giới hạn dữ liệu live. | Natural realtime background rule |
 | **7** | `"Hãy viết cho tôi một đoạn code Python"` | Từ chối lịch sự, nêu rõ SportHub AI chỉ hỗ trợ nghiệp vụ đặt sân và kiến thức 6 môn thể thao. | `OUT_OF_SCOPE` $\rightarrow$ Out-of-Scope Refusal Message |
 
 ---
@@ -44,10 +46,10 @@ Frontend: Chọn chế độ "💼 Chuyên nghiệp"
 ## III. Kịch bản Demo 3: Chuyển đổi Mode trong cùng phiên (MODE SWITCHING)
 
 ```
-1. (Đang ở Natural)   User: "Messi là ai?" -> AI: Trả lời thông tin Messi.
+1. (Đang ở Natural)   User: "Messi là ai?" -> AI: Dùng evidence đã được phép hoặc kiến thức nền khi provider khả dụng; không mặc định có citation.
 2. (Chuyển sang Pro)  User: "Anh ấy sinh năm bao nhiêu?" -> AI: Từ chối do Pro mode không cho phép tra cứu cầu thủ (Lọc sạch context thể thao).
 3. (Vẫn ở Pro)        User: "Tìm sân bóng đá tại Cầu Giấy" -> AI: Xử lý tìm sân bình thường.
-4. (Chuyển về Natural) User: "Nguyễn Quang Hải sinh năm bao nhiêu?" -> AI: Trả lời năm sinh 1997 của Quang Hải.
+4. (Chuyển về Natural) User: "Nguyễn Quang Hải sinh năm bao nhiêu?" -> AI: Trả lời theo evidence được phép hoặc kiến thức nền; không trình bày như đã xác minh nếu không có nguồn.
 ```
 
 ## IV. CP-SYS-03 — System Domain Context Continuity

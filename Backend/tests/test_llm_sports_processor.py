@@ -148,3 +148,119 @@ def test_generate_grounded_response_with_mock_provider(monkeypatch):
     assert "Kim Thanh" in res.answer
     assert "Bích Thùy" in res.answer
 
+
+def test_general_knowledge_only_mode_requires_explicit_flag_and_no_evidence():
+    processor = LLMSportsQueryProcessor()
+    processor._background_available = True
+
+    class MockProvider:
+        def __init__(self):
+            self.system_data = None
+
+        def generate(self, task, system_data):
+            self.system_data = system_data
+            return "Cách tính điểm có thể khác nhau theo môn và thể thức thi đấu."
+
+    provider = MockProvider()
+    processor._background_provider = provider
+    response = processor.generate_grounded_response(
+        "Khác nhau về cách tính điểm giữa các môn là gì?",
+        [],
+        allow_general_knowledge=True,
+    )
+
+    assert response is not None
+    assert response.citations == []
+    assert "General knowledge-only mode: yes" in provider.system_data["user_message"]
+    assert processor._provider is None
+    assert "well-established historical athlete facts" in provider.system_data["system_prompt"]
+    assert "Hiện tại SportHub AI chưa có thông tin kiểm chứng về nội dung này trong hệ thống." not in provider.system_data["system_prompt"]
+    assert processor.last_generation_status == "success"
+
+
+def test_general_knowledge_only_flag_cannot_override_provided_evidence():
+    processor = LLMSportsQueryProcessor()
+    processor._available = True
+
+    class MockProvider:
+        def __init__(self):
+            self.system_data = None
+
+        def generate(self, task, system_data):
+            self.system_data = system_data
+            return "Trả lời dựa trên evidence."
+
+    provider = MockProvider()
+    processor._provider = provider
+    entry = KnowledgeEntry(
+        id="K-POLICY-001",
+        topic="rules",
+        role="CUSTOMER",
+        intent="SPORTS_KNOWLEDGE",
+        question="Một luật mẫu là gì?",
+        answer="Evidence đã cho.",
+        source="test",
+        classification="static",
+    )
+    response = processor.generate_grounded_response(
+        "Một luật mẫu là gì?",
+        [(entry, 0.9)],
+        allow_general_knowledge=True,
+    )
+
+    assert response is not None
+    assert "General knowledge-only mode: no" in provider.system_data["user_message"]
+
+
+def test_volatile_general_knowledge_prompt_requires_uncertainty_and_no_citation():
+    processor = LLMSportsQueryProcessor()
+    processor._background_available = True
+
+    class MockProvider:
+        def __init__(self):
+            self.system_data = None
+
+        def generate(self, task, system_data):
+            self.system_data = system_data
+            return "Có thể có thay đổi gần đây."
+
+    provider = MockProvider()
+    processor._background_provider = provider
+    response = processor.generate_grounded_response(
+        "Messi hiện thi đấu cho CLB nào?",
+        [],
+        allow_general_knowledge=True,
+        background_level="volatile",
+    )
+
+    assert response is not None
+    assert response.citations == []
+    assert "Background level: volatile" in provider.system_data["user_message"]
+    assert "If Background level is volatile" in provider.system_data["system_prompt"]
+    assert "Avoid exact figures, dates, and scores without a source" in provider.system_data["system_prompt"]
+    assert "Never invent people, competitions, citations, source names, or URLs" in provider.system_data["system_prompt"]
+
+
+def test_realtime_background_prompt_does_not_claim_live_data():
+    processor = LLMSportsQueryProcessor()
+    processor._background_available = True
+
+    class MockProvider:
+        def generate(self, task, system_data):
+            self.system_data = system_data
+            return "Mình không có dữ liệu trực tiếp để xác nhận tỷ số hiện tại."
+
+    provider = MockProvider()
+    processor._background_provider = provider
+    response = processor.generate_grounded_response(
+        "Tỷ số trận đang diễn ra?",
+        [],
+        allow_general_knowledge=True,
+        background_level="realtime",
+    )
+
+    assert response is not None
+    assert response.citations == []
+    assert "Background level: realtime" in provider.system_data["user_message"]
+    assert "Do not guess a current score, result, or upcoming fixture" in provider.system_data["system_prompt"]
+

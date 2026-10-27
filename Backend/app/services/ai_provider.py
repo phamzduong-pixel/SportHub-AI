@@ -136,5 +136,56 @@ class OpenAIProvider(AIProvider):
                     cls._validate_schema(item, item_schema, f'{path}[{index}]')
 
 
+class GeminiTextProvider:
+    """Small text-only Gemini adapter for Natural Mode background answers."""
+
+    endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent'
+
+    def generate(self, *, task: str, system_data: dict) -> str:
+        api_key = str(settings.GEMINI_API_KEY or '').strip()
+        if not api_key or api_key.startswith('replace-with-'):
+            raise AIProviderError('Gemini provider is not configured')
+
+        model = str(settings.GEMINI_MODEL or '').strip()
+        if model.startswith('models/'):
+            model = model.removeprefix('models/')
+        if not model or any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for char in model):
+            raise AIProviderError('Gemini model configuration is invalid')
+
+        if isinstance(system_data, dict) and 'system_prompt' in system_data and 'user_message' in system_data:
+            system_prompt = str(system_data['system_prompt'])
+            user_message = str(system_data['user_message'])
+        else:
+            system_prompt = SYSTEM_RULES
+            user_message = json.dumps(
+                {'task': task, 'system_data': system_data}, ensure_ascii=False, default=str,
+            )
+
+        payload = {
+            'systemInstruction': {'parts': [{'text': system_prompt}]},
+            'contents': [{'role': 'user', 'parts': [{'text': user_message}]}],
+        }
+        try:
+            with httpx.Client(timeout=settings.AI_PROVIDER_TIMEOUT_SECONDS) as client:
+                response = client.post(
+                    self.endpoint.format(model=model),
+                    json=payload,
+                    headers={'x-goog-api-key': api_key},
+                )
+            response.raise_for_status()
+            body = response.json()
+            candidates = body.get('candidates') or []
+            parts = candidates[0].get('content', {}).get('parts', []) if candidates else []
+            answer = ''.join(
+                part.get('text', '') for part in parts
+                if isinstance(part, dict) and isinstance(part.get('text'), str)
+            ).strip()
+            if not answer:
+                raise ValueError('empty Gemini response')
+            return answer
+        except (httpx.HTTPError, AttributeError, KeyError, TypeError, ValueError) as error:
+            logger.warning('Gemini response failure task=%s type=%s', task, type(error).__name__)
+            raise AIProviderError('Gemini provider is unavailable or returned an invalid response') from error
+
 # Compatibility alias for existing imports and deployments.
 StructuredAIProvider = OpenAIProvider

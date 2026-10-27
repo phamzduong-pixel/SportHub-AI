@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 from ..models.knowledge_entry import KnowledgeEntry
 from ..schemas.ai import AssistantMode
@@ -69,13 +69,14 @@ class RAGGuardrail:
         top_k: int = 5,
         relevance_threshold: float = 0.6,
         assistant_mode: AssistantMode | str = AssistantMode.NATURAL,
+        candidate_filter: Callable[[KnowledgeEntry], bool] | None = None,
     ) -> List[Tuple[KnowledgeEntry, float]]:
         """Fetch relevant static knowledge entries for static or sports intents."""
         if not self.should_use_rag(intent_name, role, assistant_mode=assistant_mode):
             return []
 
         if intent_name == "SPORTS_KNOWLEDGE":
-            return self.knowledge_service.retrieve(
+            retrieval_options = dict(
                 query=query,
                 role=role,
                 intent=intent_name,
@@ -84,6 +85,9 @@ class RAGGuardrail:
                 top_k=top_k,
                 relevance_threshold=relevance_threshold,
             )
+            if candidate_filter is not None:
+                retrieval_options["candidate_filter"] = candidate_filter
+            return self.knowledge_service.retrieve(**retrieval_options)
 
         # For system static intents we directly use the in‑code ``ai_system_knowledge`` entries.
         # This avoids dependence on the markdown knowledge repository and guarantees

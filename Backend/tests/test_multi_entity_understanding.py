@@ -41,7 +41,7 @@ def test_single_entity_messi(router, assistant):
     res = assistant.ask(query)
     assert res["status"] == "OK"
     assert "Lionel Messi" in res["reply"]
-    assert "Nguồn: FIFA" in res["reply"]
+    assert "Nguồn: Inter Miami CF" in res["reply"]
     assert res["understood"]["sports_entity"] == "Lionel Messi"
     assert res["understood"]["sports_entities"] == ["Lionel Messi"]
 
@@ -60,7 +60,7 @@ def test_two_entities_messi_ronaldo(router, assistant):
     # Verify both entities are explicitly answered and formatted
     assert "**Lionel Messi**:" in res["reply"]
     assert "**Cristiano Ronaldo**:" in res["reply"]
-    assert "Lionel Messi là siêu sao" in res["reply"]
+    assert "Lionel Messi là cầu thủ" in res["reply"]
     assert "Cristiano Ronaldo (CR7)" in res["reply"]
     assert res["understood"]["sports_entities"] == ["Lionel Messi", "Cristiano Ronaldo"]
 

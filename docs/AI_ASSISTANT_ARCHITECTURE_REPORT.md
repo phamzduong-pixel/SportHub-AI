@@ -1,385 +1,262 @@
-# Báo Cáo Phân Tích Kiến Trúc & Cơ Chế Hoạt Động Của Trợ Lý AI (SportHub AI Assistant)
+# Báo cáo kiến trúc và pipeline xử lý của Trợ lý AI SportHub
 
-> **Ngày lập báo cáo:** 02/09/2026 (Cập nhật đồng bộ hoàn thiện: 10/09/2026)  
-> **Phạm vi kiểm tra:** Toàn bộ hệ thống Trợ lý AI (`AIAssistantService`, `IntentRouter`, `RAGGuardrail`, `KnowledgeService`, `AIFeatureService`, `OpenAIProvider`, `AIRepository`, `Frontend/src/services/aiAssistantService.ts`).  
-> **Mục tiêu:** Phân tích chính xác 100% theo source code hiện có, xác định rõ vai trò của LLM/GenAI, Intent Router, Guardrailed RAG, Context Memory và bản chất kiến trúc.
+> **Bản đối chiếu source: 27/10/2026.** Tài liệu mô tả code hiện có trong workspace, không khẳng định mọi provider ngoài đang được cấu hình hoặc mọi luồng đã được nghiệm thu production. Khi cấu hình triển khai khác code mặc định, cần ghi rõ cấu hình thực tế.
 
----
+## Tóm tắt
 
-## 1. Sử Dụng GenAI / LLM Trong Hệ Thống
+Trợ lý AI SportHub là một pipeline điều phối có kiểm soát trong backend FastAPI. Pipeline kết hợp bộ phân loại intent/entity, chính sách phạm vi theo chế độ, service nghiệp vụ đọc dữ liệu SportHub, kho tri thức nội bộ, các tác vụ LLM giới hạn và bộ định dạng response. Hệ thống **không** chạy vòng lặp agent tự trị, không để LLM tự chọn/call công cụ tùy ý và không giao quyền tạo booking hoặc thanh toán cho LLM.
 
-GenAI/LLM được đóng gói qua adapter [`OpenAIProvider`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_provider.py#L35-L132) (alias: `StructuredAIProvider`), kết nối trực tiếp đến endpoint OpenAI Chat Completions (`settings.OPENAI_MODEL`) với chế độ **Strict JSON Schema** (`response_format={'type': 'json_schema', 'strict': True}`).
+Trợ lý có hai chế độ:
 
-LLM **KHÔNG** tham gia vào việc nhận diện câu hỏi hay trò chuyện tự do trực tiếp với người dùng. LLM chỉ được kích hoạt tại **3 tác vụ chuyên biệt, đóng khung dữ liệu**:
+- **Natural**: hội thoại thân thiện; hỗ trợ nghiệp vụ SportHub và, theo policy, kiến thức thể thao, context nhiều lượt và một số tín hiệu cá nhân hóa.
+- **Professional**: tập trung nghiệp vụ SportHub/System Domain và hướng dẫn nội bộ; từ chối nhánh Sports Knowledge; không nạp các profile cá nhân vào xử lý.
 
-1. **Xếp hạng slot trống & viết lý do (`task='rank_available_slots'`)**:
-   - **Vị trí:** [`AIFeatureService.recommend_slots`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_feature_service.py#L70-L92)
-   - **Cơ chế:** Backend truy vấn database để lọc ra danh sách các cặp sân/slot **thực sự còn trống** (`available_slots`), sau đó gửi kèm nhu cầu khách hàng vào prompt để LLM chọn tối đa 3 slot phù hợp nhất và viết lý do (`reason`). Nếu LLM trả về slot không hợp lệ hoặc xảy ra lỗi/timeout, backend tự động chuyển sang giải thuật sắp xếp an toàn bằng code thuần (Fallback).
-2. **Tóm tắt công suất & gợi ý khuyến mãi (`task='summarize_occupancy_and_suggest_promotions'`)**:
-   - **Vị trí:** [`AIFeatureService.occupancy_summary`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_feature_service.py#L254-L285)
-   - **Cơ chế:** Nhận bảng thống kê số liệu công suất đã tính toán từ [`AnalyticsService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/analytics_service.py), yêu cầu LLM viết nhận định định tính (không được tự sửa số liệu) và đề xuất ý tưởng ưu đãi cho các khung giờ thấp điểm (`low_demand_hours`).
-3. **Sinh lời chào/kết tin nhắn booking (`task='write_booking_message_copy'`)**:
-   - **Vị trí:** [`BookingMessageService.generate`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/booking_message_service.py#L40-L58)
-   - **Cơ chế:** Các sự thật nghiệp vụ (mã đặt, số tiền, cọc, ngày giờ, trạng thái) do backend khóa cứng (`facts`), LLM chỉ được phép sinh câu mở đầu (`lead`) và lời kết (`closing`).
+Nguồn chuẩn cho giá, lịch trống, booking, thanh toán và dữ liệu tài khoản là backend/database trong phạm vi quyền của người dùng. LLM chỉ tham gia những tác vụ được gọi rõ ràng, với dữ liệu đầu vào được chuẩn bị trước và kết quả được kiểm tra ở backend.
 
----
+## 1. Phạm vi và thành phần
 
-## 2. Intent Router & Phân Loại Ý Định (NLU Layer)
+| Thành phần | Trách nhiệm |
+|---|---|
+| `Frontend/src/pages/AIAssistantPage.tsx` | Giao diện chat, chọn mode, hiển thị reply/kết quả sân/citation và gửi tiếp context. |
+| `Frontend/src/services/aiAssistantService.ts` | Gọi API trợ lý, gửi token và payload hội thoại. |
+| `Backend/app/api/routes/ai.py` | Endpoint, xác thực tùy chọn, tạo/đọc hội thoại, lưu message và gọi service. |
+| `Backend/app/services/ai_assistant_service.py` | Điều phối chính: context, intent, policy, nhánh nghiệp vụ, tri thức và response. |
+| `Backend/app/services/ai_intent_router.py` | Chuẩn hóa văn bản, phân loại intent, trích entity và nhận diện follow-up bằng luật/heuristics. |
+| `Backend/app/services/ai_domain_policy.py` | Phân loại domain và quyết định phạm vi/nguồn được dùng theo Natural hoặc Professional. |
+| `Backend/app/services/system_domain_context_service.py` | Truy vấn read-only dữ liệu SportHub cho sản phẩm, dịch vụ, tiện ích và đặc điểm cơ sở. |
+| `Backend/app/services/rag_guardrail.py`, `knowledge_service.py`, `knowledge_retriever.py` | Kiểm soát intent được tra cứu và truy xuất corpus kiến thức thể thao nội bộ. |
+| `Backend/app/services/llm_sports_processor.py`, `ai_provider.py` | Phân tích truy vấn thể thao, sinh câu trả lời theo evidence và gọi provider khi được cấu hình. |
+| `Backend/app/services/sports_knowledge_policy*.py`, `sports_knowledge_review_ledger.py` | Kiểm tra metadata, quyết định review và quyền sử dụng evidence theo từng mục đích. |
+| `Backend/app/repositories/ai_repository.py`, `Backend/app/models/ai_conversation.py` | Đọc dữ liệu nghiệp vụ theo phạm vi và lưu hội thoại/message. |
+| `Backend/app/ai/` | Huấn luyện, tiền xử lý, nạp và đánh giá pipeline dự đoán nhu cầu. |
 
-### Vị trí mã nguồn
-- Bộ định tuyến: [`IntentRouter`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_intent_router.py#L105-L247)
-- Bộ chính sách miền: [`ai_domain_policy.py`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_domain_policy.py)
-- Bộ điều phối thực thi: [`AIAssistantService.ask`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_assistant_service.py#L74-L234)
+## 2. Sơ đồ kiến trúc
 
-### Danh sách 19 Intents (`AssistantIntent`)
-| Nhóm Intent | Tên Intent | Chức năng nghiệp vụ |
+```mermaid
+flowchart LR
+    UI[Chat UI / aiAssistantService] --> API[POST /ai/assistant]
+    API --> CONV[Conversation access, history, context snapshot]
+    CONV --> SVC[AIAssistantService]
+    SVC --> NLU[ScopeRouter + IntentRouter + entity/context rules]
+    NLU --> POLICY[Mode and scope policy]
+    POLICY -->|Business / system| DB[Scoped repositories and SystemDomainContextService]
+    POLICY -->|Static system guide| FAQ[Role-aware system knowledge]
+    POLICY -->|Natural sports question| SPORTS[Local sports retrieval and evidence policy]
+    SPORTS --> WEB[Controlled web adapter, if search provider is injected]
+    SPORTS --> LLM[OpenAI / Gemini, if configured and allowed]
+    DB --> RESP[Response schema and context snapshot]
+    FAQ --> RESP
+    SPORTS --> RESP
+    RESP --> CONV
+    RESP --> UI
+```
+
+LLM provider là thành phần phụ trợ được gọi từ một nhánh cụ thể. Quyền truy cập database và thao tác nghiệp vụ vẫn nằm trong API/service/repository; prompt không phải ranh giới bảo mật.
+
+## 3. Luồng xử lý hội thoại
+
+```mermaid
+sequenceDiagram
+    participant U as Người dùng
+    participant F as Frontend
+    participant A as POST /ai/assistant
+    participant C as Conversation store
+    participant S as AIAssistantService
+    participant R as Router + mode policy
+    participant D as Business/System Domain
+    participant K as Sports knowledge/RAG
+    participant L as Provider tùy cấu hình
+
+    U->>F: Nhập câu hỏi, chọn mode
+    F->>A: message, assistant_mode, context, conversation_id
+    A->>C: Xác minh quyền và lưu user message
+    A->>C: Nạp snapshot/history nếu được phép
+    A->>S: Gọi service với user, query, mode, context
+    S->>R: Phân domain, intent, entities, follow-up
+    R-->>S: Route, confidence, scope decision
+    alt Câu hỏi nghiệp vụ / System Domain
+        S->>D: Truy vấn dữ liệu trong scope
+        D-->>S: Dữ liệu chuẩn từ backend
+    else Natural Sports Knowledge
+        S->>K: Local retrieval, lookup riêng và lọc evidence
+        K-->>S: Candidate/evidence được phép sử dụng
+        opt Provider đã cấu hình và policy cho phép
+            S->>L: Query understanding hoặc sinh câu trả lời
+            L-->>S: Kết quả có cấu trúc hoặc văn bản
+        end
+    else Mơ hồ / ngoài phạm vi / Professional sports query
+        S-->>S: Hỏi bổ sung hoặc từ chối theo mode
+    end
+    S-->>A: AssistantResponse
+    A->>C: Lưu assistant message và snapshot `understood`
+    A-->>F: JSON response + conversation_id
+    F-->>U: Hiển thị reply, action, cards và citation nếu có
+```
+
+Các bước chính:
+
+1. **Nhận request**: `AssistantRequest` gồm `message`, `assistant_mode`, `context_field_id`, `context` và `conversation_id`. Endpoint cho phép request không đăng nhập đối với hội thoại/câu hỏi công khai; dữ liệu riêng tư vẫn yêu cầu tài khoản và scope hợp lệ.
+2. **Quản lý hội thoại**: API tạo hoặc nạp `AIConversation`, xác minh chủ sở hữu nếu hội thoại đã gắn tài khoản, lưu user message rồi mới gọi service. Response và context snapshot được lưu sau khi xử lý xong.
+3. **Khôi phục context**: context được gửi rõ ràng sẽ được ưu tiên. `context: null` cho phép dùng snapshot và tối đa 10 message gần đây; `context: {}` là reset tường minh, không nạp snapshot cũ hay history vào lượt xử lý. Lịch sử giúp hiểu follow-up, không được coi là bằng chứng factual.
+4. **Chọn mode và làm sạch context**: mode mặc định là `NATURAL`. Professional lọc các trường context về sports entity/topic trước khi route. Natural có thể tải profile riêng theo user hiện tại.
+5. **Route và policy**: `ScopeRouter` nhận diện domain tổng quát; `IntentRouter` trả intent, confidence, entities, follow-up, nhu cầu hỏi bổ sung và trạng thái reset. `evaluate_mode_scope` quyết định mode có được vào nhánh đó hay không.
+6. **Dispatch**: yêu cầu chuyển đến nhánh nghiệp vụ/System Domain, static system knowledge, Sports Knowledge, hội thoại xã giao, hỏi làm rõ hoặc từ chối.
+7. **Tạo response**: backend tạo `AssistantResponse` gồm `reply`, `understood`, `intent`, `classification`, `confidence`, `entities`, `status`, `suggestions`, `venue_results`, `action`, `assistant_mode` và context-reset metadata khi phù hợp.
+8. **Lưu kết quả**: API lưu assistant message cùng payload JSON, cập nhật snapshot từ `understood` (loại `conversation_messages` khỏi snapshot) rồi trả `conversation_id` cho client.
+
+## 4. Intent, entity và định tuyến
+
+`AssistantIntent` hiện có 27 intent trong source. Danh sách được nhóm để dễ trình bày; enum trong `ai_intent_router.py` là danh sách chuẩn.
+
+| Nhóm | Intent hiện có |
+|---|---|
+| Tìm sân và vận hành | `SEARCH_VENUE`, `RECOMMEND_VENUE`, `CHECK_AVAILABILITY`, `RECOMMEND_SLOT`, `GET_VENUE_DETAIL`, `GET_PRODUCTS`, `CREATE_BOOKING`, `GET_BOOKING`, `CANCEL_BOOKING`, `RESCHEDULE_BOOKING`, `OCCUPANCY_INSIGHT`, `PARTNER_APPLICATION_SUPPORT`, `PAYMENT_SUPPORT`, `ACCOUNT_SUPPORT`, `SYSTEM_GUIDE` |
+| Kiến thức thể thao | `SPORTS_KNOWLEDGE` |
+| Hội thoại và kiểm soát | `GREETING`, `FOLLOW_UP`, `UNCLEAR`, `OUT_OF_SCOPE`, `AI_IDENTITY`, `AI_CAPABILITY`, `THANKS`, `GOODBYE`, `CASUAL`, `ABUSIVE`, `NONSENSE` |
+
+Intent routing chính là deterministic: chuẩn hóa tiếng Việt, luật/keyword/regex, alias, entity resolver và context. Dữ liệu trích được có thể gồm môn thể thao, loại sân, cơ sở/sân, vị trí, ngày, thời gian, mức giá, số người, mã booking, vận động viên, đội/giải đấu, năm, topic và các entity liên quan. Confidence thấp hoặc thiếu trường bắt buộc dẫn đến hỏi làm rõ.
+
+Trong nhánh **Natural Sports Knowledge**, sau khi router đã chọn intent, `LLMSportsQueryProcessor` có thể gọi OpenAI để giải alias, phân giải follow-up và viết lại câu hỏi thành dạng độc lập. Kết quả này chỉ bổ sung/thay đổi cách hiểu của nhánh thể thao; nó không thay thế kiểm tra scope và không điều khiển truy vấn nghiệp vụ tùy ý. Khi provider không khả dụng, nhánh quay về kết quả deterministic.
+
+## 5. Khác biệt giữa hai chế độ
+
+| Năng lực/nguồn | Natural | Professional |
 |---|---|---|
-| **Tìm kiếm & Đặt sân** | `SEARCH_VENUE` | Tìm sân/cơ sở theo môn thể thao, vị trí |
-| | `RECOMMEND_VENUE` | Đề xuất sân tốt nhất / phù hợp |
-| | `CHECK_AVAILABILITY` | Kiểm tra lịch trống của sân |
-| | `RECOMMEND_SLOT` | Gợi ý khung giờ còn trống tối ưu |
-| | `CREATE_BOOKING` | Hướng dẫn tạo booking / xác nhận đặt |
-| | `FOLLOW_UP` | Câu hỏi tiếp nối (chọn sân 1, xem sân khác, đổi ngày...) |
-| **Thông tin & Tiện ích** | `GET_VENUE_DETAIL` | Tra cứu địa chỉ, tiện ích, chính sách của sân |
-| | `GET_PRODUCTS` | Tra cứu sản phẩm/dịch vụ phụ trợ (thuê vợt, nước...) |
-| | `SYSTEM_GUIDE` | Hướng dẫn sử dụng các chức năng hệ thống |
-| **Quản lý & Nghiệp vụ** | `GET_BOOKING` | Tra cứu trạng thái booking theo mã |
-| | `CANCEL_BOOKING` | Hướng dẫn & kiểm tra điều kiện hủy booking |
-| | `RESCHEDULE_BOOKING`| Hướng dẫn & kiểm tra điều kiện dời lịch |
-| | `PAYMENT_SUPPORT` | Tra cứu thanh toán, đặt cọc, hoàn tiền, doanh thu |
-| | `ACCOUNT_SUPPORT` | Tra cứu hồ sơ cá nhân, số lượng tài khoản |
-| | `PARTNER_APPLICATION_SUPPORT` | Hướng dẫn & tra cứu trạng thái hồ sơ đối tác chủ sân |
-| | `OCCUPANCY_INSIGHT` | Phân tích công suất giờ cao/thấp điểm (chủ sân) |
-| **Điều hướng & Kiểm soát**| `GREETING` | Chào hỏi |
-| | `UNCLEAR` | Yêu cầu mơ hồ, thiếu thông tin |
-| | `OUT_OF_SCOPE` | Câu hỏi ngoài phạm vi nghiệp vụ SportHub |
+| Tìm sân, giá, availability, booking support và System Domain | Có, qua backend với scope hiện hành | Có, qua backend với scope hiện hành |
+| Hướng dẫn SportHub/static knowledge | Có | Có |
+| Sports Knowledge nội bộ | Có theo intent và evidence policy | Bị từ chối trước World Cup lookup, Sports RAG và web retrieval |
+| Approved sports web | Có thể đi qua controlled retriever trong Natural; phụ thuộc search provider được inject/cấu hình | Bị chặn |
+| Explicit memory, booking behavior profile, conversation topic profile | Có thể dùng cho tài khoản đã đăng nhập | Không nạp vào xử lý mode này |
+| Lối diễn đạt | Hội thoại tự nhiên | Nghiệp vụ, ngắn gọn và định hướng thao tác hệ thống |
 
-### Các Entities Trích Xuất (`IntentEntities`)
-- `sport_type`: Môn thể thao (`bóng đá`, `cầu lông`, `pickleball`, `tennis`, `bóng rổ`, `bóng chuyền`).
-- `court_type`: Loại sân / sức chứa (`5 người`, `7 người`, `sân đơn`, `sân đôi`, `trong nhà`, `ngoài trời`).
-- `venue_name`: Tên cơ sở / sân cụ thể.
-- `location`: Khu vực / quận huyện / địa chỉ.
-- `date`: Ngày đặt (nhận diện `hôm nay`, `ngày mai`, `thứ bảy`, `2026-09-02`,...).
-- `start_time`, `end_time`: Giờ bắt đầu / kết thúc.
-- `preferred_time`: Buổi trong ngày (`morning`, `afternoon`, `evening`).
-- `max_price`: Mức giá tối đa (xử lý đơn vị `k`, `nghìn`, `triệu`, `đ`).
-- `number_of_players`: Số người chơi.
-- `booking_code`: Mã đặt sân định dạng `SH-XXXXXX`.
+Cả hai mode đều phải dùng backend làm nguồn chuẩn cho dữ liệu nghiệp vụ. Việc mode cho phép một nguồn không đồng nghĩa provider hoặc dữ liệu nguồn đó đã cấu hình sẵn ở mọi môi trường.
 
-### Cơ chế định tuyến
-Sử dụng **Giải thuật Rule-based NLU / Heuristics thuần túy**:
-1. Chuẩn hóa tiếng Việt không dấu (`normalize_text`).
-2. Khớp từ khóa chặn phạm vi (`OUT_OF_SCOPE_TERMS`).
-3. Khớp Regex & Từ điển nhận diện ngày/giờ (`_times`, `_date`), môn thể thao (`SPORT_ALIASES`), mức giá (`_price`), mã booking (`_booking_code`).
-4. Chấm điểm độ tin cậy (`confidence`). **Hoàn toàn không dùng LLM để phân loại intent.**
+## 6. Các nhánh xử lý
 
----
+### 6.1 Nghiệp vụ SportHub và System Domain
 
-## 3. Xử Lý Ngữ Cảnh & Bộ Nhớ Hội Thoại (Context / Memory)
+- Tìm sân/khung giờ bắt đầu từ `AIRepository` và service availability. Nếu thiếu môn/ngày/giờ cần thiết, assistant trả `NEED_MORE_DATA` thay vì đoán.
+- `AIFeatureService.recommend_slots` lọc các cặp sân/slot thực sự còn khả dụng trước khi xếp hạng. OpenAI có thể chọn tối đa ba mục trong danh sách đã cho theo JSON schema; backend bỏ mọi ID không thuộc danh sách đó. Nếu provider lỗi, backend xếp hạng lại theo giờ, giá, rating và ID.
+- Kết quả của intent `CREATE_BOOKING` là gợi ý và điều hướng người dùng sang UI để tự kiểm tra/xác nhận. Assistant endpoint không tạo, hủy, đổi booking hoặc ghi payment.
+- Tra cứu account/booking/payment/partner status phải dựa trên user hiện tại và repository scope; nếu người dùng chưa đăng nhập, service có thể hướng dẫn đăng nhập thay vì tiết lộ dữ liệu.
+- `SystemDomainContextService` đọc dữ liệu về sản phẩm, dịch vụ, tiện ích và đặc điểm sân/cơ sở. Response phân biệt sản phẩm đang được cơ sở cung cấp với mục trong catalog chỉ là gợi ý; dữ liệu catalog không được mô tả thành hàng đang có.
+- Professional trả nội dung nghiệp vụ theo dữ liệu backend và deterministic guide. Natural có thể dùng LLM để diễn đạt lại một số câu trả lời từ evidence đã chuẩn bị; LLM không được đổi sự thật nguồn.
 
-1. **Backend Stateless**:
-   - Backend không lưu phiên chat (session) trong RAM, Redis hay Database.
-   - Endpoint [`POST /ai/assistant`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/api/routes/ai.py#L69-L88) nhận payload gồm `{ message, context_field_id, context }`.
-2. **Client-driven Context State**:
-   - Phía Frontend ([`AIAssistantPage.tsx`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Frontend/src/pages/AIAssistantPage.tsx)) duy trì state `understood` và `context` qua từng lượt hội thoại.
-   - Khi gửi tin nhắn mới, Frontend đính kèm context hiện tại (chứa `sport_type`, `location`, `booking_date`, `field_id`, `result_field_ids`, `reference_price`, `last_intent`...).
-3. **Hợp nhất & Đặt lại ngữ cảnh (Context Merge & Reset)**:
-   - [`_merge_context`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_assistant_service.py#L705-L730): Bổ sung các thông tin còn thiếu trong câu hỏi mới từ context cũ.
-   - [`_starts_new_request`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_intent_router.py#L324-L333): Khi người dùng đổi sang tìm kiếm môn khác, vị trí khác hoặc bắt đầu yêu cầu mới, hệ thống kích hoạt `context_reset = True` để xóa bỏ context cũ.
-   - Tham chiếu vị trí (`_resolve_result_reference`): Hiểu các câu hỏi tiếp nối như *"sân đầu tiên"*, *"lựa chọn 2"*, *"sân rẻ hơn"* bằng cách tra ngược danh sách `result_field_ids` trong context.
+### 6.2 Hướng dẫn hệ thống và static knowledge
 
----
+Các intent hướng dẫn/account/partner/payment đi qua whitelist trong `RAGGuardrail`. Câu hỏi khớp kho `ai_system_knowledge.py` có thể nhận câu trả lời có sẵn và `suggested_action`; kiểm tra role được áp dụng cho mục hướng dẫn bị giới hạn. Khi không có mục phù hợp, một số intent rơi về handler thông tin hiện hữu hoặc hỏi thêm. Đây là kho hướng dẫn hệ thống, tách khỏi dữ liệu động như lịch trống và số tiền booking.
 
-## 4. Xác Định Bản Chất: Có AI Agent Thực Sự Không?
-
-> **KẾT LUẬN: KHÔNG CÓ AI AGENT TỰ TRỊ (NO AUTONOMOUS AGENT).**
-
-- **Không có** ReAct loop hay vòng lặp suy luận (`Thought -> Action -> Observation`).
-- **Không có** Framework Agentic (LangChain, LlamaIndex, AutoGen, CrewAI).
-- **Không có** LLM Tool Calling tự động: LLM không tự quyết định khi nào gọi hàm hay chọn dữ liệu.
-- Hệ thống hoạt động theo mô hình **Deterministic Rule-based Workflow**: Toàn bộ luồng điều khiển (routing, truy vấn database, phân quyền, kiểm tra tính khả dụng, định dạng phản hồi) được thực thi 100% bằng code Python truyền thống. LLM chỉ đóng vai trò là một dịch vụ phụ trợ (worker) để xếp hạng dữ liệu đã chuẩn bị sẵn và sinh văn bản có cấu trúc kiểm soát.
-
-### 4.1. Cơ chế RAG Có Kiểm Soát (Guardrailed RAG vs Autonomous RAG)
-Hệ thống triển khai tầng **Guardrailed RAG** (`RAGGuardrail` + `KnowledgeService` + `KnowledgeRetriever` + `ai_system_knowledge.py` + `docs/AI/knowledge/`):
-- **Phạm vi kích hoạt chặt chẽ**: Chỉ kích hoạt đối với 4 static intents (`SYSTEM_GUIDE`, `ACCOUNT_SUPPORT`, `PARTNER_APPLICATION_SUPPORT`, `PAYMENT_SUPPORT`).
-- **Không trao quyền cho LLM tự truy xuất**: Router xác định intent trước, sau đó bộ lọc rào chắn (`RAGGuardrail`) kiểm tra whitelist rồi mới lấy tri thức chuẩn hóa (27 static entries).
-- **Rào chắn phân quyền vai trò (Role-gating)**: Ngăn chặn tuyệt đối việc người dùng CUSTOMER đọc được các hướng dẫn hoặc chính sách nội bộ của OWNER hay SYSTEM_ADMIN.
-- **Tách biệt hoàn toàn với dữ liệu động**: Giá sân, lịch trống, mã đặt chỗ, doanh thu được truy vấn trực tiếp từ cơ sở dữ liệu quan hệ thông qua Repository tương ứng, triệt tiêu nguy cơ dữ liệu cũ hoặc hallucination.
-
-### 4.2. Chi Tiết Kỹ Thuật Retrieval/RAG Trong Source Code
-Module retrieval tri thức của hệ thống bao gồm 2 tầng thực thi:
-1. **Tầng tri thức tĩnh siêu tốc (`ai_system_knowledge.py`)**:
-   - 27 mục tri thức cốt lõi về quy định, chính sách, hướng dẫn tài khoản được cấu trúc sẵn dạng `KnowledgeEntry`.
-   - Đối sánh trực tiếp qua chuỗi ký tự chuẩn hóa không dấu (`_plain(text)` kết hợp `pattern in clean`).
-   - Cung cấp câu trả lời xác định 100%, không độ trễ, không tốn chi phí gọi LLM và loại bỏ hoàn toàn nguy cơ hallucination.
-2. **Tầng trích xuất tri thức mở rộng (`KnowledgeRetriever` & `KnowledgeRepository`)**:
-   - Tải dữ liệu từ các file Markdown bảng biểu (`docs/AI/knowledge/*.md`).
-   - **Cơ chế đối sánh kép (Dual Matching)**:
-     - **Fuzzy/String Matching**: Dùng `difflib.SequenceMatcher.ratio()` đo mức độ tương đồng chuỗi ký tự theo tỷ lệ `[0, 1]`.
-     - **Dense Semantic Matching**: Dùng mô hình Bi-Encoder `SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")` mã hóa câu hỏi thành vector dầy và đo tương đồng ngữ nghĩa bằng `sklearn.metrics.pairwise.cosine_similarity`.
-   - **Tính điểm kết hợp (Score Combination)**: `combined = (kw_score + sem_score) / 2.0`.
-   - **Sắp xếp ứng viên (Candidate Sorting)**: Sắp xếp giảm dần theo điểm số `candidates.sort(key=lambda x: x[1], reverse=True)`.
-   - **Top-K Retrieval**: Trích xuất K ứng viên có điểm cao nhất với tham số mặc định `DEFAULT_TOP_K = 5` (`top_candidates = candidates[:top_k]`).
-     > *Ghi chú quan trọng:* **Top-K Retrieval ở đây là một bước trích xuất/lựa chọn ứng viên theo điểm số ban đầu, KHÔNG PHẢI là mô hình Reranker (Second-stage re-ranking).**
-   - **Rào lọc ngưỡng (Relevance Gating)**: Áp dụng ngưỡng `relevance_threshold = 0.60`. Nếu ứng viên đứng đầu có điểm `< 0.60`, hệ thống trả về danh sách rỗng để tránh trả lời sai.
-   - **Lưu trữ Vector trên RAM**: Các vector embedding được tính toán và lưu trực tiếp trên mảng NumPy trong RAM (`self._embeddings`), hoàn toàn **không sử dụng Vector Database chuyên dụng**.
-
-### 4.3. Bảng Các Công Nghệ / Kỹ Thuật KHÔNG Sử Dụng Trong Hệ Thống
-
-| Công nghệ / Kỹ thuật | Trạng thái | Bằng chứng thực tế trong Codebase |
-|---|---|---|
-| **LangChain** | **Không sử dụng** | Không có trong `requirements.txt`; toàn bộ logic điều phối và gọi OpenAI API viết bằng code thuần + `httpx`. |
-| **LlamaIndex** | **Không sử dụng** | Không có trong dependencies; module đọc tài liệu và chunking được viết thủ công trong `KnowledgeRepository`. |
-| **BM25** | **Không sử dụng** | Không có thư viện `rank_bm25`/`bm25s`; code không tính toán Term Frequency, IDF hay Document Length Normalization. |
-| **Sparse Vector** | **Không sử dụng** | Không dùng SPLADE, Lexical Sparse Embeddings hay `TfidfVectorizer` cho tác vụ retrieval. |
-| **Vector Database chuyên dụng** | **Không sử dụng** | Không dùng Chroma, Qdrant, Milvus, Pinecone, pgvector hay FAISS. Toàn bộ embeddings chỉ lưu trên RAM dạng NumPy array. |
-| **Reranker** | **Không sử dụng** | Không có mô hình Reranker độc lập (Cohere Rerank, BGE-Reranker, Cross-Encoder). Code chỉ `sort()` danh sách mảng 1 lần duy nhất. |
-| **Cross-Encoder** | **Không sử dụng** | Không dùng `CrossEncoder`. Mô hình nhúng là `all-MiniLM-L6-v2` hoạt động theo kiến trúc Bi-Encoder độc lập. |
-
-### 4.4. Phân Biệt Rõ Ràng Các Khái Niệm Kỹ Thuật
-
-* **Fuzzy Matching ≠ BM25**: `difflib.SequenceMatcher` đo sự trùng lặp ký tự theo thuật toán Gestalt pattern matching, không phải mô hình xác suất từ khóa BM25.
-* **SequenceMatcher ≠ Sparse Vector**: So khớp xâu chuỗi không tạo ra hay thao tác trên bất kỳ vector thưa nhiều chiều nào.
-* **SentenceTransformer (Bi-Encoder) ≠ Cross-Encoder**: `all-MiniLM-L6-v2` mã hóa riêng rẽ query và document thành 2 vector dầy rồi tính Cosine Similarity, không truyền đồng thời cặp `[Query, Document]` vào Transformer qua self-attention.
-* **Dense Embedding trong RAM ≠ Vector Database**: Mảng NumPy lưu vector trong bộ nhớ tiến trình không hỗ trợ chỉ mục không gian xấp xỉ (HNSW, IVFFlat), không lưu trữ bền vững (persistence) và không phải Vector DB.
-* **Top-K Retrieval ≠ Reranking**: Cắt lấy Top-K (`candidates[:top_k]`) là bước lọc đơn cấp cơ bản theo score, không có mô hình học máy thứ hai để tái đánh giá thứ hạng (2nd-stage re-ranking).
-* **Đối sánh kép (Fuzzy + Semantic) ≠ Hybrid Search (BM25 + Dense Vector)**: Hệ thống sử dụng cơ chế đối sánh kép kết hợp fuzzy string ratio và dense cosine similarity, không phải kiến trúc Hybrid Search tiêu chuẩn vốn dung hợp Inverted Index BM25 và Vector Index qua Reciprocal Rank Fusion (RRF).
-* **Làm rõ ngữ cảnh thuật ngữ "Hybrid"**: Trong tài liệu của dự án, khi nhắc đến "Hybrid Recommendation System", ngữ cảnh là hệ thống gợi ý khung giờ/sân bãi kết hợp giữa lọc cơ sở dữ liệu quan hệ + mô hình ML Random Forest dự đoán nhu cầu + chấm điểm quy tắc (Rule-based Heuristic Scoring). Thuật ngữ này **hoàn toàn không liên quan đến Hybrid Search trong Retrieval/RAG**.
-
----
-
-## 5. Các Backend Business Services & Repositories Được Tích Hợp
-
-| Service / Thành phần | File mã nguồn | Chức năng trong hệ thống AI |
-|---|---|---|
-| [`AvailabilityService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/availability_service.py) | `availability_service.py` | Kiểm tra lịch trống thực tế, ghép chuỗi slot liên tiếp, loại trừ slot đã đặt/khóa |
-| [`AIRepository`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/repositories/ai_repository.py) | `ai_repository.py` | Truy vấn cơ sở dữ liệu sân bãi, hồ sơ đối tác, doanh thu, đếm số lượng cơ sở |
-| [`AIFeatureService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_feature_service.py) | `ai_feature_service.py` | Điều phối xếp hạng slot trống và tổng hợp báo cáo công suất |
-| [`CustomerRecommendationService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/customer_recommendation_service.py) | `customer_recommendation_service.py` | Đề xuất sân cá nhân hóa dựa trên lịch sử đặt sân của khách hàng |
-| [`InventoryService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/inventory_service.py) | `inventory_service.py` | Tra cứu sản phẩm/dịch vụ phụ trợ còn hàng (nước uống, thuê vợt,...) |
-| [`BookingService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/booking_service.py) & Repo | `booking_service.py` | Tra cứu thông tin booking, chính sách hủy, tiền cọc |
-| [`AnalyticsService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/analytics_service.py) | `analytics_service.py` | Tính toán tỷ lệ lấp đầy, số giờ khai thác, giờ cao điểm/thấp điểm |
-| [`DemandPredictionService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/ai/inference/prediction_service.py) | `prediction_service.py` | Mô hình Scikit-Learn (Random Forest) dự báo nhu cầu LOW / MEDIUM / HIGH |
-| [`RAGGuardrail`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/rag_guardrail.py) & [`KnowledgeService`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/knowledge_service.py) | `rag_guardrail.py`, `knowledge_service.py`, `ai_system_knowledge.py` | Tra cứu tri thức tĩnh có bảo vệ (RAG) cho 4 intent tĩnh (`SYSTEM_GUIDE`, `ACCOUNT_SUPPORT`, `PARTNER_APPLICATION_SUPPORT`, `PAYMENT_SUPPORT`), lọc theo quyền vai trò (RBAC) |
-| [`KnowledgeRetriever`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/knowledge_retriever.py) & Repo | `knowledge_retriever.py`, `knowledge_repository.py` | Tầng trích xuất tài liệu Markdown (`docs/AI/knowledge/`) kết hợp đối sánh kép (SequenceMatcher + Bi-Encoder all-MiniLM-L6-v2), tính điểm kết hợp và trích xuất Top-K Retrieval (top_k=5) kèm rào lọc relevance_threshold |
-| [`OpenAIProvider`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/services/ai_provider.py) | `ai_provider.py` | Adapter kết nối OpenAI API qua HTTP với Strict JSON Schema |
-
----
-
-## 6. Sơ Đồ Kiến Trúc & Luồng Xử Lý AI
-
-### Sơ đồ Mermaid (Phản ánh chính xác 100% source code)
+### 6.3 Sports Knowledge — pipeline retrieval và generation
 
 ```mermaid
 flowchart TD
-    subgraph Frontend["Frontend Layer (React / TypeScript)"]
-        UI["User on AIAssistantPage"]
-        SvcClient["aiAssistantService.ts\n(askSportHubAssistant)"]
-    end
-
-    subgraph API["API Endpoint Layer (FastAPI)"]
-        Endpoint["POST /ai/assistant\n(api/routes/ai.py)"]
-    end
-
-    subgraph CoreRouter["NLU & Routing Layer (Deterministic)"]
-        AssistantSvc["AIAssistantService\n(services/ai_assistant_service.py)"]
-        Router["Rule-based NLU / IntentRouter\n(Regex & Heuristics - 19 Intents)"]
-    end
-
-    subgraph StaticRAG["Static Retrieval/RAG Pipeline (4 Static Intents)"]
-        Guardrail["RAGGuardrail\n(Intent Whitelist & Role Gating)"]
-        Retriever["KnowledgeRetriever & KnowledgeRepo\n(docs/AI/knowledge/*.md & ai_system_knowledge)"]
-        DualMatch["Dual Matching:\nFuzzy SequenceMatcher + Semantic all-MiniLM-L6-v2"]
-        Scoring["Score Combination & Candidate Sorting\n((kw_score + sem_score) / 2.0)"]
-        TopK["Top-K Retrieval (DEFAULT_TOP_K = 5)\n& Relevance Gating (threshold = 0.60)"]
-        RelKnowledge["Relevant Grounded Knowledge"]
-    end
-
-    subgraph DynamicData["Dynamic Data Pipeline (Database & Business Services)"]
-        AvailSvc["AvailabilityService\n(Lọc slot trống thực tế)"]
-        FeatureSvc["AIFeatureService\n(recommend_slots / occupancy_summary)"]
-        InvSvc["InventoryService\n(Sản phẩm & Dịch vụ)"]
-        AnalytSvc["AnalyticsService\n(Số liệu công suất)"]
-        BookSvc["BookingService\n(Thông tin booking & chính sách hủy)"]
-        AIRepo["AIRepository\n(Truy vấn DB sân bãi, đối tác, user)"]
-        Database[("SportHub Relational Database\nPostgreSQL / SQLite\n(GROUND TRUTH)")]
-    end
-
-    subgraph ScopedLLM["Scoped GenAI & Validation Layer"]
-        OpenAIAdapter["OpenAIProvider / StructuredAIProvider\n(services/ai_provider.py)"]
-        OpenAIAPI["Scoped OpenAI API\n(Strict JSON Schema)"]
-        Validator["Response Validator & Fallback Guard\n(rag_response_validator / Rule Fallback)"]
-    end
-
-    %% Client flow
-    UI -->|Gửi message + conversation context| SvcClient
-    SvcClient -->|HTTP POST| Endpoint
-    Endpoint --> AssistantSvc
-    AssistantSvc -->|Phân tích text| Router
-
-    %% Branching: Static RAG vs Dynamic Data
-    Router -->|Static Intents: SYSTEM_GUIDE, ACCOUNT, PARTNER, PAYMENT| Guardrail
-    Guardrail --> Retriever
-    Retriever --> DualMatch
-    DualMatch --> Scoring
-    Scoring --> TopK
-    TopK --> RelKnowledge
-    RelKnowledge --> Validator
-
-    Router -->|Dynamic Intents: SEARCH, RECOMMEND, AVAILABILITY, OCCUPANCY, BOOKING| DynamicData
-    AvailSvc --> AIRepo
-    InvSvc --> AIRepo
-    BookSvc --> AIRepo
-    AnalytSvc --> AIRepo
-    AIRepo --> Database
-    DynamicData --> FeatureSvc
-
-    %% Dynamic Data to Scoped LLM
-    FeatureSvc -->|Chỉ gửi available_slots đã lọc từ DB| OpenAIAdapter
-    OpenAIAdapter -->|Task-specific JSON Schema| OpenAIAPI
-    OpenAIAPI -->|Structured JSON| OpenAIAdapter
-    OpenAIAdapter --> Validator
-    FeatureSvc -.->|Nếu API timeout/lỗi| Validator
-
-    %% Final response flow
-    Validator --> AssistantSvc
-    AssistantSvc -->|Chuẩn hóa JSON + Understood Context| Endpoint
-    Endpoint -->|HTTP 200 JSON| SvcClient
-    SvcClient -->|Render tin nhắn + Card sân UI| UI
+    Q[Câu hỏi thể thao trong Natural] --> I[Intent/entity/context resolution]
+    I --> WC{World Cup final lookup khớp?}
+    WC -->|Có| WCR[Đọc dataset JSON local, kiểm tra record, trả lời]
+    WC -->|Không| U[OpenAI query understanding nếu cấu hình]
+    U --> RET[Local corpus retrieval theo role, intent, sport, entity]
+    RET --> FRESH[Đánh giá relevance/freshness và nhu cầu web]
+    FRESH --> WEB[Web evidence qua whitelist nếu provider được inject]
+    WEB --> POLICY[Review ledger và lọc riêng từng mục đích sử dụng]
+    FRESH --> POLICY
+    POLICY -->|Cho phép hiển thị và external prompt| OPENAI[OpenAI grounded response]
+    POLICY -->|Cho phép hiển thị, không cho external prompt| LOCAL[Local deterministic answer]
+    POLICY -->|Không có evidence hiển thị được| GEMINI[Gemini general-knowledge fallback nếu cấu hình]
+    OPENAI --> CITE[Lọc citation về nguồn được phép]
+    LOCAL --> CITE
+    GEMINI --> NO_CITE[Không gắn citation xác minh]
+    CITE --> OUT[Response + context snapshot]
+    NO_CITE --> OUT
 ```
 
----
+Chi tiết các bước:
 
-### Sơ đồ ASCII
+1. **Guard mode và lookup riêng**: Professional bị chặn trước nhánh này. Trong Natural, tra cứu kết quả chung kết FIFA World Cup từ JSON local được thử trước Sports RAG. Lookup hiện chỉ khai báo các kỳ 1998–2022; dữ liệu được kiểm tra cấu trúc/đội thắng và là nhánh riêng, chưa dùng Sports Knowledge review ledger.
+2. **Hiểu truy vấn**: `SportsContextResolver` và `IntentRouter` giải alias, số áo, nickname, entity/topic và follow-up. OpenAI có thể trả JSON có schema cho bước hiểu/viết lại truy vấn; nếu không có provider thì dùng xử lý deterministic.
+3. **Tìm evidence nội bộ**: `KnowledgeRepository` nạp các bảng tri thức Markdown dưới `docs/AI/knowledge/`. `KnowledgeRetriever` áp dụng role, intent, sport, entity và candidate filter; mặc định dùng keyword/fuzzy score, top-K và relevance gate 0.60. Semantic encoder là tùy chọn và `use_semantic=False` mặc định trong constructor hiện tại.
+4. **Freshness và web**: `RAGGuardrail` chỉ cho Sports Knowledge Natural đi vào controlled web retriever. Retriever kiểm tra domain whitelist, nội dung liên quan môn thể thao, rumor và freshness. `SportsWebRetriever` hiện mặc định `search_provider=None`; vì vậy web không thực sự thu thập kết quả nếu runtime không inject một search provider. Kiến trúc whitelist không tự chứng minh live web đang bật.
+5. **Policy theo mục đích**: Candidate local chưa phải quyền hiển thị hay quyền gửi ra model. Với record có kiểm soát, code xét riêng `retrieve_internal`, `display_answer`, `prompt_llm_external` và `display_citation`. Metadata phải hợp lệ và quyết định trong review ledger phải được xác thực, còn hiệu lực với fingerprint nội dung và đúng purpose. Ledger lỗi/thiếu hoặc key xác thực không sẵn sàng làm cho các quyền review-controlled bị từ chối. Không suy ra rằng mọi record hiện có đã được review/cleared.
+6. **Generation**: Nếu được phép gửi evidence ra ngoài, OpenAI có thể viết câu trả lời; server chỉ giữ citation khớp với evidence có `display_citation`. Nếu evidence được phép hiển thị nhưng không được gửi provider, code có thể ráp câu trả lời deterministic tại chỗ. Nếu không có evidence được phép hiển thị, Natural có thể dùng Gemini general-knowledge fallback khi API key/model đã cấu hình; câu này không có citation kiểm chứng và không được gọi là dữ liệu live/đã xác minh. Câu hỏi thời gian thực không có evidence phải nêu giới hạn, không đoán kết quả.
+7. **Fallback**: Khi generation thất bại, code thử deterministic answer từ evidence nếu policy cho phép; nếu không thể trả lời an toàn thì trả trạng thái lỗi/thiếu dữ liệu. Chỉ kiểm tra response không rỗng không tương đương với kiểm định factual tự động.
 
-```
-+-----------------------------------------------------------------------------------------------+
-|                                FRONTEND LAYER (React / TypeScript)                            |
-|  [AIAssistantPage.tsx]  <====== (Duy trì conversation context qua mỗi lượt chat)             |
-|          │                                                                                    |
-|          ▼                                                                                    |
-|  [askSportHubAssistant] (Gửi HTTP POST: message, context_field_id, context)                   |
-+-----------------------------------------------------------------------------------------------+
-                                               │
-                                               ▼
-+-----------------------------------------------------------------------------------------------+
-|                            API LAYER: POST /ai/assistant (FastAPI)                            |
-+-----------------------------------------------------------------------------------------------+
-                                               │
-                                               ▼
-+-----------------------------------------------------------------------------------------------+
-|                         CORE NLU & ROUTING LAYER (AIAssistantService)                         |
-|                                              │                                                |
-|             [Rule-based IntentRouter] (Regex & Heuristics phân loại 19 Intents)               |
-|                                              │                                                |
-|            ┌─────────────────────────────────┴────────────────────────────────┐               |
-|            │ (Static Intents)                                                 │ (Dynamic)     |
-|            ▼                                                                  ▼               |
-|  +-----------------------------------+             +---------------------------------------+  |
-|  |     STATIC RETRIEVAL/RAG PIPELINE |             |         DYNAMIC DATA PIPELINE         |  |
-|  |                                   |             |                                       |  |
-|  | [RAGGuardrail] (Role RBAC Whitelist)            | [Business Services & Repositories]   |  |
-|  |          │                        |             | - AvailabilityService (lọc slot trống)|  |
-|  |          ▼                        |             | - BookingService (tra cứu đơn đặt)    |  |
-|  | [KnowledgeRetriever]              |             | - InventoryService (sản phẩm/dịch vụ) |  |
-|  |          │                        |             | - AnalyticsService (tính công suất)   |  |
-|  |          ▼                        |             | - AIRepository                        |  |
-|  | [Dual Matching]                   |             |                  │                    |  |
-|  | - Fuzzy: SequenceMatcher.ratio()  |             |                  ▼                    |  |
-|  | - Dense: all-MiniLM-L6-v2 Cosine  |             |    +----------------------------+     |  |
-|  |          │                        |             |    |      RELATIONAL DATABASE   |     |  |
-|  |          ▼                        |             |    |     (PostgreSQL / SQLite)  |     |  |
-|  | [Score Combine & Sort Candidates] |             |    |         GROUND TRUTH       |     |  |
-|  |          │                        |             |    +----------------------------+     |  |
-|  |          ▼                        |             |                  │                    |  |
-|  | [Top-K Retrieval (top_k = 5)]     |             |                  ▼                    |  |
-|  | (Trích xuất Top-K theo score,     |             | [AIFeatureService (recommend_slots)]  |  |
-|  |  KHÔNG PHẢI Reranker)             |             +---------------------------------------+  |
-|  |          │                        |                                │                       |
-|  |          ▼                        |                                ▼                       |
-|  | [Relevance Gate (threshold=0.60)] |             +---------------------------------------+  |
-|  |          │                        |             |        SCOPED LLM & VALIDATION        |  |
-|  |          ▼                        |             |                                       |  |
-|  | [Relevant Static Knowledge]       |             | [OpenAIProvider (Structured JSON)]    |  |
-|  +-----------------------------------+             |         - Task: rank_available_slots  |  |
-|            │                                       |         - Task: summarize_occupancy   |  |
-|            │                                       | [Fallback: Rule-based Heuristic Rank] |  |
-|            │                                       | [Validation / RAG Response Validator] |  |
-|            │                                       +---------------------------------------+  |
-|            │                                                          │                       |
-|            └─────────────────────────────────┬────────────────────────┘                       |
-|                                              │                                                |
-|                                              ▼                                                |
-|            [_response]: Đóng gói Text phản hồi + Context understood + Action UI Link          |
-+-----------------------------------------------------------------------------------------------+
-                                               │ HTTP 200 JSON Response
-                                               ▼
-                              [Frontend Client UI Render: Text + Cards]
+### 6.4 Pipeline cập nhật kho tri thức
+
+Endpoint `POST /ai/knowledge/update` và `GET /ai/knowledge/update/status` yêu cầu `SYSTEM_ADMIN`; job manager ngăn chạy trùng. Pipeline trong service là:
+
+```text
+Nguồn evidence hoặc raw item được cung cấp
+  → chuẩn hóa thành fact có sport/entity/topic/question/answer/provenance
+  → kiểm tra môn, whitelist nguồn, rumor/xác nhận, độ tin cậy và metadata
+  → bỏ qua trùng / từ chối xung đột / upsert record hợp lệ
+  → cập nhật retriever index; có thể persist Markdown nếu được yêu cầu
+  → trả summary trạng thái job
 ```
 
----
+Lệnh update tự nó không có quyền cấp `approved_uses` hoặc tạo review approval. Việc thu thập từ web vẫn phụ thuộc `search_provider`; request có thể nhận `raw_items` làm đầu vào đã thu thập sẵn. Đây là job cập nhật tri thức, không phải thao tác tự động cho mọi câu hỏi chat.
 
-## 7. Tổng Kết
+## 7. Context và cá nhân hóa
 
-1. **SportHub AI có GenAI không?**
-   - **Có.** Hệ thống tích hợp OpenAI API (`OpenAIProvider`) nhưng chỉ dùng có kiểm soát thông qua **Strict JSON Schema** cho 3 tác vụ chuyên biệt: xếp hạng slot trống (`rank_available_slots`), viết gợi ý ưu đãi công suất (`summarize_occupancy_and_suggest_promotions`), và sinh lời chào tin nhắn (`write_booking_message_copy`).
-2. **Có AI Agent thực sự không?**
-   - **Không.** Hệ thống không có Agent tự hành (ReAct / Autonomous Loop / Dynamic Tool Selection). Toàn bộ luồng nghiệp vụ được điều khiển 100% bằng code Python theo kịch bản xác định.
-3. **Intent Router đang đóng vai trò gì?**
-   - Đóng vai trò là **Bộ phân loại ý định và trích xuất thực thể bằng luật (Rule-based NLU)**. Nó phân tích câu tiếng Việt bằng Regex và từ điển từ khóa, trích xuất thông tin (môn, ngày, giờ, giá, mã booking), quản lý trạng thái context và chuyển hướng tới đúng Backend Service tương ứng.
-4. **Hệ thống xử lý tri thức tĩnh (FAQ, hướng dẫn, chính sách) như thế nào?**
-   - Sử dụng **Guardrailed RAG & Static Knowledge Base** (`RAGGuardrail`, `KnowledgeService`, `KnowledgeRetriever`, `ai_system_knowledge.py` và `docs/AI/knowledge/*.md`).
-   - Kích hoạt độc quyền cho 4 intent tĩnh (`SYSTEM_GUIDE`, `ACCOUNT_SUPPORT`, `PARTNER_APPLICATION_SUPPORT`, `PAYMENT_SUPPORT`) kèm rào chắn phân quyền vai trò (Role-gated).
-   - Tầng retrieval ứng dụng **cơ chế đối sánh kép (Dual Matching)** kết hợp Fuzzy String Matching (`difflib.SequenceMatcher`) và Dense Semantic Matching (`all-MiniLM-L6-v2`), tính điểm kết hợp, sắp xếp ứng viên và trích xuất **Top-K Retrieval (`DEFAULT_TOP_K = 5`)** kèm bộ lọc ngưỡng (`relevance_threshold = 0.60`).
-   - Top-K là bước lựa chọn ứng viên theo điểm số ban đầu, **không phải Reranker**. Hệ thống **không sử dụng Vector Database** (embeddings lưu trên RAM), **không có BM25/Sparse Vector** và **không dùng Cross-Encoder**.
-5. **Kiến trúc hiện tại nên được gọi chính xác là gì?**
-   - **"Deterministic Rule-based Pipeline with Guardrailed RAG (Dual Matching & Top-K Retrieval), Scoped LLM Structured Output & Scikit-Learn Demand Prediction"** (Hệ thống đường ống theo luật xác định kết hợp RAG tri thức có bảo vệ ứng dụng đối sánh kép & Top-K retrieval, LLM sinh dữ liệu có cấu trúc kiểm soát nghiêm ngặt và Machine Learning dự báo nhu cầu).
-6. **Mở rộng Phân hệ External Sports Knowledge RAG & Entity Alias Engine (Cập nhật 09/2026)**:
-   - Hỗ trợ tra cứu tri thức 6 môn thể thao thuộc Whitelist với thứ tự ưu tiên địa lý (Thái Nguyên $\rightarrow$ Việt Nam $\rightarrow$ Quốc tế).
-   - Chuẩn hóa 52 entries tri thức cho 8 VĐV tiêu biểu (MVP Player Scope) theo 7 chủ đề thuộc tính (`birth_date`, `birth_place`, `current_club`, `career`, `status`, `achievements`, overview).
-   - Tích hợp động cơ khớp thuộc tính `TOPIC_PATTERNS` (ưu tiên score 0.95 cho thuộc tính đúng, dìm score 0.20 cho thuộc tính sai).
-   - Tích hợp động cơ quy đổi alias `ENTITY_ALIASES` tại Intent Router (`KNOWN_SPORTS_ENTITIES`) và Retriever (`_resolve_entity_alias()`): tự động nhận diện tên viết tắt, biệt danh, không dấu (`Leo Messi`, `CR7`, `Quang Hải`, `Tiến Linh`, `Axelsen`...) về đúng canonical entity mà không làm thay đổi nội dung minh chứng (evidence).
-   - Kiểm thử nghiệm thu đạt `100% PASSED` trên toàn bộ 488 test suites.
-7. **Nâng cấp Multi-Attribute Sports Knowledge RAG & Multi-Evidence Aggregation (17/09/2026)**:
-   - Xử lý câu hỏi tự nhiên gộp nhiều thuộc tính (ví dụ: *"Quang Hải là ai, sinh ngày nào, quê ở đâu, đá cho CLB nào?"*).
-   - `KnowledgeRetriever` gom danh sách `query_matched_topics`, không đánh phạt điểm khi query có nhiều topic.
-   - `AIAssistantService` gom và ghép toàn bộ evidence hợp lệ, loại bỏ trùng lặp và tự động gắn thông báo an toàn đối với các thuộc tính bị thiếu dữ liệu kiểm chứng.
-8. **Phân hệ Controlled Web Retrieval & Grounded Context (AI-WEB-01 ➔ AI-WEB-04)**:
-   - Tách biệt tuyệt đối Luồng Nghiệp Vụ (Business Flow) và Luồng Tri Thức Thể Thao (Sports Knowledge Flow). Business Intents luôn truy vấn Database (Ground Truth) và **không bao giờ gọi Web Search**.
-   - Kích hoạt Web Retrieval có kiểm soát qua danh sách Whitelist chính thức (`DEFAULT_SPORTS_SOURCE_WHITELIST`) và bộ lọc từ khóa theo môn thể thao (`SPORT_SPECIFIC_KEYWORDS`).
-   - Đánh giá Freshness và mức độ biến động (`volatility`): Thông tin thời sự/chuyển nhượng kích hoạt Web Retrieval; thông tin web mới hơn và uy tín sẽ thay thế thông tin nội bộ cũ (Freshness Superseding).
-   - Grounded LLM Response: LLM chỉ trả lời dựa trên Grounded Evidence được tổng hợp và đính kèm đầy đủ nguồn trích dẫn (Title, Domain, URL, Publication Date).
-   - Vượt qua 100% (8/8) kịch bản kiểm thử nghiệm thu cuối cùng (`test_final_sports_web_validation.py`).
+- `AIConversation`/`AIMessage` lưu nội dung hội thoại và payload response. Endpoint đọc hội thoại xác minh chủ sở hữu nếu hội thoại thuộc user đã đăng nhập.
+- Recent conversation history dùng để giải quyết đại từ/follow-up; sports query history loại phần assistant trước đó khỏi context đưa sang provider vì câu trả lời trước có thể chưa được kiểm chứng.
+- `UserAIMemoryService` chỉ trích xuất một số phát biểu tường minh thuộc nhóm được hỗ trợ, như môn thường chơi, vận động viên yêu thích, phong cách trả lời và khu vực tìm sân; service loại nhiều mẫu dữ liệu nhạy cảm. User có thể xem/xóa memory qua endpoint yêu cầu JWT.
+- Natural có thể nạp explicit memory, `BookingBehaviorProfileService` từ booking đủ điều kiện trong cửa sổ 180 ngày và `ConversationTopicProfileService` từ câu hỏi lặp lại trong 180 ngày. Profile hành vi/chủ đề là tín hiệu suy luận, không phải xác nhận sở thích hoặc sports evidence.
+- Các profile chỉ được truy xuất theo user ID hiện tại. Chúng không được dùng làm citation hay bằng chứng thể thao; Professional không nạp chúng.
 
-## 16. CP-SYS-03 — Final Natural & Professional Check
+## 8. Tác vụ AI ngoài chat và pipeline ML
 
-### Nội dung đã hoàn thành
-
-- Bổ sung continuity cho System Domain khi follow-up ngắn đổi sport/venue/entity.
-- Giữ operation semantic trước đó: amenities hoặc products.
-- Không chuyển `còn cầu lông?` thành `SEARCH_VENUE`/`CHECK_AVAILABILITY`.
-- Vẫn chuyển đúng business flow với yêu cầu rõ ràng như `tìm sân cầu lông tối nay`.
-- Natural và Professional dùng cùng một resolver; Professional không bị Natural routing làm ảnh hưởng.
-- Sửa lỗi nhỏ ở Natural out-of-scope reply: method dùng instance context đúng cách.
-
-### Các lớp AI hiện có
-
-| Lớp | Vai trò |
+| Tác vụ/API | Pipeline và giới hạn |
 |---|---|
-| `IntentRouter` | Rule-based intent/entity routing, context merge/reset và semantic follow-up resolution |
-| `AIAssistantService` | Điều phối mode, policy, business handlers, System Domain và response contract |
-| SportHub Repository/DB | Source-of-truth cho sân, slot, giá, booking và dữ liệu nghiệp vụ |
-| `SystemDomainContextService` | Source-of-truth read-only cho amenities/products cấp sport và venue |
-| `RAGGuardrail` + Knowledge services | Grounded retrieval, role/scope gating, citation và safe fallback |
-| Natural mode | Sports Knowledge RAG + approved Web khi được policy cho phép |
-| Professional mode | Deterministic SportHub business/System Domain/internal guide; chặn Sports RAG/Web |
-| LLM | Chỉ hoạt động ở các tác vụ được giới hạn bằng structured output; không tự gọi tool hay mutation DB |
+| `POST /ai/recommend-slots` | Backend lấy available pairs → dựng lựa chọn hợp lệ → OpenAI trả các ID và lý do theo JSON schema → backend xác minh ID thuộc allowlist; provider lỗi thì dùng xếp hạng rule-based. Không ghi booking. |
+| `GET /ai/occupancy-summary` | OWNER-scoped `AnalyticsService` tính số liệu trước → OpenAI sinh nhận xét/gợi ý có schema → backend kiểm tra slot ID và chặn nội dung sửa số hoặc tuyên bố đã áp dụng khuyến mãi; fallback dựng từ analytics. |
+| `POST /ai/generate-booking-message` | Backend xác minh sự kiện với booking và đóng băng facts → LLM chỉ sinh lead/closing → validator loại câu copy chứa dữ kiện giao dịch → fallback dùng template. |
+| Demand prediction / `POST /ai/predict-demand` | Lấy hoặc dựng features → nạp pipeline scikit-learn đã huấn luyện từ artifact `joblib` → trả nhãn, xác suất và giải thích. Model loader kiểm tra phiên bản scikit-learn và feature contract. Endpoint insights giới hạn OWNER scope; đây là inference, không train trong request. |
+| `GET /ai/recommendations` | Lọc sân/slot đang trống → dự đoán demand bằng pipeline ML → xếp hạng bằng công thức kết hợp giá và demand level; model không tạo slot/availability mới. |
+| `GET /ai/customer-recommendations` | Gợi ý sân qua service riêng; tùy trạng thái đăng nhập có thể dùng customer ID, nhưng kết quả vẫn lấy từ dữ liệu nền tảng. |
 
-### Verification snapshot
+OpenAI provider dùng cấu hình `OPENAI_API_KEY`, `OPENAI_MODEL`, timeout và retry từ environment; các tác vụ cấu trúc dùng JSON Schema nghiêm ngặt. Gemini được cấu hình riêng (`GEMINI_API_KEY`, `GEMINI_MODEL`) và trong nhánh trợ lý nêu trên chỉ là fallback general knowledge của Natural. Không ghi API key hoặc giả định một giá trị model mặc định là model đang chạy ở production.
 
-- CP-SYS-03 smoke matrix: PASS ở cả Natural và Professional.
-- Sáu case demo: PASS, gồm amenities, products, sport switching, business search và venue follow-up.
-- `py_compile` cho router/assistant: PASS.
-- `test_ai_intent_router.py`: 25 passed, 24 subtests passed.
-- Natural follow-up/multiturn tests: 10 passed.
-- Một policy test còn fail do expectation greeting thiếu emoji; không liên quan context/routing CP-SYS-03.
+Khi provider ngoài đã cấu hình và nhánh tương ứng được gọi, payload có thể chứa câu hỏi hiện tại, một phần context/lịch sử người dùng, sports evidence đã được phép gửi, hoặc dữ liệu nghiệp vụ đã được chuẩn bị để xếp hạng/tóm tắt. Riêng `write_booking_message_copy` gửi loại sự kiện và hướng dẫn sinh câu chữ; các transaction facts được ghép vào message ở backend, không lấy từ nội dung do model sinh.
+
+## 9. Quyền, tính toàn vẹn và giới hạn
+
+- `get_optional_current_user` cho phép câu hỏi công khai/hội thoại ẩn danh; dữ liệu booking, payment, hồ sơ và báo cáo vẫn phải qua đăng nhập, role và scope trong service/repository.
+- `AIRepository.scope_for_user`, ownership checks và endpoint dependencies có trách nhiệm ngăn truy vấn vượt tenant. Context hoặc nội dung người dùng gửi lên không phải bằng chứng cấp quyền.
+- Assistant chat là read/guidance flow. Nó có thể trả link/action để người dùng tiếp tục trên UI; người dùng xác nhận thao tác nghiệp vụ ở chức năng tương ứng.
+- Giá, availability, booking và số liệu phải bắt nguồn từ database/backend; dữ liệu LLM không thể override candidate hay số liệu đã tính.
+- Citation chỉ xuất hiện khi câu trả lời có evidence với quyền citation phù hợp. Không phải mọi câu trả lời AI đều có citation.
+- Trợ lý không có autonomous tool loop, nhưng một số nhánh Natural gọi LLM để hiểu truy vấn hoặc viết câu trả lời. Provider có thể lỗi/không cấu hình; từng nhánh có deterministic fallback hoặc trả lỗi phù hợp.
+- Dữ liệu lịch sử hội thoại là context, không phải nguồn xác minh factual. Gemini general-knowledge fallback là câu trả lời không có nguồn kiểm chứng.
+
+## 10. Giới hạn kỹ thuật phát hiện khi đối chiếu source
+
+1. `SportsWebRetriever` khởi tạo mặc định không có `search_provider`, và `retrieve_evidence()` trả danh sách rỗng nếu không được inject. Cần cấu hình/inject adapter thực tế trước khi mô tả web retrieval là đang hoạt động.
+2. Freshness helpers trong `sports_web_retriever.py` và `rag_guardrail.py` có mặc định ngày `2026-09-17`; call path trợ lý hiện gọi evaluator mà không truyền ngày hiện tại. Vì vậy kết quả freshness theo ngày cần được xem xét/cập nhật trước khi dùng như kiểm tra live tại ngày báo cáo.
+3. `KnowledgeRetriever` dùng semantic similarity tùy chọn nhưng constructor hiện đặt `use_semantic=False`; không mô tả dense vector search là chế độ mặc định. Kho này không tự chứng minh đang dùng vector database chuyên dụng.
+4. Model prediction phụ thuộc artifact/metadata/metrics và phiên bản sklearn khớp. Nếu artifact không sẵn sàng hoặc contract lệch, API trả lỗi `503` thay vì bảo đảm luôn có dự báo.
+5. Gemini general-knowledge fallback không có citation và không xác minh dữ liệu biến động theo thời gian thực. World Cup JSON lookup chỉ có các trận chung kết được khai báo đến năm 2022.
+
+## 11. Bằng chứng kiểm thử và giới hạn của số liệu
+
+Trong ghi nhận trước của workspace có một lần chạy regression mục tiêu ngày **27/10/2026** cho `test_sports_knowledge_policy_runtime.py`, `test_sports_knowledge_policy.py` và `test_ai_intent_router.py`: **168 passed, 24 subtests passed** bằng provider mock. Đây không phải toàn bộ backend/frontend suite và không kiểm tra provider thật. Lần cập nhật tài liệu này không chạy lại test; trước khi trích dẫn kết quả, đối chiếu với log/artifact của lần chạy tương ứng.
+
+Không dùng các tuyên bố “độ chính xác 100%”, “hallucination bằng 0” hoặc test count của checkpoint cũ làm kết luận runtime. `AI_EVALUATION.md` lưu các đánh giá theo bộ dữ liệu/lần chạy; cần nêu ngày, phạm vi và điều kiện provider khi dẫn số liệu.
+
+## 12. Tài liệu và vị trí source
+
+| Chủ đề | Tài liệu/source |
+|---|---|
+| Kiến trúc trợ lý AI và cập nhật runtime | [`AI/AI_ARCHITECTURE.md`](AI/AI_ARCHITECTURE.md) |
+| Kết quả đánh giá theo lần chạy | [`AI_EVALUATION.md`](AI_EVALUATION.md) |
+| Hợp đồng endpoint AI | [`API.md`](API.md), [`../Backend/app/api/routes/ai.py`](../Backend/app/api/routes/ai.py), [`../Backend/app/schemas/ai.py`](../Backend/app/schemas/ai.py) |
+| Orchestration và pipeline chat | [`../Backend/app/services/ai_assistant_service.py`](../Backend/app/services/ai_assistant_service.py) |
+| Intent/entity | [`../Backend/app/services/ai_intent_router.py`](../Backend/app/services/ai_intent_router.py), [`../Backend/app/services/ai_sports_resolver.py`](../Backend/app/services/ai_sports_resolver.py) |
+| Scope/mode policy | [`../Backend/app/services/ai_domain_policy.py`](../Backend/app/services/ai_domain_policy.py) |
+| Sports Knowledge/RAG/evidence | [`../Backend/app/services/rag_guardrail.py`](../Backend/app/services/rag_guardrail.py), [`../Backend/app/services/knowledge_retriever.py`](../Backend/app/services/knowledge_retriever.py), [`../Backend/app/services/sports_knowledge_policy_enforcement.py`](../Backend/app/services/sports_knowledge_policy_enforcement.py), [`../Backend/app/services/sports_knowledge_review_ledger.py`](../Backend/app/services/sports_knowledge_review_ledger.py) |
+| LLM providers và sports response | [`../Backend/app/services/llm_sports_processor.py`](../Backend/app/services/llm_sports_processor.py), [`../Backend/app/services/ai_provider.py`](../Backend/app/services/ai_provider.py) |
+| World Cup lookup và corpus | [`../Backend/app/services/world_cup_lookup.py`](../Backend/app/services/world_cup_lookup.py), [`AI/knowledge/`](AI/knowledge/) |
+| AI personalization | `user_ai_memory_service.py`, `booking_behavior_profile_service.py`, `conversation_topic_profile_service.py` trong `Backend/app/services/` |
+| Demand prediction | `Backend/app/ai/inference/`, `Backend/app/ai/preprocessing/`, `Backend/app/ai/saved_models/` |
+
+---
+
+*Tài liệu này là báo cáo kiến trúc hiện hành theo source đã đọc ngày 27/10/2026. Khi thay đổi route, mode policy, provider wiring, evidence policy hoặc pipeline dữ liệu, cập nhật lại sơ đồ và các giới hạn liên quan; không chép nguyên checkpoint lịch sử thành mô tả hiện tại.*

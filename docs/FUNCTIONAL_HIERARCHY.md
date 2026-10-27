@@ -1,7 +1,6 @@
 # Phân cấp chức năng SportHub AI
 
-> Phiên bản hiện trạng: **16/08/2026**
-> Đối chiếu từ `Backend/app`, `Backend/tests`, `Frontend/src` và router đang hoạt động.
+> Phần AI được cập nhật theo source và regression ngày **27/10/2026**. Các phần nghiệp vụ còn lại giữ snapshot mô tả trước đó và cần được đối chiếu riêng trước khi xem là kiểm kê hiện trạng toàn hệ thống.
 
 Tài liệu phục vụ tổng hợp báo cáo đồ án. Chức năng chỉ được ghi **Hoàn thành** khi có xử lý backend/database thực tế và giao diện (nếu có) đang gọi API thật.
 
@@ -225,14 +224,17 @@ flowchart TD
 
 ### 4.9. AI, recommendation và analytics
 
-1. Assistant phân loại intent (19 intents), trích entity, giữ multi-turn context và giới hạn domain — **Hoàn thành**.
-2. Guardrailed RAG & Knowledge Base tra cứu tri thức tĩnh (FAQ, hướng dẫn, chính sách) có phân quyền (RBAC) — **Hoàn thành**.
-3. Truy vấn riêng tư áp dụng JWT/tenant scope tại service và repository — **Hoàn thành**.
-4. Assistant không tự mutation booking/payment, chỉ hướng dẫn — **Hoàn thành**.
-5. Thông tin sản phẩm, giá và số lượng đọc từ backend hiện tại — **Hoàn thành**.
-6. Recommendation dùng lịch sử, rating, khoảng cách, giá và availability — **Hoàn thành**.
-7. Pipeline ML offline, metrics, dự báo nhu cầu (Random Forest) và recommendation OWNER — **Hoàn thành**.
-8. LLM ngoài phụ thuộc cấu hình runtime và có fallback an toàn — **Hoàn thành một phần**.
+1. Assistant phân loại intent, trích entity, duy trì context đa lượt và áp dụng mode/scope policy — **Hoàn thành**.
+2. Natural Mode hỗ trợ Sports Knowledge, review/purpose policy và Gemini general-knowledge fallback khi thiếu evidence được phép — **Hoàn thành một phần theo nguồn/provider**.
+3. Professional Mode tập trung nghiệp vụ/System Domain; Sports Knowledge bị chặn trước World Cup lookup, Sports RAG và sports web retrieval — **Hoàn thành theo guard và regression tests**.
+4. Sports Knowledge policy tách quyền hiển thị claim, gửi nội dung đến LLM ngoài và citation; record thiếu review decision phù hợp không được dùng làm evidence — **Đã có enforcement, coverage còn phụ thuộc hồ sơ quyền từng record**.
+5. World Cup finals pilot dùng local JSON lookup riêng, không tích hợp Sports Knowledge review ledger — **Hoàn thành trong phạm vi 7 kỳ pilot**.
+6. Context reset: payload context rỗng không fallback snapshot hoặc history cũ — **Đã có regression test**.
+7. Guardrailed RAG & Knowledge Base cho hướng dẫn/chính sách hệ thống có phân quyền — **Có trong source; kiểm thử theo nhóm liên quan**.
+8. Truy vấn riêng tư áp dụng JWT/tenant scope tại service/repository; assistant không tự mutation booking/payment — **Hoàn thành theo luồng hiện có**.
+9. Recommendation dùng lịch sử, rating, khoảng cách, giá và availability; pipeline ML dự báo nhu cầu là phân hệ riêng — **Hoàn thành theo module**.
+10. Ba profile cá nhân hóa (explicit memory, booking behavior, conversation topic) chỉ được nạp trong Natural và không phải evidence — **Có trong source; độ phủ phụ thuộc dữ liệu tài khoản và intent**.
+11. LLM ngoài phụ thuộc cấu hình runtime; bài test gần nhất dùng provider mock, không phải live integration — **Hoàn thành một phần**.
 
 ### 4.10. Nền tảng, dữ liệu và bảo mật — **Hạ tầng**
 

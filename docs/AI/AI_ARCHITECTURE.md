@@ -1,6 +1,39 @@
 # Kiến trúc Hệ thống AI — SportHub AI Assistant (CP-11B)
 
+> **Hiện trạng đã đối chiếu source: 27/10/2026.** Phần dưới ghi lại các checkpoint cũ, có thể không còn phản ánh runtime. Khi mâu thuẫn, dùng mục **Hiện trạng vận hành hiện tại** bên dưới và source code; không dùng các tuyên bố cũ về “độ chính xác 100%”, web được duyệt mặc định hoặc auto-update như trạng thái hiện tại.
+
+## Hiện trạng vận hành hiện tại
+
+SportHub dùng pipeline điều phối có kiểm soát, không phải autonomous agent. `IntentRouter` nhận intent/entity/context; `AIAssistantService` chọn luồng nghiệp vụ, System Domain, Sports Knowledge hoặc phản hồi phạm vi. Dữ liệu giá, sân, slot, booking, tài khoản và thanh toán phải qua backend/database và scope theo tài khoản/tenant; LLM không tự xác nhận dữ liệu này hoặc tạo giao dịch.
+
+| Chế độ | Hành vi hiện tại |
+|---|---|
+| **Natural** | Có thể dùng Sports Knowledge và nguồn web qua guardrail theo điều kiện; evidence cần qua policy/review trước khi hiển thị hoặc gửi provider. Nếu không có evidence được phép, có thể dùng Gemini general knowledge khi cấu hình sẵn; không có citation và không phải live search. |
+| **Professional** | Tập trung nghiệp vụ SportHub/System Domain. Câu Sports Knowledge bị từ chối trước World Cup lookup, Sports RAG và sports web retrieval. Không tải ba lớp personal profile vào prompt. |
+
+### Nhánh Sports Knowledge và kiểm soát evidence
+
+- Retrieval tìm candidate local; candidate không đồng nghĩa với quyền sử dụng.
+- Quyền `display_answer`, `prompt_llm_external` và `display_citation` được xét riêng. Review ledger phải hợp lệ, chữ ký đúng và quyết định khớp fingerprint nội dung cùng mục đích.
+- Local deterministic answer chỉ nhận record qua quyền hiển thị; citation local cũng phải qua quyền citation. Record bị chặn không còn được đưa trở lại qua local fallback.
+- Khi không có record được phép hiển thị, Natural chuyển sang general-knowledge fallback của Gemini nếu provider sẵn sàng. Câu trả lời đó không được trình bày là thông tin đã kiểm chứng/có nguồn từ SportHub. Dữ kiện biến động cần nêu độ không chắc chắn; câu hỏi live không được đoán.
+- World Cup finals là lookup JSON local riêng, sau guard Professional và trước Sports RAG; chưa tích hợp Sports Knowledge review ledger.
+
+### Context và cá nhân hóa
+
+- Context tường minh được ưu tiên hơn snapshot. `context: {}` là reset: không khôi phục snapshot hoặc chèn các lượt cũ làm context. `context: null` cho phép dùng snapshot/lịch sử đã lưu.
+- Lịch sử hội thoại chỉ hỗ trợ hiểu follow-up; không là bằng chứng factual.
+- Natural có thể nhận ba profile riêng: explicit user memory, booking behavior (cửa sổ 180 ngày) và conversation topic (tín hiệu yếu, cửa sổ 180 ngày). Chúng không phải Sports Knowledge evidence/citation. Professional không nạp các profile này.
+
+### Regression gần nhất
+
+Ngày 27/10/2026, nhóm test policy, runtime và intent router được chọn chạy bằng backend virtualenv: **168 passed, 24 subtests passed**. Đây không phải full suite, không phải kiểm thử Gemini thật và không chứng minh toàn hệ thống không còn lỗi.
+
+Kịch bản demo hiện hành: [`DEMO_SCENARIOS.md`](DEMO_SCENARIOS.md).
+
 ## I. Tuyên bố Kiến trúc Chính thức (Official Architecture Statement)
+
+> **Lưu trữ checkpoint CP-11B:** Nội dung checkpoint cũ bắt đầu từ đây. Các bảng provider, danh sách intent, lời khẳng định về độ chính xác, web/auto-update và test count phía dưới không phải kết quả audit hiện tại; dùng mục “Hiện trạng vận hành hiện tại” ở đầu file.
 
 > **Kiến trúc chính thức**:
 > **Deterministic Rule-based Pipeline with Guardrailed RAG, Scoped LLM Structured Output & Scikit-Learn Demand Prediction**

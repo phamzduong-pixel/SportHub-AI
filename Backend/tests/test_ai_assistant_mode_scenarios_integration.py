@@ -7,6 +7,10 @@ from app.schemas.ai import AssistantMode
 from app.services.ai_intent_router import AssistantIntent
 from app.services.ai_domain_policy import ScopeClassification, ScopeDecision
 from app.services.sports_web_retriever import SportsWebEvidence
+from tests.sports_knowledge_test_fixtures import (
+    SyntheticReviewAuthorizer,
+    authorized_sports_knowledge_service,
+)
 
 
 class AssistantScenarioMockProvider:
@@ -24,6 +28,16 @@ class AssistantScenarioMockProvider:
 class AIAssistantModeScenarioIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.knowledge_service_patch = patch(
+            'app.services.rag_guardrail.get_knowledge_service',
+            return_value=authorized_sports_knowledge_service(),
+        )
+        cls.knowledge_service_patch.start()
+        cls.review_ledger_patch = patch(
+            'app.services.ai_assistant_service.load_review_ledger',
+            return_value=SyntheticReviewAuthorizer(),
+        )
+        cls.review_ledger_patch.start()
         cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=AssistantScenarioMockProvider())
         cls.provider_patch.start()
         cls.client = TestClient(app)
@@ -36,6 +50,8 @@ class AIAssistantModeScenarioIntegrationTests(unittest.TestCase):
         finally:
             cls.client.close()
             cls.provider_patch.stop()
+            cls.review_ledger_patch.stop()
+            cls.knowledge_service_patch.stop()
 
     # ==========================================
     # 1. NATURAL MODE SCENARIOS
@@ -157,10 +173,11 @@ class AIAssistantModeScenarioIntegrationTests(unittest.TestCase):
 
     @patch('app.services.rag_guardrail.RAGGuardrail.retrieve_web_context')
     @patch('app.services.rag_guardrail.KnowledgeService.retrieve')
-    def test_scenario_09_professional_sports_knowledge_never_calls_rag_or_web(self, mock_retrieve: MagicMock, mock_web: MagicMock):
-        """9. Professional Sports Knowledge -> không gọi Sports RAG/Web."""
+    @patch('app.services.ai_assistant_service.lookup_world_cup_query')
+    def test_scenario_09_professional_sports_knowledge_never_calls_rag_or_web(self, mock_world_cup: MagicMock, mock_retrieve: MagicMock, mock_web: MagicMock):
+        """9. Professional sports knowledge does not call sports retrieval."""
         response = self.client.post('/ai/assistant', json={
-            'message': 'Thông tin về đội tuyển bóng đá Việt Nam',
+            'message': 'Ai vô địch World Cup 2022?',
             'assistant_mode': 'PROFESSIONAL',
         })
         self.assertEqual(response.status_code, 200)
@@ -168,6 +185,7 @@ class AIAssistantModeScenarioIntegrationTests(unittest.TestCase):
         self.assertEqual(data.get('status'), 'OUT_OF_SCOPE')
         mock_retrieve.assert_not_called()
         mock_web.assert_not_called()
+        mock_world_cup.assert_not_called()
 
     # ==========================================
     # 3. MODE SWITCHING SCENARIOS

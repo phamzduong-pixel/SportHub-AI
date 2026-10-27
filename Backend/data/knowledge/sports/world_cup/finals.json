@@ -1,0 +1,190 @@
+[
+  {
+    "year": 1998,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Brazil",
+    "team2": "France",
+    "score_90": [
+      0,
+      3
+    ],
+    "score_after_extra_time": [
+      0,
+      3
+    ],
+    "went_to_extra_time": false,
+    "penalty_score": null,
+    "champion": "France",
+    "runner_up": "Brazil",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "1998/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/1998/worldcup.json"
+    }
+  },
+  {
+    "year": 2002,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Germany",
+    "team2": "Brazil",
+    "score_90": [
+      0,
+      2
+    ],
+    "score_after_extra_time": [
+      0,
+      2
+    ],
+    "went_to_extra_time": false,
+    "penalty_score": null,
+    "champion": "Brazil",
+    "runner_up": "Germany",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2002/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2002/worldcup.json"
+    }
+  },
+  {
+    "year": 2006,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Italy",
+    "team2": "France",
+    "score_90": [
+      1,
+      1
+    ],
+    "score_after_extra_time": [
+      1,
+      1
+    ],
+    "went_to_extra_time": true,
+    "penalty_score": [
+      5,
+      3
+    ],
+    "champion": "Italy",
+    "runner_up": "France",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2006/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2006/worldcup.json"
+    }
+  },
+  {
+    "year": 2010,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Netherlands",
+    "team2": "Spain",
+    "score_90": [
+      0,
+      0
+    ],
+    "score_after_extra_time": [
+      0,
+      1
+    ],
+    "went_to_extra_time": true,
+    "penalty_score": null,
+    "champion": "Spain",
+    "runner_up": "Netherlands",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2010/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2010/worldcup.json"
+    }
+  },
+  {
+    "year": 2014,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Germany",
+    "team2": "Argentina",
+    "score_90": [
+      0,
+      0
+    ],
+    "score_after_extra_time": [
+      1,
+      0
+    ],
+    "went_to_extra_time": true,
+    "penalty_score": null,
+    "champion": "Germany",
+    "runner_up": "Argentina",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2014/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2014/worldcup.json"
+    }
+  },
+  {
+    "year": 2018,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "France",
+    "team2": "Croatia",
+    "score_90": [
+      4,
+      2
+    ],
+    "score_after_extra_time": [
+      4,
+      2
+    ],
+    "went_to_extra_time": false,
+    "penalty_score": null,
+    "champion": "France",
+    "runner_up": "Croatia",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2018/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2018/worldcup.json"
+    }
+  },
+  {
+    "year": 2022,
+    "competition": "FIFA World Cup",
+    "stage": "Final",
+    "team1": "Argentina",
+    "team2": "France",
+    "score_90": [
+      2,
+      2
+    ],
+    "score_after_extra_time": [
+      3,
+      3
+    ],
+    "went_to_extra_time": true,
+    "penalty_score": [
+      4,
+      2
+    ],
+    "champion": "Argentina",
+    "runner_up": "France",
+    "provenance": {
+      "repository": "openfootball/worldcup.json",
+      "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+      "path": "2022/worldcup.json",
+      "record_index": 64,
+      "source_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/2022/worldcup.json"
+    }
+  }
+]

@@ -1,7 +1,8 @@
 import os
 import re
-from dataclasses import dataclass
-from datetime import datetime
+import tempfile
+from dataclasses import dataclass, replace
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -15,6 +16,54 @@ from .sports_web_retriever import (
     SportsWebEvidence,
     SportsWebRetriever,
 )
+from .sports_knowledge_review_ledger import load_review_ledger
+from .sports_knowledge_policy import PolicyOutcome
+from .sports_knowledge_policy_enforcement import evaluate_reviewed_knowledge_use
+
+
+_AUTO_UPDATED_KNOWLEDGE_COLUMNS = (
+    "ID", "Topic", "Role", "Intent", "Sport", "Entity", "Question", "Answer",
+    "Source_Name", "Source_URL", "Collected_At", "Priority", "Classification",
+    "Source_Title", "Source_Version", "Verified_At", "Effective_From", "Effective_To",
+    "Rule_Set", "Jurisdiction", "Rights_Status", "License", "Rights_Evidence_URL",
+    "Rights_Checked_At", "Approved_Uses", "Authoring_Type", "Record_Status",
+)
+
+_RIGHTS_STATUSES = {"approved", "reference_only", "pending_review", "restricted"}
+_RECORD_STATUSES = {"active", "draft", "conflicted", "superseded", "withdrawn"}
+_METADATA_STRING_FIELDS = (
+    "source_title",
+    "source_version",
+    "verified_at",
+    "effective_from",
+    "effective_to",
+    "rule_set",
+    "jurisdiction",
+    "rights_status",
+    "license",
+    "rights_evidence_url",
+    "rights_checked_at",
+    "authoring_type",
+    "record_status",
+)
+_METADATA_DATE_FIELDS = (
+    "collected_at",
+    "verified_at",
+    "effective_from",
+    "effective_to",
+    "rights_checked_at",
+)
+_METADATA_UPDATE_FIELDS = _METADATA_STRING_FIELDS + ("approved_uses", "collected_at")
+_REVIEW_CONTROLLED_FACT_FIELDS = (
+    "verified_at",
+    "rights_status",
+    "license",
+    "rights_evidence_url",
+    "rights_checked_at",
+    "approved_uses",
+    "record_status",
+)
+_REVIEW_BOUND_ENTRY_FIELDS = _REVIEW_CONTROLLED_FACT_FIELDS
 
 
 class FactValidationStatus(str, Enum):
@@ -50,6 +99,22 @@ class ExtractedSportsFact:
     intent: str = "SPORTS_KNOWLEDGE"
     is_confirmed: bool = True
     reliability_score: float = 0.9
+    # None (or a blank string) means no update. No implicit rights grant or
+    # metadata clearing is supported by this fact-extraction contract.
+    source_title: Optional[str] = None
+    source_version: Optional[str] = None
+    verified_at: Optional[str] = None
+    effective_from: Optional[str] = None
+    effective_to: Optional[str] = None
+    rule_set: Optional[str] = None
+    jurisdiction: Optional[str] = None
+    rights_status: Optional[str] = None
+    license: Optional[str] = None
+    rights_evidence_url: Optional[str] = None
+    rights_checked_at: Optional[str] = None
+    approved_uses: Optional[Tuple[str, ...]] = None
+    authoring_type: Optional[str] = None
+    record_status: Optional[str] = None
 
 
 @dataclass
@@ -85,10 +150,12 @@ class SportsKnowledgeUpdater:
         repository: Optional[KnowledgeRepository] = None,
         retriever: Optional[SportsWebRetriever] = None,
         knowledge_retriever: Optional[Any] = None,
+        review_ledger: Optional[Any] = None,
     ):
         self.repository = repository or KnowledgeRepository()
         self.retriever = retriever or SportsWebRetriever()
         self.knowledge_retriever = knowledge_retriever
+        self.review_ledger = review_ledger if review_ledger is not None else load_review_ledger()
 
     # 1. Fact Extraction Layer
     def extract_fact_from_evidence(
@@ -265,24 +332,119 @@ class SportsKnowledgeUpdater:
                 is_indexed=False,
             )
 
+        try:
+            self._validate_fact_metadata(fact)
+        except (TypeError, ValueError) as exc:
+            return KnowledgeUpdateResult(
+                action=KnowledgeUpdateAction.REJECTED,
+                entry_id=None,
+                message=f"Metadata validation failed: {exc}",
+                is_indexed=False,
+            )
+
+        caller_review_fields = [
+            field for field in _REVIEW_CONTROLLED_FACT_FIELDS
+            if (value := getattr(fact, field)) is not None
+            and (not isinstance(value, str) or value.strip())
+        ]
+        if caller_review_fields:
+            return KnowledgeUpdateResult(
+                action=KnowledgeUpdateAction.REJECTED,
+                entry_id=None,
+                message=(
+                    "Ordinary updater cannot set reviewer-controlled metadata: "
+                    + ", ".join(caller_review_fields)
+                ),
+                is_indexed=False,
+            )
+
         existing_entries = self.repository.list_entries()
         matched_entry = self._find_matching_entry(fact, existing_entries)
+
+        def apply_metadata(entry: KnowledgeEntry) -> None:
+            for field in _METADATA_STRING_FIELDS + ("approved_uses",):
+                if field in _REVIEW_CONTROLLED_FACT_FIELDS:
+                    continue
+                value = getattr(fact, field)
+                if value is not None and (not isinstance(value, str) or value.strip()):
+                    setattr(entry, field, value)
+
+        def persist_or_reject(entry: KnowledgeEntry) -> Optional[KnowledgeUpdateResult]:
+            try:
+                # Validate even for an in-memory update, before mutating the index.
+                normalized_metadata = self._validate_metadata(entry)
+                for field in ("rights_status", "record_status", "approved_uses"):
+                    setattr(entry, field, normalized_metadata[field])
+                try:
+                    store_local_decision = evaluate_reviewed_knowledge_use(
+                        entry,
+                        "store_local",
+                        self.review_ledger,
+                    )
+                    store_local_authorized = store_local_decision.outcome == PolicyOutcome.ALLOWED
+                except Exception:
+                    store_local_authorized = False
+                if not store_local_authorized:
+                    return KnowledgeUpdateResult(
+                        action=KnowledgeUpdateAction.REJECTED,
+                        entry_id=entry.id,
+                        message=(
+                            "Sports Knowledge storage requires valid approved metadata "
+                            "and an authenticated store_local review decision for this exact record version."
+                        ),
+                        entry=None,
+                        is_indexed=False,
+                    )
+                if persist_markdown:
+                    self._persist_entry_to_markdown(entry)
+            except (OSError, TypeError, ValueError) as exc:
+                return KnowledgeUpdateResult(
+                    action=KnowledgeUpdateAction.REJECTED,
+                    entry_id=entry.id,
+                    message=f"Knowledge update was not applied: {exc}",
+                    entry=matched_entry,
+                    is_indexed=False,
+                )
+            return None
 
         if matched_entry:
             # Check for exact duplicate content
             if self._is_identical_content(matched_entry.answer, fact.answer):
-                # Duplicate: Update timestamp if newer, but do not create duplicate or re-index
+                candidate = replace(matched_entry)
+                apply_metadata(candidate)
                 if fact.collected_at and (not matched_entry.collected_at or fact.collected_at > matched_entry.collected_at):
-                    matched_entry.collected_at = fact.collected_at
+                    candidate.collected_at = fact.collected_at
+                rejected = persist_or_reject(candidate) if candidate != matched_entry else None
+                if rejected:
+                    return rejected
+                metadata_changed = any(
+                    getattr(candidate, field) != getattr(matched_entry, field)
+                    for field in _METADATA_UPDATE_FIELDS
+                )
+                matched_entry.__dict__.update(candidate.__dict__)
+                is_indexed = False
+                if metadata_changed and self.knowledge_retriever is not None and hasattr(self.knowledge_retriever, "update_entry"):
+                    is_indexed = self.knowledge_retriever.update_entry(matched_entry, force=True)
                 return KnowledgeUpdateResult(
-                    action=KnowledgeUpdateAction.DUPLICATE_SKIPPED,
+                    action=KnowledgeUpdateAction.UPDATED if metadata_changed else KnowledgeUpdateAction.DUPLICATE_SKIPPED,
                     entry_id=matched_entry.id,
-                    message=f"Identical content already exists for entity '{fact.entity}' topic '{fact.topic}'. Duplicate skipped.",
+                    message=(f"Metadata updated for knowledge entry '{matched_entry.id}'." if metadata_changed
+                             else f"Identical content already exists for entity '{fact.entity}' topic '{fact.topic}'. Duplicate skipped."),
                     entry=matched_entry,
-                    is_indexed=False,
+                    is_indexed=is_indexed,
                 )
 
             # Check for conflict vs safe update
+            existing_rights_status = matched_entry.rights_status
+            if isinstance(existing_rights_status, str) and existing_rights_status.strip().lower() == "approved":
+                return KnowledgeUpdateResult(
+                    action=KnowledgeUpdateAction.REJECTED,
+                    entry_id=matched_entry.id,
+                    message="Approved content requires a separate rights review before replacement.",
+                    entry=matched_entry,
+                    previous_entry=matched_entry,
+                    is_indexed=False,
+                )
             has_conflict, conflict_reason = self._detect_conflict(matched_entry, fact)
             if has_conflict:
                 return KnowledgeUpdateResult(
@@ -295,38 +457,28 @@ class SportsKnowledgeUpdater:
                 )
 
             # Validated Update: Apply changes to existing entry
-            prev_snapshot = KnowledgeEntry(
-                id=matched_entry.id,
-                topic=matched_entry.topic,
-                role=matched_entry.role,
-                intent=matched_entry.intent,
-                sport=matched_entry.sport,
-                entity=matched_entry.entity,
-                question=matched_entry.question,
-                answer=matched_entry.answer,
-                source_name=matched_entry.source_name,
-                source_url=matched_entry.source_url,
-                collected_at=matched_entry.collected_at,
-                priority=matched_entry.priority,
-                classification=matched_entry.classification,
-                source=matched_entry.source,
-            )
-
-            matched_entry.answer = fact.answer
-            matched_entry.source_name = fact.source_name
-            matched_entry.source_url = fact.source_url
-            matched_entry.collected_at = fact.collected_at
-            matched_entry.priority = fact.priority
-            matched_entry.classification = fact.classification
-            matched_entry.source = f"{fact.source_name} ({fact.source_url})"
+            prev_snapshot = replace(matched_entry)
+            candidate = replace(matched_entry)
+            candidate.answer = fact.answer
+            candidate.source_name = fact.source_name
+            candidate.source_url = fact.source_url
+            candidate.collected_at = fact.collected_at
+            candidate.priority = fact.priority
+            candidate.classification = fact.classification
+            candidate.source = f"{fact.source_name} ({fact.source_url})"
+            # A changed claim cannot inherit a review decision for the old version.
+            for field in _REVIEW_BOUND_ENTRY_FIELDS:
+                setattr(candidate, field, None)
+            apply_metadata(candidate)
+            rejected = persist_or_reject(candidate)
+            if rejected:
+                return rejected
+            matched_entry.__dict__.update(candidate.__dict__)
 
             # Incremental re-index of affected chunk only
             is_indexed = True
             if self.knowledge_retriever is not None and hasattr(self.knowledge_retriever, "update_entry"):
                 is_indexed = self.knowledge_retriever.update_entry(matched_entry, force=True)
-
-            if persist_markdown:
-                self._persist_entry_to_markdown(matched_entry)
 
             return KnowledgeUpdateResult(
                 action=KnowledgeUpdateAction.UPDATED,
@@ -356,6 +508,11 @@ class SportsKnowledgeUpdater:
             source=f"{fact.source_name} ({fact.source_url})",
         )
 
+        apply_metadata(new_entry)
+        rejected = persist_or_reject(new_entry)
+        if rejected:
+            return rejected
+
         if hasattr(self.repository, "_entries") and isinstance(self.repository._entries, list) and new_entry not in self.repository._entries:
             self.repository._entries.append(new_entry)
         elif hasattr(self.repository, "upsert_entry"):
@@ -368,9 +525,6 @@ class SportsKnowledgeUpdater:
         is_indexed = True
         if self.knowledge_retriever is not None and hasattr(self.knowledge_retriever, "index_entry"):
             is_indexed = self.knowledge_retriever.index_entry(new_entry)
-
-        if persist_markdown:
-            self._persist_entry_to_markdown(new_entry)
 
         return KnowledgeUpdateResult(
             action=KnowledgeUpdateAction.INSERTED,
@@ -493,20 +647,214 @@ class SportsKnowledgeUpdater:
 
     def _persist_entry_to_markdown(self, entry: KnowledgeEntry) -> None:
         """Persist or append knowledge entry to sports knowledge markdown file."""
+        metadata = self._validate_metadata(entry)
+        values = (
+            entry.id,
+            entry.topic,
+            entry.role,
+            entry.intent,
+            entry.sport,
+            entry.entity,
+            entry.question,
+            entry.answer,
+            entry.source_name,
+            entry.source_url,
+            metadata["collected_at"],
+            entry.priority,
+            entry.classification,
+            metadata["source_title"],
+            metadata["source_version"],
+            metadata["verified_at"],
+            metadata["effective_from"],
+            metadata["effective_to"],
+            metadata["rule_set"],
+            metadata["jurisdiction"],
+            metadata["rights_status"],
+            metadata["license"],
+            metadata["rights_evidence_url"],
+            metadata["rights_checked_at"],
+            metadata["approved_uses"],
+            metadata["authoring_type"],
+            metadata["record_status"],
+        )
+        cells = []
+        for column, value in zip(_AUTO_UPDATED_KNOWLEDGE_COLUMNS, values):
+            if value is None:
+                cell = ""
+            elif column == "Approved_Uses":
+                if not isinstance(value, tuple) or any(not isinstance(item, str) for item in value):
+                    raise TypeError("approved_uses must be a tuple of strings or None")
+                normalized_uses = tuple(item.strip().lower() for item in value)
+                if any(not item or "," in item for item in normalized_uses):
+                    raise ValueError("approved_uses items must be non-empty identifiers without commas")
+                if any(item == "[]" for item in normalized_uses):
+                    raise ValueError("'[]' is reserved to encode an explicitly empty approved_uses tuple")
+                cell = ", ".join(normalized_uses) if normalized_uses else "[]"
+            else:
+                cell = str(value)
+            if any(delimiter in cell for delimiter in ("|", "\n", "\r")):
+                raise ValueError(f"Cannot persist {column}: Markdown table delimiters are not supported")
+            cells.append(cell)
+
+        row = "| " + " | ".join(cells) + " |\n"
+        expected_header = tuple(
+            column.lower().replace(" ", "_").replace("-", "_")
+            for column in _AUTO_UPDATED_KNOWLEDGE_COLUMNS
+        )
+        header = "| " + " | ".join(_AUTO_UPDATED_KNOWLEDGE_COLUMNS) + " |\n"
+        separator = "|" + "|".join("---" for _ in _AUTO_UPDATED_KNOWLEDGE_COLUMNS) + "|\n"
+
         target_dir = os.path.join(self.repository.knowledge_root, "sports", "auto_updated")
-        os.makedirs(target_dir, exist_ok=True)
         target_file = os.path.join(target_dir, "auto_updated_knowledge.md")
 
-        if not os.path.exists(target_file):
-            with open(target_file, "w", encoding="utf-8") as f:
-                f.write("# Auto-Updated Sports Knowledge\n\n---\n\n")
-                f.write("| ID | Topic | Role | Intent | Sport | Entity | Question | Answer | Source_Name | Source_URL | Collected_At | Priority | Classification |\n")
-                f.write("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+        lines = []
+        if os.path.exists(target_file):
+            with open(target_file, "r", encoding="utf-8", newline="") as f:
+                lines = f.readlines()
 
-        row = (
-            f"| {entry.id} | {entry.topic} | {entry.role} | {entry.intent} | {entry.sport or ''} | "
-            f"{entry.entity or ''} | {entry.question} | {entry.answer} | {entry.source_name or ''} | "
-            f"{entry.source_url or ''} | {entry.collected_at or ''} | {entry.priority} | {entry.classification} |\n"
+        last_header = None
+        old_header_line = None
+        old_separator_line = None
+        replacement_index = None
+        replacement_header = None
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                if stripped:
+                    last_header = None
+                continue
+            parts = [part.strip() for part in stripped.split("|")[1:-1]]
+            if parts and parts[0].lower() in ("id", "#", "stt", "entry_id", "mã"):
+                last_header = tuple(part.lower().replace(" ", "_").replace("-", "_") for part in parts)
+                old_header_line = line
+                old_separator_line = None
+            elif re.match(r"^\|[-:|\s]+\|$", stripped):
+                old_separator_line = line
+            elif parts and parts[0] == entry.id:
+                if replacement_index is not None:
+                    raise ValueError(f"Duplicate ID {entry.id!r} in auto-updated knowledge file")
+                replacement_index = index
+                replacement_header = (last_header, old_header_line, old_separator_line)
+
+        # A duplicate elsewhere could win before this writer-owned row when
+        # the repository reloads, so refuse ambiguous persistence.
+        for root, _, files in os.walk(self.repository.knowledge_root):
+            for name in files:
+                path = os.path.join(root, name)
+                if not name.lower().endswith(".md") or os.path.abspath(path) == os.path.abspath(target_file):
+                    continue
+                with open(path, "r", encoding="utf-8") as source_file:
+                    if any(source_line.strip().split("|")[1].strip() == entry.id
+                           for source_line in source_file if source_line.strip().startswith("|")):
+                        raise ValueError(f"Entry {entry.id!r} belongs to another Markdown file")
+
+        if replacement_index is not None:
+            old_columns, old_header, old_separator = replacement_header
+            if old_columns == expected_header:
+                lines[replacement_index] = row
+            elif old_columns and old_header and old_separator:
+                # Upgrade only the target row, retaining the legacy rows.
+                following_row = bool(replacement_index + 1 < len(lines) and
+                                     lines[replacement_index + 1].strip().startswith("|"))
+                replacement = ["\n", header, separator, row]
+                if following_row:
+                    replacement.extend(["\n", old_header, old_separator])
+                lines[replacement_index:replacement_index + 1] = replacement
+            else:
+                raise ValueError(f"Cannot safely replace row {entry.id!r} without its table header")
+            content = "".join(lines)
+        elif os.path.exists(target_file):
+            prefix = ""
+            if lines and lines[-1].strip():
+                if not lines[-1].endswith(("\n", "\r")):
+                    prefix += "\n"
+                prefix += "\n"
+            content = "".join(lines) + prefix + ("" if last_header == expected_header else header + separator) + row
+        else:
+            content = "# Auto-Updated Sports Knowledge\n\n---\n\n" + header + separator + row
+
+        os.makedirs(target_dir, exist_ok=True)
+        temporary_path = None
+        try:
+            fd, temporary_path = tempfile.mkstemp(prefix=".knowledge-", suffix=".tmp", dir=target_dir)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                f.write(content)
+            os.replace(temporary_path, target_file)
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    @staticmethod
+    def _validate_fact_metadata(fact: ExtractedSportsFact) -> Dict[str, Any]:
+        """Validate supplied metadata even when an update would otherwise be a duplicate."""
+        probe = KnowledgeEntry(
+            id="__metadata_validation__",
+            topic=fact.topic,
+            role=fact.role,
+            intent=fact.intent,
+            sport=fact.sport,
+            entity=fact.entity,
+            question=fact.question,
+            answer=fact.answer,
+            source=f"{fact.source_name} ({fact.source_url})",
+            classification=fact.classification,
+            source_name=fact.source_name,
+            source_url=fact.source_url,
+            collected_at=fact.collected_at,
+            priority=fact.priority,
+            **{
+                field: getattr(fact, field)
+                for field in _METADATA_STRING_FIELDS + ("approved_uses",)
+            },
         )
-        with open(target_file, "a", encoding="utf-8") as f:
-            f.write(row)
+        return SportsKnowledgeUpdater._validate_metadata(probe)
+
+    @staticmethod
+    def _validate_metadata(entry: KnowledgeEntry) -> Dict[str, Any]:
+        """Validate optional metadata before touching the destination file."""
+        metadata = {field: getattr(entry, field) for field in _METADATA_STRING_FIELDS}
+        metadata["collected_at"] = entry.collected_at
+
+        for field, value in metadata.items():
+            if value is not None and not isinstance(value, str):
+                raise TypeError(f"{field} must be a string or None")
+
+        for field in _METADATA_DATE_FIELDS:
+            value = metadata[field]
+            if value is None or not value.strip():
+                continue
+            try:
+                parsed_date = date.fromisoformat(value)
+            except ValueError as exc:
+                raise ValueError(f"{field} must use YYYY-MM-DD") from exc
+            if parsed_date.isoformat() != value:
+                raise ValueError(f"{field} must use YYYY-MM-DD")
+
+        for field, allowed_values in (
+            ("rights_status", _RIGHTS_STATUSES),
+            ("record_status", _RECORD_STATUSES),
+        ):
+            value = metadata[field]
+            if value is None or not value.strip():
+                metadata[field] = None
+                continue
+            normalized = value.strip().lower()
+            if normalized not in allowed_values:
+                allowed = ", ".join(sorted(allowed_values))
+                raise ValueError(f"{field} must be one of: {allowed}")
+            metadata[field] = normalized
+
+        approved_uses = entry.approved_uses
+        if approved_uses is not None:
+            if not isinstance(approved_uses, tuple) or any(not isinstance(item, str) for item in approved_uses):
+                raise TypeError("approved_uses must be a tuple of strings or None")
+            normalized_uses = tuple(item.strip().lower() for item in approved_uses)
+            if any(not item or "," in item for item in normalized_uses):
+                raise ValueError("approved_uses items must be non-empty identifiers without commas")
+            if any(item == "[]" for item in normalized_uses):
+                raise ValueError("'[]' is reserved to encode an explicitly empty approved_uses tuple")
+            metadata["approved_uses"] = normalized_uses
+        else:
+            metadata["approved_uses"] = None
+
+        return metadata

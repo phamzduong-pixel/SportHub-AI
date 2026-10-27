@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
@@ -18,16 +18,28 @@ from ...schemas.ai import (
     SlotRecommendationRequest, SlotRecommendationResponse,
     DemandOverviewResponse, DemandPredictionRequest, DemandPredictionResponse,
     ModelMetricsResponse, RecommendationResponse,
-    KnowledgeUpdateRequest, KnowledgeUpdateResponse, KnowledgeUpdateStatusResponse,
+    KnowledgeUpdateRequest, KnowledgeUpdateResponse, KnowledgeUpdateStatusResponse, UserAIMemoryItem,
 )
 from ...services.ai_assistant_service import AIAssistantService
 from ...services.ai_feature_service import AIFeatureService
 from ...services.booking_message_service import BookingMessageService
 from ...services.customer_recommendation_service import CustomerRecommendationService
+from ...services.user_ai_memory_service import UserAIMemoryService
 from ..dependencies import get_current_user, get_optional_current_user, require_owner, require_system_admin
 
 router = APIRouter(prefix='/ai', tags=['ai'])
 logger = logging.getLogger(__name__)
+
+
+def _resolve_assistant_context(payload_context, context_snapshot):
+    """An explicitly supplied empty context resets stale conversation state."""
+    source = payload_context if payload_context is not None else context_snapshot
+    return dict(source or {})
+
+
+def _should_include_assistant_history(payload_context):
+    """An explicit empty context also prevents old turns from restoring reset state."""
+    return payload_context is None or bool(payload_context)
 
 
 @router.post('/recommend-slots', response_model=SlotRecommendationResponse)
@@ -142,6 +154,34 @@ def get_conversation(
     )
 
 
+@router.get('/memories', response_model=list[UserAIMemoryItem])
+def list_personal_memories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return UserAIMemoryService.list_active(db, current_user.id)
+
+
+@router.delete('/memories/{memory_id}', status_code=204)
+def delete_personal_memory(
+    memory_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not UserAIMemoryService.delete_one(db, current_user.id, memory_id):
+        raise HTTPException(status_code=404, detail='Không tìm thấy mục ghi nhớ.')
+    return Response(status_code=204)
+
+
+@router.delete('/memories', status_code=204)
+def delete_all_personal_memories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    UserAIMemoryService.delete_all(db, current_user.id)
+    return Response(status_code=204)
+
+
 @router.post('/assistant', response_model=AssistantResponse)
 def assistant(
     payload: AssistantRequest,
@@ -198,15 +238,30 @@ def assistant(
     db.commit()
 
     # 3. Context fallback from snapshot if not explicitly provided
-    effective_context = dict(payload.context or conv.context_snapshot or {})
+    effective_context = _resolve_assistant_context(payload.context, conv.context_snapshot)
 
     # 3b. Inject recent conversation messages for LLM follow-up resolution
     recent_msgs = [
         {'role': m.role, 'content': m.content}
         for m in (conv.messages or [])[-10:]
     ]
-    if recent_msgs:
+    if recent_msgs and _should_include_assistant_history(payload.context):
         effective_context['conversation_messages'] = recent_msgs
+
+    requested_mode = payload.assistant_mode.value if payload.assistant_mode else effective_context.get('assistant_mode', 'NATURAL')
+    requested_mode = getattr(requested_mode, 'value', requested_mode)
+    if current_user and str(requested_mode).upper() == 'NATURAL':
+        try:
+            UserAIMemoryService.remember_explicit_statement(
+                db,
+                user_id=current_user.id,
+                message=payload.message,
+                source_conversation_id=conv.id,
+            )
+        except Exception:
+            # Memory is optional; a storage failure must not interrupt chat.
+            db.rollback()
+            logger.warning('Could not persist explicit assistant memory', exc_info=True)
 
     # 4. Process with AI Assistant Service
     try:

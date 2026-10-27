@@ -2,7 +2,7 @@ import os
 import re
 from typing import List, Optional, Tuple, Dict, Any
 
-from ..models.knowledge_entry import KnowledgeEntry
+from ..models.knowledge_entry import KnowledgeEntry, OPTIONAL_KNOWLEDGE_METADATA_FIELDS
 
 
 class KnowledgeRepository:
@@ -29,6 +29,44 @@ class KnowledgeRepository:
         self.knowledge_root = knowledge_root
         self._entries: List[KnowledgeEntry] = []
         self._load_entries()
+
+    @staticmethod
+    def _optional_header_value(parts: List[str], header_map: Dict[str, int], field: str) -> Optional[str]:
+        """Return a non-empty optional cell without deriving missing metadata."""
+        index = header_map.get(field)
+        if index is None or index >= len(parts):
+            return None
+        value = parts[index].strip()
+        return value or None
+
+    @classmethod
+    def _optional_status(
+        cls,
+        parts: List[str],
+        header_map: Dict[str, int],
+        field: str,
+    ) -> Optional[str]:
+        """Normalize status text while retaining unknown values for fail-closed validation."""
+        value = cls._optional_header_value(parts, header_map, field)
+        if value is None:
+            return None
+        return value.lower()
+
+    @classmethod
+    def _optional_approved_uses(
+        cls,
+        parts: List[str],
+        header_map: Dict[str, int],
+    ) -> Optional[Tuple[str, ...]]:
+        """Parse comma-separated use identifiers; an absent cell stays unknown."""
+        value = cls._optional_header_value(parts, header_map, "approved_uses")
+        if value is None:
+            return None
+        if value == "[]":
+            return ()
+        # Preserve empty segments so policy validation can reject malformed
+        # cells instead of silently converting them into a different permission.
+        return tuple(item.strip().lower() for item in value.split(","))
 
     def _load_entries(self) -> None:
         """Read all ``*.md`` files recursively and extract table rows into KnowledgeEntry instances.
@@ -93,6 +131,23 @@ class KnowledgeRepository:
                         )
                         classification = parts[header_map['classification']].lower() if 'classification' in header_map and header_map['classification'] < len(parts) else "static"
 
+                        optional_metadata = {
+                            field: self._optional_header_value(parts, header_map, field)
+                            for field in (
+                                "source_title",
+                                "source_version",
+                                "verified_at",
+                                "effective_from",
+                                "effective_to",
+                                "rule_set",
+                                "jurisdiction",
+                                "license",
+                                "rights_evidence_url",
+                                "rights_checked_at",
+                                "authoring_type",
+                            )
+                        }
+
                         entry = KnowledgeEntry(
                             id=entry_id,
                             topic=parts[header_map.get('topic', 1)] if header_map.get('topic', 1) < len(parts) else "",
@@ -108,6 +163,10 @@ class KnowledgeRepository:
                             source_url=source_url,
                             collected_at=collected_at,
                             priority=priority_val,
+                            **optional_metadata,
+                            rights_status=self._optional_status(parts, header_map, "rights_status"),
+                            approved_uses=self._optional_approved_uses(parts, header_map),
+                            record_status=self._optional_status(parts, header_map, "record_status"),
                         )
                     elif len(parts) >= 13:
                         # Standard 13-column sports knowledge table
@@ -189,6 +248,10 @@ class KnowledgeRepository:
                         existing.source_url = entry.source_url
                     if entry.source_name:
                         existing.source_name = entry.source_name
+                    for field in OPTIONAL_KNOWLEDGE_METADATA_FIELDS:
+                        value = getattr(entry, field)
+                        if value is not None and (not isinstance(value, str) or value.strip()):
+                            setattr(existing, field, value)
                     return False, False
 
                 self._entries[i] = entry

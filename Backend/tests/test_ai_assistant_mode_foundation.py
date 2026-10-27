@@ -7,6 +7,10 @@ from app.schemas.ai import AssistantMode, AssistantRequest, AssistantResponse
 from app.services.ai_assistant_service import AIAssistantService
 from app.repositories.ai_repository import AIRepository
 from app.database.session import SessionLocal
+from tests.sports_knowledge_test_fixtures import (
+    SyntheticReviewAuthorizer,
+    authorized_sports_knowledge_service,
+)
 
 
 class AssistantModeMockProvider:
@@ -24,6 +28,16 @@ class AssistantModeMockProvider:
 class AIAssistantModeFoundationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.knowledge_service_patch = patch(
+            'app.services.rag_guardrail.get_knowledge_service',
+            return_value=authorized_sports_knowledge_service(),
+        )
+        cls.knowledge_service_patch.start()
+        cls.review_ledger_patch = patch(
+            'app.services.ai_assistant_service.load_review_ledger',
+            return_value=SyntheticReviewAuthorizer(),
+        )
+        cls.review_ledger_patch.start()
         cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=AssistantModeMockProvider())
         cls.provider_patch.start()
         cls.client = TestClient(app)
@@ -38,6 +52,8 @@ class AIAssistantModeFoundationTests(unittest.TestCase):
         finally:
             cls.client.close()
             cls.provider_patch.stop()
+            cls.review_ledger_patch.stop()
+            cls.knowledge_service_patch.stop()
 
     def test_schema_enums_and_defaults(self):
         req_default = AssistantRequest(message='Xin chào')

@@ -21,6 +21,14 @@
 
 ## 4. Module AI
 
+- Trình bày Trợ lý AI như một pipeline có điều phối: IntentRouter → mode/scope policy → nhánh nghiệp vụ, System Domain hoặc Sports Knowledge. Không gọi đây là autonomous agent.
+- So sánh Natural và Professional: Natural hỗ trợ sports knowledge/context/personalization; Professional tập trung nghiệp vụ và chặn Sports Knowledge trước World Cup/RAG/web. Cả hai không để LLM tự xác nhận giá, availability hoặc booking.
+- Giải thích policy dữ liệu: quyền hiển thị claim, gửi record tới LLM bên ngoài và hiển thị citation là các quyết định riêng; review ledger thiếu/không hợp lệ không được coi là phê duyệt.
+- Khi thiếu evidence được phép, Natural có thể gọi Gemini general knowledge nếu cấu hình. Đây không phải live search, không có citation từ hệ thống và không bảo đảm dữ liệu hiện tại. Không khẳng định Gemini truy cập trang chính thức hoặc tự cập nhật RAG.
+- Phân biệt Sports Knowledge Markdown RAG với World Cup finals local lookup; World Cup là nhánh riêng và chưa dùng sports knowledge review ledger.
+- Trình bày context đa lượt là tín hiệu để hiểu follow-up, không phải bằng chứng factual. Context rỗng tường minh reset snapshot/lịch sử context.
+- Mô tả ba personalization profile riêng trong Natural: explicit user memory, booking behavior và conversation topic. Chúng không phải evidence/citation; Professional không nạp chúng vào prompt.
+- Chỉ đưa số liệu accuracy/metrics hoặc test count vào báo cáo khi có artifact/lệnh chạy tương ứng; phân biệt test nhóm mục tiêu với full suite và mock provider với provider live.
 - Bài toán classification ba lớp.
 - Mô tả 2.400 dòng dữ liệu mô phỏng, seed và quy tắc gán nhãn.
 - Cleaning, OneHotEncoder, StandardScaler, stratified train/test.

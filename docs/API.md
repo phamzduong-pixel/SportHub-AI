@@ -172,16 +172,29 @@ Tất cả cần `reports.view`; hỗ trợ `date_from`, `date_to`, `field_id` k
 
 ## AI
 
-AI Assistant chuyên biệt cho nghiệp vụ SportHub AI (public/CUSTOMER/OWNER/SYSTEM_ADMIN):
+### AI Assistant
 
-- `POST /ai/assistant` — nhận `message`, `context_field_id` và `context`; chỉ đọc dữ liệu SportHub, không tạo booking hay giao dịch.
-- Mọi request đi qua Intent Router trước khi gọi service. Các intent: `SEARCH_VENUE`, `RECOMMEND_VENUE`, `CHECK_AVAILABILITY`, `GET_VENUE_DETAIL`, `CREATE_BOOKING`, `GET_BOOKING`, `CANCEL_BOOKING`, `RESCHEDULE_BOOKING`, `PAYMENT_SUPPORT`, `ACCOUNT_SUPPORT`, `SYSTEM_GUIDE`, `GREETING`, `FOLLOW_UP`, `UNCLEAR`, `OUT_OF_SCOPE`.
-- Response gồm `intent`, `confidence`, `entities`, `needs_clarification`, `classification`, `reply`, `understood`, `suggestions` và `source=live_backend`. `entities` chuẩn hóa `sport_type`, `venue_name`, `location`, `date`, `start_time`, `end_time`, `price_max`, `number_of_players`, `booking_code`.
-- `OUT_OF_SCOPE`, `GREETING` và `UNCLEAR` không query inventory/recommendation. Các intent hủy/đổi lịch chỉ đọc booking đúng quyền và hướng dẫn người dùng xác nhận trên màn hình; trợ lý không tự thực hiện mutation.
-- Tìm sân công khai dùng inventory/lịch trống thật. Truy vấn riêng tư cần JWT: CUSTOMER chỉ thấy dữ liệu của mình; OWNER chỉ thấy tenant của mình; SYSTEM_ADMIN chỉ nhận các tổng hợp toàn nền tảng được API quản trị cho phép.
-- Context kết quả chứa `result_field_ids` và `result_time_slot_ids` theo thứ tự để xử lý chính xác câu nối tiếp như “sân thứ 2”. Context chỉ là tham chiếu hội thoại; repository vẫn áp dụng lại tenant scope và quyền.
-- Frontend xóa VenueCard của lượt cũ khi nhận intent mới; chỉ suggestions của response hiện tại được hiển thị.
-- Frontend gọi qua `/api/ai/assistant`; Vite development proxy bỏ prefix `/api` trước khi chuyển tới FastAPI.
+`POST /ai/assistant` nhận `message`, `assistant_mode`, `context_field_id`, `context` và `conversation_id`. Assistant có thể nhận request public hoặc user đã đăng nhập; dữ liệu riêng tư luôn cần xác thực và scope theo user/tenant.
+
+- Request đi qua IntentRouter và mode/scope policy. Các nhánh nghiệp vụ tìm sân, giá, availability, booking và payment lấy ground truth từ service/database; assistant không tự ghi booking hoặc thanh toán.
+- Natural có thể xử lý Sports Knowledge, local World Cup lookup riêng, context đa lượt và profile cá nhân. Evidence, prompt LLM bên ngoài và citation có quyền kiểm soát riêng.
+- Professional chỉ xử lý nghiệp vụ SportHub/System Domain; Sports Knowledge bị chặn trước World Cup lookup, Sports RAG và sports web retrieval.
+- Khi `context` bị bỏ qua hoặc là `null`, server có thể khôi phục snapshot và lịch sử gần đây. Gửi `context: {}` nghĩa là reset: không dùng snapshot cũ và không chèn các lượt cũ làm context.
+- Response có intent/scope, `reply`, `understood`, suggestions và venue results phù hợp với intent; các trường cụ thể được khai báo trong `Backend/app/schemas/ai.py`.
+
+### Explicit User Memory
+
+Các endpoint này yêu cầu người dùng đăng nhập và chỉ thao tác memory thuộc tài khoản hiện tại:
+
+| Method | Path | Mô tả |
+|---|---|---|
+| GET | `/ai/memories` | Liệt kê memory đang hoạt động của user hiện tại |
+| DELETE | `/ai/memories/{memory_id}` | Xóa một memory thuộc user hiện tại; trả 404 nếu không tìm thấy/không thuộc user |
+| DELETE | `/ai/memories` | Xóa toàn bộ memory của user hiện tại |
+
+Memory được ghi từ các phát biểu tường minh được extractor hỗ trợ trong Natural Mode; đây không phải bộ nhớ tự động tóm tắt toàn bộ hội thoại. Xóa memory không đồng nghĩa xóa lịch sử chat. Các quy tắc loại dữ liệu và category được định nghĩa tại `Backend/app/services/user_ai_memory_service.py`.
+
+### AI Insights
 
 Các API dự báo dành cho Management cần `ai.view`:
 

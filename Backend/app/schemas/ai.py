@@ -202,6 +202,16 @@ class AIConversationListResponse(BaseModel):
     items: list[AIConversationListItem]
 
 
+class UserAIMemoryItem(BaseModel):
+    id: int
+    memory_type: str
+    memory_key: str
+    value: str
+    source_conversation_id: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class CustomerRecommendation(BaseModel):
     field_id: int
     field_name: str

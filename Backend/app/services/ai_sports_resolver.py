@@ -719,10 +719,11 @@ class SportsContextResolver:
         'tay vot nay', 'tay vot do', 'vdv nay', 'vdv do', 'van dong vien nay',
         'van dong vien do', 'nguoi nay', 'nguoi do', 'han', 'chu ay', 'co ay', 'chi ay',
         'bac nay', 'sieu sao nay', 'tien dao nay', 'tien ve nay',
-        'ho', 'doi nay', 'doi do', 'clb nay', 'clb do', 'doi thang', 'doi vo dich', 'quan quan', 'nha vo dich',
+        'ho', 'no', 'cai do', 'doi nay', 'doi do', 'clb nay', 'clb do', 'doi thang', 'doi vo dich', 'quan quan', 'nha vo dich',
     )
     SPORT_DEICTICS = (
         'mon nay', 'bo mon nay', 'mon the thao nay', 'mon do', 'bo mon do',
+        'mon day', 'bo mon day', 'mon the thao day',
     )
     LOCATION_DEICTICS = (
         'noi nay', 'o day', 'dia phuong nay', 'tinh nay', 'thanh pho nay', 'khu vuc nay', 'o do', 'cho nay',
@@ -890,6 +891,17 @@ class SportsContextResolver:
         active_entity_type = None
         recent_entities = list(prev_recent_entities)
 
+        competition_about_previous_athlete = bool(
+            prev_intent == 'SPORTS_KNOWLEDGE'
+            and prev_active_entity
+            and prev_entity_type == 'athlete'
+            and competition_entities
+            and (has_person_pronoun or is_follow_up_phrase)
+            and not any(term in norm_query for term in (
+                'doi nao', 'ai vo dich', 'doi tuyen nao', 'chung ket',
+                'ti so', 'ty so', 'quan quan', 'to chuc', 'dien ra',
+            ))
+        )
         if athlete_team_entities:
             # Query explicitly mentions one or more athletes/teams
             active_entity = athlete_team_entities[0]
@@ -904,11 +916,25 @@ class SportsContextResolver:
             if active_entity in recent_entities:
                 recent_entities.remove(active_entity)
             recent_entities.insert(0, active_entity)
+        elif competition_about_previous_athlete:
+            # The competition is the achievement being asked about, while the
+            # pronoun/short follow-up still refers to the previous athlete.
+            active_entity = prev_active_entity
+            active_entity_type = 'athlete'
+            resolved_entities = [active_entity] + competition_entities
         elif competition_entities and not has_person_pronoun and not (is_follow_up_phrase and prev_entity_type == 'athlete' and not any(p in norm_query for p in ('doi nao', 'ai vo dich', 'vua pha luoi', 'to chuc', 'dien ra', 'o dau'))):
             # Query explicitly mentions a competition
             active_entity = competition_entities[0]
             active_entity_type = 'competition'
             resolved_entities = competition_entities
+        elif (detected_sport or has_sport_deictic) and any(
+            phrase in norm_query for phrase in ('co ai', 'nhung ai', 'ai gioi', 'ai noi bat', 'ai tieu bieu', 'ai xuat sac')
+        ):
+            # A question such as "ai xuất sắc môn đấy?" keeps the sport but
+            # must not inherit a previously mentioned team as its subject.
+            active_entity = None
+            active_entity_type = 'sport'
+            resolved_entities = []
         elif detected_sport and not athlete_team_entities:
             # User switched sport (or asked general sport question) -> active athlete from old sport is unset
             active_entity = None
@@ -1040,9 +1066,9 @@ class SportsContextResolver:
             sp_name = effective_sport or 'thể thao'
             # Check and replace both accented and non-accented variations
             deictic_patterns = [
-                r'\b(?:môn|mon)\s+(?:này|nay|đó|do)\b',
-                r'\b(?:bộ\s+môn|bo\s+mon)\s+(?:này|nay|đó|do)\b',
-                r'\b(?:môn\s+thể\s+thao|mon\s+the\s+thao)\s+(?:này|nay|đó|do)\b',
+                r'\b(?:môn|mon)\s+(?:này|nay|đó|do|đấy|day)\b',
+                r'\b(?:bộ\s+môn|bo\s+mon)\s+(?:này|nay|đó|do|đấy|day)\b',
+                r'\b(?:môn\s+thể\s+thao|mon\s+the\s+thao)\s+(?:này|nay|đó|do|đấy|day)\b',
             ]
             for pat in deictic_patterns:
                 rq = re.sub(pat, f"môn {sp_name}", rq, flags=re.IGNORECASE)

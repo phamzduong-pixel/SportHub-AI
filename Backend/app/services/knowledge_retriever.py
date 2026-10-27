@@ -2,9 +2,9 @@ import os
 import re
 import difflib
 import unicodedata
-from typing import List, Tuple, Optional
+from typing import Callable, List, Tuple, Optional
 
-from ..models.knowledge_entry import KnowledgeEntry
+from ..models.knowledge_entry import KnowledgeEntry, OPTIONAL_KNOWLEDGE_METADATA_FIELDS
 from ..repositories.knowledge_repository import KnowledgeRepository
 
 
@@ -102,6 +102,10 @@ class KnowledgeRetriever:
                 existing.source_url = entry.source_url
             if entry.source_name:
                 existing.source_name = entry.source_name
+            for field in OPTIONAL_KNOWLEDGE_METADATA_FIELDS:
+                value = getattr(entry, field)
+                if value is not None and (not isinstance(value, str) or value.strip()):
+                    setattr(existing, field, value)
             return False
 
         # Update affected entry in-place
@@ -656,6 +660,7 @@ class KnowledgeRetriever:
         entity: Optional[str] = None,
         top_k: int = DEFAULT_TOP_K,
         relevance_threshold: float = RELEVANCE_THRESHOLD,
+        candidate_filter: Optional[Callable[[KnowledgeEntry], bool]] = None,
     ) -> List[Tuple[KnowledgeEntry, float]]:
         """Return a list of (entry, score) sorted by descending relevance.
 
@@ -673,14 +678,23 @@ class KnowledgeRetriever:
         candidates = []
         for idx, entry in enumerate(self._static_entries):
             # Role filtering – entry.role may contain multiple roles separated by commas
-            entry_roles = [r.strip().lower() for r in entry.role.split(',')]
+            # Knowledge files are user-editable; tolerate missing role metadata
+            # instead of failing the whole retrieval request with AttributeError.
+            entry_roles = [r.strip().lower() for r in (entry.role or '').split(',')]
             if role and role.lower() not in entry_roles:
                 continue
-            if intent and intent.upper() != entry.intent.upper():
+            if intent and intent.upper() != (entry.intent or '').upper():
                 continue
             if sport and entry.sport and sport.lower() != entry.sport.lower():
                 continue
-
+            # Do not score or rank knowledge that the caller's purpose policy
+            # has not authorized. The callback is optional for other callers.
+            if candidate_filter is not None:
+                try:
+                    if not candidate_filter(entry):
+                        continue
+                except Exception:
+                    continue
             # Compute keyword similarity against question & entity
             kw_score = self._compute_kw_score(query, entry, target_entity=entity)
 

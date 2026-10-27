@@ -479,7 +479,10 @@ class IntentRouter:
         """Return whether a short query continues a System Domain conversation."""
         context = context or {}
         domain_kind = context.get('domain_context_type')
-        if domain_kind not in {'sport_products', 'sport_amenities', 'venue_products', 'venue_amenities'}:
+        if domain_kind not in {
+            'sport_products', 'sport_amenities', 'sport_facility_features',
+            'venue_products', 'venue_amenities', 'venue_orderable_options',
+        }:
             return False
 
         normalized = normalize_text(query).strip().rstrip('?!.,;:')
@@ -653,6 +656,12 @@ class IntentRouter:
             context.get('last_intent') in {'SEARCH_VENUE', 'RECOMMEND_VENUE', 'CHECK_AVAILABILITY', 'RECOMMEND_SLOT'}
             or (context.get('sport_type') and not has_booking_context)
         )
+        asks_for_alternative_date = any(term in query for term in (
+            'vay con ngay nao', 'con ngay nao', 'ngay nao khac',
+            'ngay nao con trong', 'ngay nao con san',
+        ))
+        if is_search_follow_up and asks_for_alternative_date:
+            return AssistantIntent.CHECK_AVAILABILITY, 0.94
         reschedule_terms = ('doi lich', 'doi gio', 'doi ngay', 'doi san', 'dời lịch', 'doi ca', 'reschedule')
         if any(term in query for term in reschedule_terms) and (not is_search_follow_up or has_booking_context):
             return AssistantIntent.RESCHEDULE_BOOKING, 0.97
@@ -787,10 +796,12 @@ class IntentRouter:
                     'tay vot nay', 'tay vot do', 'vdv nay', 'vdv do', 'van dong vien nay', 'van dong vien do',
                     'nguoi nay', 'nguoi do', 'doi nay', 'doi do', 'clb nay', 'clb do',
                     'cau lac bo nay', 'cau lac bo do', 'svd nay', 'svd do', 'san nay', 'san do',
+                    'no thi sao', 'cai do thi sao', 'mon day', 'bo mon day', 'mon the thao day',
                     'doi nao', 'clb nao', 'cau lac bo nao', 'giai nao', 'choi cho', 'da cho', 'thi dau cho',
                     'dang thi dau', 'dang choi', 'o dau', 'con ', 'the con ', 'thi sao', 'thanh tich', 'sinh nam',
                     'bao nhieu tuoi', 'que o dau', 'huan luyen vien', 'hlv', 'con o', 'the con o',
                     'cau lac bo', 'clb', 'doi tuyen', 'doi bong', 'co bao nhieu ban thang', 'danh hieu', 'vo dich',
+                    'ai xuat sac', 'ai noi bat', 'ai tieu bieu',
                     'tinh nay', 'thanh pho nay', 'tp nay', 'dia phuong nay', 'con mon khac', 'mon khac', 'co doi'
                 )):
                     return AssistantIntent.SPORTS_KNOWLEDGE, 0.95
@@ -863,8 +874,12 @@ class IntentRouter:
         cleaned = re.sub(r'[^a-z0-9 ]', '', query).strip()
         if not cleaned:
             return True
-        # Repeated single character >= 5 times (e.g. aaaaa, zzzzzz, 11111)
-        if re.search(r'(.)\1{4,}', cleaned):
+        # Repeated letters indicate keyboard mash. Repeated digits are checked
+        # only when the entire input is a repeated-number token, so valid prices
+        # such as 700000 or 999999 are not mistaken for spam.
+        if re.search(r'([a-z])\1{4,}', cleaned):
+            return True
+        if re.fullmatch(r'(\d)\1{4,}', cleaned):
             return True
         # Repeated words >= 3 times (e.g. test test test)
         if re.search(r'\b([a-z0-9]+)(?:\s+\1){2,}\b', cleaned):
@@ -1241,6 +1256,11 @@ class IntentRouter:
                 'thang ai', 'danh bai ai', 'ha ai', 'thang doi nao', 'danh bai doi nao', 'ha doi nao',
                 'to chuc o dau', 'dien ra o dau', 'dang cai o dau', 'vua pha luoi', 'ai ghi ban'
             ))
+            asks_for_sport_athletes = any(term in query for term in (
+                'ai xuat sac', 'ai noi bat', 'ai tieu bieu', 'co ai gioi', 'van dong vien nao',
+            )) and any(term in query for term in ('mon nay', 'mon do', 'mon day', 'bo mon day', 'mon the thao day'))
+            if asks_for_sport_athletes:
+                is_followup = False
             if is_loc_followup:
                 prev_str = " ".join(context.get('sports_entities', [])) + " " + str(context.get('sports_entity', '')) + " " + str(context.get('location', ''))
                 norm_prev = normalize_text(prev_str)
@@ -1351,6 +1371,10 @@ class IntentRouter:
         for target, keys in aliases.items():
             if getattr(result, target) is None:
                 if target == 'active_entity' and result.explicit_entity_mention:
+                    continue
+                if target == 'active_entity' and sports_res.active_entity is None and sports_res.topic == 'athletes' and sports_res.sport:
+                    # A sport-level request for notable athletes must search the
+                    # sport broadly, not revive the prior team/athlete entity.
                     continue
                 if target == 'active_entity' and result.sport_type and context.get('sport_type') and result.sport_type != context.get('sport_type'):
                     continue

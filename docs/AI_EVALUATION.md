@@ -1,5 +1,9 @@
 # Báo Cáo Đánh Giá Thực Nghiệm Hệ Thống AI (SportHub AI Evaluation)
 
+> **Kết quả regression hiện hành — 27/10/2026:** Lệnh chạy trong `Backend` bằng virtualenv: `python -m pytest -p no:cacheprovider tests/test_sports_knowledge_policy_runtime.py tests/test_sports_knowledge_policy.py tests/test_ai_intent_router.py -q` — **168 passed, 24 subtests passed**. Bộ này kiểm tra policy/runtime Sports Knowledge, context reset và một số guard Natural/Professional. Provider được mock; đây không phải full suite, test HTTP toàn hệ thống hay xác minh Gemini trực tiếp. Các số liệu test cũ bên dưới là kết quả ở checkpoint cũ, không gộp với kết quả này.
+
+Regression gần nhất cũng xác nhận local Sports Knowledge không thể đưa record thiếu quyền hiển thị vào câu trả lời/citation; khi không có evidence được phép, nhánh general knowledge nhận evidence rỗng. Context `{}` được xem là reset rõ ràng; Professional guard vẫn từ chối Sports Knowledge trước lookup/retrieval.
+
 > **Thời điểm thực nghiệm:** 02/09/2026 (Cập nhật Final Audit toàn diện: 10/09/2026)  
 > **Môi trường thực thi:** Python 3.12, Pytest 9.1.1, Scikit-Learn 1.9.0, Sentence-Transformers  
 > **Bộ dữ liệu đánh giá:** [`Backend/app/ai/datasets/nlu_eval_dataset.json`](file:///c:/Users/MY%20PC/Documents/AI/SportHub%20AI/Backend/app/ai/datasets/nlu_eval_dataset.json), 19 AI test suites (>151 test functions)  

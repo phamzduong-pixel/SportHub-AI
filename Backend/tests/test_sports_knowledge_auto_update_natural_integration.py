@@ -7,7 +7,9 @@ from app.models.knowledge_entry import KnowledgeEntry
 from app.repositories.knowledge_repository import get_knowledge_repository, reset_shared_knowledge_repository
 from app.services.knowledge_service import get_knowledge_service, reset_shared_knowledge_service
 from app.services.knowledge_update_service import KnowledgeUpdateService
+from app.services.sports_knowledge_policy import KnowledgeUseDecision, PolicyOutcome
 from app.services.sports_web_retriever import SportsWebEvidence
+from tests.sports_knowledge_test_fixtures import SyntheticReviewAuthorizer, authorize_test_entry
 
 
 class AssistantScenarioMockProvider:
@@ -25,8 +27,25 @@ class AssistantScenarioMockProvider:
 class SportsKnowledgeAutoUpdateNaturalIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.store_policy_patch = patch(
+            'app.services.sports_knowledge_updater.evaluate_reviewed_knowledge_use',
+            return_value=KnowledgeUseDecision(
+                PolicyOutcome.ALLOWED,
+                "synthetic integration fixture only",
+            ),
+        )
+        cls.store_policy_patch.start()
+        cls.review_ledger_patch = patch(
+            'app.services.ai_assistant_service.load_review_ledger',
+            return_value=SyntheticReviewAuthorizer(),
+        )
+        cls.review_ledger_patch.start()
         cls.provider_patch = patch('app.services.ai_feature_service.StructuredAIProvider', return_value=AssistantScenarioMockProvider())
         cls.provider_patch.start()
+        cls.llm_processor_patch = patch('app.services.ai_assistant_service.get_llm_sports_processor')
+        cls.llm_processor = cls.llm_processor_patch.start()
+        cls.llm_processor.return_value.understand_query.return_value = None
+        cls.llm_processor.return_value.generate_grounded_response.return_value = None
         cls.client = TestClient(app)
         cls.context = cls.client.__enter__()
 
@@ -36,7 +55,10 @@ class SportsKnowledgeAutoUpdateNaturalIntegrationTests(unittest.TestCase):
             cls.client.__exit__(None, None, None)
         finally:
             cls.client.close()
+            cls.llm_processor_patch.stop()
             cls.provider_patch.stop()
+            cls.review_ledger_patch.stop()
+            cls.store_policy_patch.stop()
 
     def setUp(self):
         # Reset shared instances to clean state for each test
@@ -91,6 +113,8 @@ class SportsKnowledgeAutoUpdateNaturalIntegrationTests(unittest.TestCase):
         summary = self.update_service.update_knowledge_pipeline(web_items)
         self.assertEqual(summary.inserted, 1)
         self.assertEqual(summary.accepted, 1)
+        inserted = next(entry for entry in self.repo.list_entries() if entry.entity == "Pickleball ICTU" and entry.topic == "community")
+        authorize_test_entry(inserted, self.knowledge_service)
 
         # Step 3: Natural Assistant query AFTER update -> Grounds in the newly indexed knowledge
         with patch('app.services.rag_guardrail.RAGGuardrail.retrieve_web_context', return_value=[]):
@@ -156,6 +180,7 @@ class SportsKnowledgeAutoUpdateNaturalIntegrationTests(unittest.TestCase):
 
         summary = self.update_service.update_knowledge_pipeline(update_items)
         self.assertEqual(summary.updated, 1)
+        authorize_test_entry(old_entry, self.knowledge_service)
 
         # Natural Assistant Query
         with patch('app.services.rag_guardrail.RAGGuardrail.retrieve_web_context', return_value=[]):
@@ -191,6 +216,8 @@ class SportsKnowledgeAutoUpdateNaturalIntegrationTests(unittest.TestCase):
 
         summary = self.update_service.update_from_web_evidence([evidence])
         self.assertEqual(summary.inserted, 1)
+        inserted = next(entry for entry in self.repo.list_entries() if entry.entity == "Giải Bóng đá Nữ Quốc gia" and entry.topic == "general")
+        authorize_test_entry(inserted, self.knowledge_service)
 
         with patch('app.services.rag_guardrail.RAGGuardrail.retrieve_web_context', return_value=[]):
             res = self.client.post('/ai/assistant', json={

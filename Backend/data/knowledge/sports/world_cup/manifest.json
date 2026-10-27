@@ -1,0 +1,169 @@
+{
+  "dataset": "SportHub Natural Mode FIFA World Cup finals pilot",
+  "schema_version": "1.0.0",
+  "source": {
+    "repository": "openfootball/worldcup.json",
+    "url": "https://github.com/openfootball/worldcup.json",
+    "revision": "865ae87ebe5044e808a3e6cfc7fd89a63beb368e",
+    "license": "CC0-1.0 / public domain per repository README and LICENSE.md",
+    "attribution": "No attribution required by CC0; provenance retained and attribution recommended.",
+    "license_url": "https://github.com/openfootball/worldcup.json/blob/865ae87ebe5044e808a3e6cfc7fd89a63beb368e/LICENSE.md"
+  },
+  "collected_at_utc": "2026-10-26T06:58:19+00:00",
+  "scope_years": [
+    1998,
+    2002,
+    2006,
+    2010,
+    2014,
+    2018,
+    2022
+  ],
+  "files": [
+    {
+      "path": "source/1998/worldcup.json",
+      "sha256": "6addf8d8ee4befad154c36943233b9f4db89032531cc37992c7d212433b779a6",
+      "bytes": 13064,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2002/worldcup.json",
+      "sha256": "10a452ba237a07876efde0d29bb00dd824b0a87cd452f9f5d2763b6ff1ed0c71",
+      "bytes": 13064,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2006/worldcup.json",
+      "sha256": "de004d88a0a374b054ed3bc8bfcbb5b4b12abc3b837b6b949a4dc8750eef3eba",
+      "bytes": 14482,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2010/worldcup.json",
+      "sha256": "dd36ad80ca6caf0bb2e1aff350d97d5b322e1e130a241e44fcd5f5c424b6f356",
+      "bytes": 14787,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2014/worldcup.json",
+      "sha256": "a5614bec9bccb26d4eb639607eb7fabceef98fee6743b910985132f13e26977f",
+      "bytes": 25864,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2018/worldcup.json",
+      "sha256": "1fb1038ca41e81887c994560fdf5e2bb014eedda7ea7f2e0cd2c5bced5711017",
+      "bytes": 25988,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "source/2022/worldcup.json",
+      "sha256": "5b81ae4dd5f2da1f0083f9da987e95e10b898e399c53dcd6bc28c0d016e4dcdd",
+      "bytes": 26072,
+      "match_count": 64,
+      "final_count": 1
+    },
+    {
+      "path": "finals.json",
+      "sha256": "c810eccd78c6621e4ab4c8590c5589eb9e4585a1fd8d1f3fc33d920840b00120",
+      "bytes": 4795
+    }
+  ],
+  "record_count": 7,
+  "validation": {
+    "source_json_parses": true,
+    "one_final_per_year": true,
+    "duplicates_or_conflicts": 0,
+    "score_and_winner_invariants": true,
+    "independent_cross_check": {
+      "source": "RSSSF World Cup 1930-2026 finals table",
+      "url": "https://www.rsssf.org/tablesw/worldcup.html",
+      "license": "UNKNOWN; used for verification only and not copied into dataset",
+      "results": [
+        {
+          "year": 1998,
+          "champion": "France",
+          "runner_up": "Brazil",
+          "score_after_extra_time": [
+            0,
+            3
+          ],
+          "penalty_score": null
+        },
+        {
+          "year": 2002,
+          "champion": "Brazil",
+          "runner_up": "Germany",
+          "score_after_extra_time": [
+            0,
+            2
+          ],
+          "penalty_score": null
+        },
+        {
+          "year": 2006,
+          "champion": "Italy",
+          "runner_up": "France",
+          "score_after_extra_time": [
+            1,
+            1
+          ],
+          "penalty_score": [
+            5,
+            3
+          ]
+        },
+        {
+          "year": 2010,
+          "champion": "Spain",
+          "runner_up": "Netherlands",
+          "score_after_extra_time": [
+            0,
+            1
+          ],
+          "penalty_score": null
+        },
+        {
+          "year": 2014,
+          "champion": "Germany",
+          "runner_up": "Argentina",
+          "score_after_extra_time": [
+            1,
+            0
+          ],
+          "penalty_score": null
+        },
+        {
+          "year": 2018,
+          "champion": "France",
+          "runner_up": "Croatia",
+          "score_after_extra_time": [
+            4,
+            2
+          ],
+          "penalty_score": null
+        },
+        {
+          "year": 2022,
+          "champion": "Argentina",
+          "runner_up": "France",
+          "score_after_extra_time": [
+            3,
+            3
+          ],
+          "penalty_score": [
+            4,
+            2
+          ]
+        }
+      ]
+    }
+  },
+  "approval_status": "approved_for_pilot_by_user_request"
+}

@@ -14,6 +14,7 @@ from app.models.user import User, UserRole
 from app.repositories.ai_repository import AIRepository
 from app.schemas.ai import AssistantMode
 from app.services.ai_assistant_service import AIAssistantService
+from app.services.product_service import ProductService
 from app.services.system_domain_context_service import SystemDomainContextService
 
 
@@ -103,14 +104,15 @@ class TestSystemDomainContext(unittest.TestCase):
         self.db.add_all([self.p1, self.p2, self.p3, self.p4])
         self.db.commit()
 
-        ps1 = ProductSport(facility_product_id=self.p1.id, sport_name="bóng đá")
-        ps2 = ProductSport(facility_product_id=self.p2.id, sport_name="Dùng chung")
-        ps3 = ProductSport(facility_product_id=self.p3.id, sport_name="pickleball")
-        ps4 = ProductSport(facility_product_id=self.p4.id, sport_name="bóng đá")
+        ps1 = ProductSport(product_id=self.p1.id, sport_name="bóng đá")
+        ps2 = ProductSport(product_id=self.p2.id, sport_name="Dùng chung")
+        ps3 = ProductSport(product_id=self.p3.id, sport_name="pickleball")
+        ps4 = ProductSport(product_id=self.p4.id, sport_name="bóng đá")
         self.db.add_all([ps1, ps2, ps3, ps4])
         self.db.commit()
 
         cat1 = ProductCatalogItem(
+            catalog_key="football-goalkeeper-gloves",
             name="Găng tay thủ môn",
             product_type="Dịch vụ",
             unit="đôi",
@@ -119,6 +121,7 @@ class TestSystemDomainContext(unittest.TestCase):
             sort_order=1,
         )
         cat2 = ProductCatalogItem(
+            catalog_key="tennis-wrist-wrap",
             name="Băng quấn cổ tay",
             product_type="Hàng hóa",
             unit="cái",
@@ -126,7 +129,34 @@ class TestSystemDomainContext(unittest.TestCase):
             is_active=True,
             sort_order=1,
         )
-        self.db.add_all([cat1, cat2])
+        cat3 = ProductCatalogItem(
+            catalog_key="badminton-racket-rental",
+            name="Thuê vợt cầu lông",
+            product_type="Dịch vụ",
+            unit="cây",
+            sport_name="cầu lông",
+            is_active=True,
+            sort_order=1,
+        )
+        cat4 = ProductCatalogItem(
+            catalog_key="basketball-ball-rental",
+            name="Thuê bóng rổ",
+            product_type="Dịch vụ",
+            unit="quả",
+            sport_name="bóng rổ",
+            is_active=True,
+            sort_order=1,
+        )
+        cat5 = ProductCatalogItem(
+            catalog_key="volleyball-ball-rental",
+            name="Thuê bóng chuyền",
+            product_type="Dịch vụ",
+            unit="quả",
+            sport_name="bóng chuyền",
+            is_active=True,
+            sort_order=1,
+        )
+        self.db.add_all([cat1, cat2, cat3, cat4, cat5])
         self.db.commit()
 
     def tearDown(self):
@@ -146,16 +176,15 @@ class TestSystemDomainContext(unittest.TestCase):
         self.assertIn("Nước Suối Lavie 500ml", names)
         self.assertNotIn("Bóng Đá Động Lực (Cũ)", names)
 
-    def test_get_sport_products_catalog_fallback(self):
-        """Test catalog fallback when no live products exist for tennis."""
+    def test_get_sport_products_includes_live_shared_products_for_tennis(self):
+        """A live product linked to Dùng chung applies to tennis as well."""
         svc = SystemDomainContextService(self.db)
         res = svc.get_sport_products("tennis")
 
         self.assertEqual(res.sport, "tennis")
-        self.assertEqual(res.source, "catalog")
-        self.assertEqual(len(res.live_products), 0)
-        self.assertGreater(len(res.catalog_items), 0)
-        self.assertEqual(res.catalog_items[0].name, "Băng quấn cổ tay")
+        self.assertEqual(res.source, "live")
+        self.assertIn("Nước Suối Lavie 500ml", [item.name for item in res.live_products])
+        self.assertEqual(res.catalog_items, [])
 
     def test_get_sport_amenities_restricted_aggregation(self):
         """
@@ -194,17 +223,113 @@ class TestSystemDomainContext(unittest.TestCase):
         user = User(email="test@user.com", role=UserRole.CUSTOMER, id=10)
         service = AIAssistantService(repo, current_user=user)
 
-        resp = service.ask("Môn bóng đá có những sản phẩm hay dịch vụ nào?", assistant_mode=AssistantMode.NATURAL)
+        resp = service.ask("Môn bóng đá có những tiện ích gì?", assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(resp["status"], "OK")
-        self.assertIn("Thuê Áo Nối", resp["reply"])
-        self.assertIn("SportHub có thể giúp", resp["reply"])
-        self.assertEqual(resp["understood"]["domain_context_type"], "sport_products")
+        football_options = ProductService(self.db).sport_product_names("Bóng đá")
+        for option in football_options:
+            self.assertIn(option, resp["reply"])
+        self.assertNotIn("Bãi xe", resp["reply"])
+        self.assertNotIn("Phòng thay đồ", resp["reply"])
+        self.assertEqual(resp["understood"]["domain_context_type"], "sport_amenities")
 
         resp2 = service.ask("Môn pickleball có tiện ích gì?", assistant_mode=AssistantMode.NATURAL)
         self.assertEqual(resp2["status"], "OK")
-        self.assertIn("Điều hòa", resp2["reply"])
-        self.assertIn("Lưu ý: Đây là tổng hợp tiện ích", resp2["reply"])
+        self.assertIn("Cho Thuê Vợt Pickleball High-End", resp2["reply"])
+        self.assertNotIn("Điều hòa", resp2["reply"])
+        self.assertIn("đồng bộ với tùy chọn theo môn trên Tìm sân", resp2["reply"])
         self.assertEqual(resp2["understood"]["domain_context_type"], "sport_amenities")
+
+    def test_find_sport_options_are_the_assistant_amenity_source_for_all_sports(self):
+        repo = AIRepository(self.db)
+        service = AIAssistantService(repo)
+        product_service = ProductService(self.db)
+        sports = ("Bóng đá", "Cầu lông", "Pickleball", "Tennis", "Bóng rổ", "Bóng chuyền")
+
+        for sport in sports:
+            with self.subTest(sport=sport):
+                options = product_service.sport_product_names(sport)
+                self.assertTrue(options)
+                response = service.ask(
+                    f"Môn {sport} có những tiện ích gì?",
+                    assistant_mode=AssistantMode.NATURAL,
+                )
+                self.assertEqual(response["status"], "OK")
+                self.assertEqual(response["understood"]["domain_context_type"], "sport_amenities")
+                for option in options:
+                    self.assertIn(option, response["reply"])
+                for physical_feature in ("Bãi xe", "Điều hòa", "Đèn chiếu sáng", "Phòng thay đồ"):
+                    self.assertNotIn(physical_feature, response["reply"])
+
+    def test_venue_amenity_queries_separate_orderable_options_from_facility_features(self):
+        repo = AIRepository(self.db)
+        service = AIAssistantService(repo)
+
+        orderable_query = "Sân Bóng Đá 1 có tiện ích gì?"
+        kind, sport, field_id = service._detect_system_domain_query(
+            orderable_query, {"field_id": self.f1.id},
+        )
+        self.assertEqual(kind, "venue_orderable_options")
+        self.assertEqual(field_id, self.f1.id)
+        orderable = service._answer_system_domain(orderable_query, kind, sport, field_id, {})
+        self.assertIn("Thuê Áo Nối (Bít-búp)", orderable["reply"])
+        self.assertNotIn("Bãi xe", orderable["reply"])
+        self.assertEqual(orderable["understood"]["domain_context_type"], "venue_orderable_options")
+
+        service_query = "Sân Bóng Đá 1 có dịch vụ nào để chọn khi đặt?"
+        service_kind, service_sport, service_field_id = service._detect_system_domain_query(
+            service_query, {"field_id": self.f1.id},
+        )
+        self.assertEqual(service_kind, "venue_orderable_options")
+        self.assertIn(
+            "Thuê Áo Nối (Bít-búp)",
+            service._answer_system_domain(
+                service_query, service_kind, service_sport, service_field_id, {},
+            )["reply"],
+        )
+        followup_kind, followup_sport, followup_field_id = service._detect_system_domain_query(
+            "Còn cái nào nữa?",
+            {
+                "domain_context_type": "venue_orderable_options",
+                "field_id": self.f1.id,
+                "sport_type": "Bóng đá",
+            },
+        )
+        self.assertEqual(followup_kind, "venue_orderable_options")
+        self.assertEqual(followup_sport, "Bóng đá")
+        self.assertEqual(followup_field_id, self.f1.id)
+
+        feature_query = "Sân Bóng Đá 1 có bãi xe không?"
+        feature_kind, feature_sport, feature_field_id = service._detect_system_domain_query(
+            feature_query, {"field_id": self.f1.id},
+        )
+        self.assertEqual(feature_kind, "venue_amenities")
+        service._assistant_mode = AssistantMode.PROFESSIONAL
+        features = service._answer_system_domain(
+            feature_query, feature_kind, feature_sport, feature_field_id, {},
+        )
+        self.assertIn("Cơ sở vật chất", features["reply"])
+        self.assertIn("Bãi xe", features["reply"])
+        self.assertIn("không phải sản phẩm/dịch vụ có thể đặt kèm", features["reply"])
+
+    def test_followup_keeps_physical_feature_context_separate(self):
+        service = AIAssistantService(AIRepository(self.db))
+        context = {
+            "domain_context_type": "sport_facility_features",
+            "sport_type": "Bóng đá",
+        }
+        kind, sport, field_id = service._detect_system_domain_query("Còn môn cầu lông thì sao?", context)
+        self.assertEqual(kind, "sport_facility_features")
+        self.assertEqual(sport, "cầu lông")
+        self.assertIsNone(field_id)
+
+    def test_amenity_query_without_sport_asks_for_sport_instead_of_assuming_football(self):
+        service = AIAssistantService(AIRepository(self.db))
+        response = service.ask("Tiện ích có gì?", assistant_mode=AssistantMode.NATURAL)
+        self.assertEqual(response["status"], "NEED_MORE_DATA")
+        self.assertIn("môn thể thao nào", response["reply"])
+
+        capability = service.ask("Bạn giúp được gì?", assistant_mode=AssistantMode.NATURAL)
+        self.assertNotEqual(capability["understood"].get("domain_context_type"), "sport_amenities")
 
     def test_ai_assistant_system_domain_professional_mode(self):
         """Test AI assistant query handling in Professional mode."""
@@ -212,11 +337,14 @@ class TestSystemDomainContext(unittest.TestCase):
         user = User(email="prof@user.com", role=UserRole.CUSTOMER, id=11)
         service = AIAssistantService(repo, current_user=user)
 
-        resp = service.ask("Cho tôi biết các sản phẩm dịch vụ môn tennis", assistant_mode=AssistantMode.PROFESSIONAL)
+        resp = service.ask("Môn tennis có những tiện ích gì?", assistant_mode=AssistantMode.PROFESSIONAL)
         self.assertEqual(resp["status"], "OK")
-        self.assertIn("Gợi ý danh mục hệ thống", resp["reply"])
-        self.assertNotIn("SportHub có thể giúp", resp["reply"])
-        self.assertGreaterEqual(resp["understood"]["catalog_count"], 1)
+        tennis_options = ProductService(self.db).sport_product_names("Tennis")
+        for option in tennis_options:
+            self.assertIn(option, resp["reply"])
+        self.assertNotIn("Bãi xe", resp["reply"])
+        self.assertNotIn("Điều hòa", resp["reply"])
+        self.assertEqual(resp["understood"]["domain_context_type"], "sport_amenities")
 
 
 if __name__ == "__main__":

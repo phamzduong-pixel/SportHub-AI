@@ -12,6 +12,7 @@ from app.services.sports_knowledge_updater import (
     SportsKnowledgeUpdater,
 )
 from app.services.sports_web_retriever import SportsWebEvidence, SportsWebRetriever
+from app.services.sports_knowledge_policy import KnowledgeUseDecision, PolicyOutcome
 
 
 class MockRepository:
@@ -49,6 +50,15 @@ class MockRetriever:
 
 class KnowledgeUpdateServiceTests(unittest.TestCase):
     def setUp(self):
+        self.store_policy_patch = patch(
+            "app.services.sports_knowledge_updater.evaluate_reviewed_knowledge_use",
+            return_value=KnowledgeUseDecision(
+                PolicyOutcome.ALLOWED,
+                "synthetic update-service mechanics test seam",
+            ),
+        )
+        self.store_policy_patch.start()
+        self.addCleanup(self.store_policy_patch.stop)
         self.repo = MockRepository()
         self.retriever = MockRetriever()
         self.web_retriever = SportsWebRetriever()
@@ -181,8 +191,8 @@ class KnowledgeUpdateServiceTests(unittest.TestCase):
         self.assertIn("Inter Miami", self.repo.list_entries()[0].answer)
         self.assertEqual(len(self.retriever.updated_entries), 1)
 
-    # 5. Duplicate Skipped
-    def test_duplicate_skipped(self):
+    # 5. Identical content with newer collection metadata
+    def test_duplicate_content_with_newer_collection_date_is_updated(self):
         existing_entry = KnowledgeEntry(
             id="AUTO-FB-LIONELME-GEN",
             topic="current_club",
@@ -215,10 +225,11 @@ class KnowledgeUpdateServiceTests(unittest.TestCase):
         ]
 
         summary = self.service.update_knowledge_pipeline(items)
-        self.assertEqual(summary.skipped, 1)
+        self.assertEqual(summary.skipped, 0)
         self.assertEqual(summary.inserted, 0)
-        self.assertEqual(summary.updated, 0)
-        self.assertEqual(len(self.retriever.updated_entries), 0)
+        self.assertEqual(summary.updated, 1)
+        self.assertEqual(len(self.retriever.updated_entries), 1)
+        self.assertEqual(self.repo.list_entries()[0].collected_at, "2026-08-15")
 
     # 6. Unverified Conflict Rejected (No Overwrite)
     def test_conflict_rejected_no_overwrite(self):

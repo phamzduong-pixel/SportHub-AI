@@ -76,6 +76,19 @@ KNOWLEDGE_ENTRIES: list[KnowledgeEntry] = [
             "• SYSTEM_ADMIN (Quản trị viên nền tảng): Quản lý người dùng, xét duyệt hồ sơ chủ sân OWNER và phê duyệt cơ sở thể thao trước khi hiển thị công khai."
         ),
     ),
+    KnowledgeEntry(
+        key="sporthub_admin_contact",
+        category="GENERAL",
+        patterns=(
+            "so dien thoai cua admin la gi", "so dien thoai admin la gi", "cho toi so dien thoai admin",
+            "cho minh xin so admin sporthub", "so admin sporthub la bao nhieu", "lien he admin bang so nao",
+            "toi muon lien he voi admin", "toi muon goi cho admin", "so dien thoai cua quan tri vien la gi",
+            "so dien thoai quan tri vien la gi", "so dien thoai quan tri vien", "so quan tri vien",
+            "lam sao de lien he quan tri vien", "admin sporthub co so dien thoai khong", "cho toi xin thong tin lien he admin",
+            "cho toi so admin", "sdt admin",
+        ),
+        answer="Số điện thoại của admin SportHub là 0866606729.",
+    ),
 
     # ----------------------------------------------------
     # 2. CUSTOMER GUIDE

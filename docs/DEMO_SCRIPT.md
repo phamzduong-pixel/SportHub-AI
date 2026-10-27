@@ -46,6 +46,16 @@
    - Model không train trong request và không dùng `Math.random`.
    - Nêu rõ dataset mô phỏng và hướng nâng cấp bằng dữ liệu thật.
 
+## Demo Trợ lý AI (thêm 5–7 phút)
+
+1. Chọn Natural, hỏi một câu thể thao; giải thích câu trả lời có thể dựa trên Sports Knowledge đã qua policy/review hoặc Gemini general knowledge khi không có evidence được phép.
+2. Hỏi follow-up ngắn để minh họa context. Nhấn mạnh lịch sử giúp hiểu câu hỏi, không phải nguồn xác minh dữ kiện.
+3. Hỏi tìm sân/availability. Giải thích kết quả lấy từ backend/database; thiếu khu vực/ngày/giờ thì assistant hỏi thêm, không tự xác nhận slot bằng LLM.
+4. Chuyển Professional và hỏi một câu sports knowledge để minh họa guard từ chối trước sports retrieval. Sau đó hỏi nghiệp vụ tìm sân để chứng minh luồng chính còn hoạt động.
+5. Nếu trình bày memory, chỉ dùng tài khoản và sở thích giả lập. Không chiếu API key hoặc dữ liệu cá nhân thật.
+
+Kịch bản chi tiết và kỳ vọng theo từng nguồn: [`AI/DEMO_SCENARIOS.md`](AI/DEMO_SCENARIOS.md). Nhóm regression policy/runtime/router gần nhất đạt 168 passed, 24 subtests; không mô tả đây là full test suite hoặc kết quả provider live.
+
 ## Tài khoản demo mặc định của workspace đã seed
 
 - OWNER: `owner@sporthub.local` / `Owner@123456`
