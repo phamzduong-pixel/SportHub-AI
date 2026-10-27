@@ -77,7 +77,6 @@ type Message = {
 const clearInteractiveContent = (message: Message): Message => ({
   ...message,
   suggestions: undefined,
-  venueResults: undefined,
   retryText: undefined,
   quickActions: undefined,
 });
